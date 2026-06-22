@@ -1,24 +1,22 @@
-# Architecture
+# 架构 Architecture
 
-Cross-repo design notes for the pypto step3p5 stack. These docs
-describe how the 5 code repos fit together and how the Phase 2 vLLM
-integration interfaces.
+pypto step3p5 栈的跨仓库 design notes。这些 doc 描述 5 个代码仓怎么拼
+在一起，以及 Phase 2 vLLM 集成 interface。
 
-## Contents
+## 内容
 
-| Doc | Purpose |
-|-----|---------|
-| [`overview.md`](overview.md) | Big-picture: 5 repos + vLLM, what each one does, where data flows |
-| [`vllm-step3p5-mapping.md`](vllm-step3p5-mapping.md) | Operator-level mapping between vLLM's `Step3p5Model` and pypto's `decode_fwd` — required reference for Phase 20 monkey-patch implementation |
+| 文档 | 用途 |
+|------|------|
+| [`overview.md`](overview.md) | 大图：5 仓 + vLLM 各自做什么，数据怎么流 |
+| [`vllm-step3p5-mapping.md`](vllm-step3p5-mapping.md) | vLLM 的 `Step3p5Model` 与 pypto 的 `decode_fwd` 之间的 op-级映射 —— Phase 20 monkey-patch 实现必读 |
 
-## When to add a new architecture doc
+## 什么时候加新 arch doc
 
-- **A new repo joins the project** → describe its role in `overview.md`
-  + add a focused doc here if it has its own internal architecture.
-- **A new cross-repo interface is introduced** → focused doc for that
-  interface (e.g., the vLLM mapping doc).
-- **A non-obvious data flow needs to be documented** → focused doc.
+- **新仓库加进项目** → 在 `overview.md` 描述它的角色 + 如果它有自己的
+  内部架构，加一个 focused doc。
+- **新跨仓 interface 引入** → 那个 interface 一个 focused doc（如
+  vllm mapping doc）。
+- **非显式 data flow 需要文档化** → focused doc。
 
-Avoid documenting per-repo internals here — those belong inside the
-respective repo's `docs/`. This directory is for **cross-repo** design
-content only.
+避免文档化某个仓内部细节 —— 那些归对应仓的 `docs/`。本目录只放
+**跨仓** design 内容。

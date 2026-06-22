@@ -1,70 +1,70 @@
 # Claude Session Bootstrap
 
-This file loads automatically when a Claude session opens this repo.
-**Keep it short** — anything that's not iron-rule or routing-pointer
-belongs in [`STATUS.md`](STATUS.md), [`blockers.md`](blockers.md), or a
-phase doc.
+打开本仓库时 Claude session 自动加载本文件。**保持简短** —— 不属于
+铁律 / 路由指针的内容应该写在
+[`STATUS.md`](STATUS.md) / [`blockers.md`](blockers.md) 或 phase doc 里。
 
-## What this repo is
+## 本仓库是什么
 
-Project-level tracker for the pypto step3p5 effort. See
-[`README.md`](README.md) for the full description. Five code repos live
-elsewhere (`pypto`, `pypto-lib`, `pto-isa`, `PTOAS`, `simpler`); this
-repo only tracks them.
+pypto step3p5 项目的**项目级跟踪仓**。详见 [`README.md`](README.md)。
+五个代码仓（`pypto` / `pypto-lib` / `pto-isa` / `PTOAS` / `simpler`）在
+别处，本仓只跟踪它们。
 
-## Where to look first
+## 项目工作语言
 
-1. **Current state**: [`STATUS.md`](STATUS.md)
-2. **What's blocked**: [`blockers.md`](blockers.md)
-3. **Active phase tasks**: [`phases/`](phases/)
-4. **Production deploy spec**: [`deployment/phase16-three-pillars.md`](deployment/phase16-three-pillars.md)
+中文。所有文档、commit message、Issue 描述用中文。**技术专有名词保留
+英文**（pypto / simpler / `AllocateMemoryAddr` / barrier all_reduce /
+monkey-patch / `pl.range` 等 API / 系统名）。code block 一律不译。
 
-## Iron rules (apply to every session)
+## 先看哪里
 
-These are recurring mistakes from prior sessions. Re-violating them
-costs hours.
+1. **当前状态**：[`STATUS.md`](STATUS.md)
+2. **被什么卡住**：[`blockers.md`](blockers.md)
+3. **当前阶段的任务**：[`phases/`](phases/)
+4. **生产部署 spec**：[`deployment/phase16-three-pillars.md`](deployment/phase16-three-pillars.md)
 
-### 1. Single-card ST/UT must keep TP=8 per-rank slice widths
+## 铁律（每个 session 都适用）
 
-When writing or running kernel-level ST/UT, use `apply_perrank_patch()`
-not `apply_tp1_patch()`. The per-rank helper preserves canonical TP=8
-slice widths (8/12/1/1408/160/36 etc.) while flipping
-`TP_WORLD_SIZE`/`EP_WORLD_SIZE` to 1 so codegen elides collectives.
-The unslice helper (full widths) only suits Phase 15 e2e and overflows
-kernels whose chunk constants follow the slice (`sh_mlp`,
-`gate_matmul`).
+下面这些都是过去 session 重犯过的错。再犯一次会浪费几个小时。
 
-Detail: `pypto-lib/tests/step3p5/_perrank_setup.py` docstring;
-`pypto-lib/docs/known-pypto-pitfalls.md` references this throughout.
+### 1. 单卡 ST/UT 必须保 TP=8 per-rank slice 宽度
 
-### 2. Phase 16 three-pillars version binding
+写或跑 kernel-级 ST/UT 时用 `apply_perrank_patch()`，**不要用**
+`apply_tp1_patch()`。per-rank helper 把 `TP_WORLD_SIZE`/`EP_WORLD_SIZE`
+切到 1 让 codegen 消掉 collective，但保留 canonical TP=8 切片宽度
+（8/12/1/1408/160/36 等）。Unslice helper（全宽）只适合 Phase 15 e2e；
+chunk 跟 slice 走的 kernel（`sh_mlp` / `gate_matmul` 等）会爆。
 
-Any production multi-card deploy needs **all three** of:
+详见：`pypto-lib/tests/step3p5/_perrank_setup.py` docstring；
+`pypto-lib/docs/known-pypto-pitfalls.md` 反复引用。
 
-| Component | Required | Failure if older |
-|-----------|----------|------------------|
-| Driver | 25.5.2 | `support_shmem_map_exbus=0`, IPC fails 507899 |
-| Firmware | 7.8.0.7.220 (chip flash, persistent) | same cap gap |
-| CANN | 9.0.0-beta.1 (NOT GA) | simpler init fails 507018 |
+### 2. Phase 16 三剑合璧版本绑定
 
-Full spec + failure analysis: [`deployment/phase16-three-pillars.md`](deployment/phase16-three-pillars.md).
+任何生产多卡部署都必须**三件齐备**：
 
-### 3. Stale .pyc after monkey-patching module globals
+| 组件 | 必需版本 | 旧版本失败模式 |
+|------|----------|---------------|
+| Driver | 25.5.2 | `support_shmem_map_exbus=0`，IPC 507899 |
+| Firmware | 7.8.0.7.220（chip flash，持久） | 同样的 cap 缺口 |
+| CANN | 9.0.0-beta.1（NOT GA） | simpler init 507018 |
 
-Any test that runs `apply_perrank_patch` / `apply_tp1_patch` /
-`cfg.X = Y` serializes the patched values into `__pycache__/*.pyc`.
-The next fresh `python -m ...` reads those back. Before re-running:
+完整 spec + 失败分析：[`deployment/phase16-three-pillars.md`](deployment/phase16-three-pillars.md)。
+
+### 3. 测试中 monkey-patch 模块全局后 .pyc stale
+
+任何跑了 `apply_perrank_patch` / `apply_tp1_patch` / `cfg.X = Y` 的
+测试都会把 patched 值序列化进 `__pycache__/*.pyc`。下次 fresh
+`python -m ...` 会读到。再跑前必须：
 
 ```bash
 find <pypto-lib>/models/step3p5 -name "*.py" -exec touch {} +
 ```
 
-Detail: `pypto-lib/docs/dev-workflow-gotchas.md` §1.
+详见：`pypto-lib/docs/dev-workflow-gotchas.md` §1。
 
-### 4. Triple-source env activation
+### 4. 三件套激活
 
-`activate.sh` only sets up the venv. Every fresh shell on the deploy
-host needs three sources:
+`activate.sh` 只激活 venv。部署机上每个新 shell 都要三次 source：
 
 ```bash
 source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh
@@ -72,24 +72,23 @@ source <workspace>/activate.sh
 export PTO_ISA_ROOT=<workspace>/pto-isa
 ```
 
-Detail: `pypto-lib/docs/dev-workflow-gotchas.md` §2.
+详见：`pypto-lib/docs/dev-workflow-gotchas.md` §2。
 
-### 5. git push needs HTTP/1.1 on the deploy host network
+### 5. 部署机网络上 git push 必须用 HTTP/1.1
 
 ```bash
 git -c http.version=HTTP/1.1 push ...
 ```
 
-Default HTTP/2 silently times out at 130s. Detail:
-`pypto-lib/docs/dev-workflow-gotchas.md` §3.
+默认 HTTP/2 在 130 秒后静默超时。详见：
+`pypto-lib/docs/dev-workflow-gotchas.md` §3。
 
-## What NOT to put in this file
+## 这个文件**不要**写什么
 
-- Session-by-session milestones → `archive/milestones-2026-Q2.md`
-- Phase task lists → `phases/NN-*.md`
-- Open issues → `blockers.md`
-- Pin snapshot history → `archive/milestones-2026-Q2.md`
-- Deployment runbooks → `deployment/`
+- session-by-session milestone → `archive/milestones-2026-Q2.md`
+- Phase 任务清单 → `phases/NN-*.md`
+- open issue → `blockers.md`
+- Pin snapshot 历史 → `archive/milestones-2026-Q2.md`
+- 部署 runbook → `deployment/`
 
-If you're tempted to write more than 50 lines here, write it elsewhere
-and link to it.
+如果要写超过 50 行了，写去别处然后从这里 link。

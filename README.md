@@ -1,123 +1,118 @@
-# PyPTO Step3p5 Project
+# PyPTO Step3p5 项目
 
-End-to-end serving of the **step3p5** large language model on Ascend
-NPUs, using the **pypto** programming framework for the decoder kernel
-and **vLLM** for serving / scheduling / batching.
+在 Ascend NPU 上做 **step3p5** 大模型的端到端服务化。decoder kernel 走
+**pypto** 编程框架，serving / 调度 / batching 走 **vLLM**。
 
-This repository is the **project-level tracker** that spans 5 code
-repositories. The actual code lives elsewhere — this repo holds status,
-phase tracking, blockers, deployment specs, and architectural notes.
+本仓库是**项目级跟踪器**，覆盖 5 个代码仓库。实际代码在别处，本仓只放
+状态、阶段跟踪、blocker、部署 spec 和架构 notes。
 
-## Repos in this project (where the actual code lives)
+## 项目涉及的仓库（实际代码在哪里）
 
-| Repo | Role | Origin | Our fork |
-|------|------|--------|----------|
-| `pypto` | Programming framework — multi-level IR + codegen | `hw-native-sys/pypto` | `csy0225/pypto` |
-| `pypto-lib` | Tensor-level kernels + step3p5 model | `hw-native-sys/pypto-lib` | `csy0225/pypto-lib` |
-| `pto-isa` | Tile-ISA virtual implementations | `hw-native-sys/pto-isa` | `csy0225/pto-isa` |
-| `PTOAS` | LLVM/MLIR PTO bytecode assembler | `hw-native-sys/PTOAS` | `csy0225/PTOAS` |
-| `simpler` | PTO runtime (AICPU+AICore dispatcher) | `hw-native-sys/simpler` (submodule of pypto) | `csy0225/simpler` |
-| **(integration target)** vLLM stepcast fork | Serving / scheduling / sampler / tokenizer | internal stepcast fork | not forked |
+| 仓库 | 角色 | 上游 | 我们的 fork |
+|------|------|------|------------|
+| `pypto` | 编程框架 — multi-level IR + codegen | `hw-native-sys/pypto` | `csy0225/pypto` |
+| `pypto-lib` | tensor 级 kernel + step3p5 模型 | `hw-native-sys/pypto-lib` | `csy0225/pypto-lib` |
+| `pto-isa` | Tile-ISA 虚拟实现 | `hw-native-sys/pto-isa` | `csy0225/pto-isa` |
+| `PTOAS` | LLVM/MLIR PTO 字节码 assembler | `hw-native-sys/PTOAS` | `csy0225/PTOAS` |
+| `simpler` | PTO runtime（AICPU+AICore dispatcher） | `hw-native-sys/simpler`（pypto 的 submodule） | `csy0225/simpler` |
+| **（集成目标）** vLLM stepcast fork | Serving / 调度 / sampler / tokenizer | 公司内部 stepcast fork | 无 fork |
 
-All our forks live on the `stepfun/develop` branch. Pin snapshot lives
-in [`STATUS.md`](STATUS.md).
+我们所有的 fork 都在 `stepfun/develop` 分支。pin snapshot 在
+[`STATUS.md`](STATUS.md)。
 
-## Project status at a glance
+## 一眼看清现在哪儿
 
-**Phase 1 — pypto kernel prototype**: ✅ **COMPLETED** (2026-06-22).
-See [`archive/prototype-phase-01-19-summary.md`](archive/prototype-phase-01-19-summary.md).
+**Phase 1 — pypto kernel 原型**：✅ **已完成**（2026-06-22）。详见
+[`archive/prototype-phase-01-19-summary.md`](archive/prototype-phase-01-19-summary.md)。
 
-**Phase 2 — vLLM Ascend backend integration**: 🟡 **IN PROGRESS**
-(design landed, implementation NOT STARTED).
-- Phase 20: vLLM monkey-patch e2e flow → [`phases/20-vllm-backend-monkey-patch.md`](phases/20-vllm-backend-monkey-patch.md)
-- Phase 21: precision validation vs upstream vLLM → [`phases/21-precision-validation.md`](phases/21-precision-validation.md)
-- Phase 22: perf baseline + tuning → [`phases/22-perf-baseline.md`](phases/22-perf-baseline.md)
+**Phase 2 — vLLM Ascend 后端集成**：🟡 **进行中**（设计已落，实现未启动）。
+- Phase 20：vLLM monkey-patch e2e 流程 → [`phases/20-vllm-backend-monkey-patch.md`](phases/20-vllm-backend-monkey-patch.md)
+- Phase 21：与 vLLM 原生精度对比 → [`phases/21-precision-validation.md`](phases/21-precision-validation.md)
+- Phase 22：perf baseline + 调优 → [`phases/22-perf-baseline.md`](phases/22-perf-baseline.md)
 
-**Active blockers** (carried forward): see [`blockers.md`](blockers.md).
+**活跃 blocker**（跨阶段遗留）：见 [`blockers.md`](blockers.md)。
 
-**Production deployment**: see [`deployment/`](deployment/). The
-Phase 16 three-pillars binding is a hard requirement for multi-card
-deploys.
+**生产部署**：见 [`deployment/`](deployment/)。Phase 16 三剑合璧绑定是多卡
+部署的硬要求。
 
-## Where to look (by question)
+## 查什么去哪里
 
-| Question | Path |
-|----------|------|
-| What is the current state of work? | [`STATUS.md`](STATUS.md) |
-| What's the active phase I should pick up tasks from? | [`phases/`](phases/) |
-| What's blocked / what should I help unblock? | [`blockers.md`](blockers.md) |
-| How do I deploy this on a new machine? | [`deployment/`](deployment/) |
-| How does it fit together architecturally? | [`architecture/`](architecture/) |
-| What was the prototype journey (Phase 01-19)? | [`archive/prototype-phase-01-19-summary.md`](archive/prototype-phase-01-19-summary.md) |
-| What pitfalls should I know writing pypto kernels? | `pypto-lib/docs/known-pypto-pitfalls.md` (in pypto-lib repo) |
-| What pitfalls should I know in dev workflow (pyc, env, git)? | `pypto-lib/docs/dev-workflow-gotchas.md` (in pypto-lib repo) |
+| 问题 | 路径 |
+|------|------|
+| 现在工作状态怎样？ | [`STATUS.md`](STATUS.md) |
+| 当前活跃 phase 的任务从哪挑？ | [`phases/`](phases/) |
+| 哪些卡住了 / 帮忙解什么？ | [`blockers.md`](blockers.md) |
+| 在新机器上怎么部署？ | [`deployment/`](deployment/) |
+| 项目架构怎么拼起来的？ | [`architecture/`](architecture/) |
+| Phase 01-19 的原型开发是怎么走过来的？ | [`archive/prototype-phase-01-19-summary.md`](archive/prototype-phase-01-19-summary.md) |
+| 写 pypto kernel 时有哪些坑？ | `pypto-lib/docs/known-pypto-pitfalls.md`（在 pypto-lib 仓） |
+| 开发工作流有什么坑（pyc / 环境 / git）？ | `pypto-lib/docs/dev-workflow-gotchas.md`（在 pypto-lib 仓） |
 
-## Quick start (on a verified Phase 16 host, e.g. `gpu-a910x-0162`)
+## 快速起手（在 Phase 16 合规机器上，如 `gpu-a910x-0162`）
 
 ```bash
-# 1. Source the three-pillars env (CANN beta.1, NOT GA)
+# 1. 三剑合璧环境（CANN 必须是 beta.1，不是 GA）
 source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh
 source <workspace>/activate.sh
 export PTO_ISA_ROOT=<workspace>/pto-isa
 
-# 2. Verify pypto frontend
+# 2. 验证 pypto 前端
 cd <workspace>/pypto-lib
 python -m models.step3p5._smoke_program_build
-# expected: === probe rc=0 ===
+# 期望: === probe rc=0 ===
 
-# 3. Verify multi-card collective baseline
+# 3. 验证多卡 collective baseline
 cd <workspace>/pypto/runtime
 python examples/workers/l3/allreduce_distributed/main.py -p a2a3 -d 0-1
-# expected: max |out - expected| = 0.000e+00
+# 期望: max |out - expected| = 0.000e+00
 
-# 4. Verify single-card dense decode_layer ST
+# 4. 验证单卡 dense decode_layer ST
 cd <workspace>/pypto-lib
 python -m tests.step3p5.test_decode_layer_full_dense_st -p a2a3 -d 0
-# expected: ratio_allclose PASS, ~8s
+# 期望: ratio_allclose PASS，约 8 秒
 ```
 
-If any of these fails, consult [`blockers.md`](blockers.md) and the
-pypto-lib reference docs.
+任何一项失败 → 查 [`blockers.md`](blockers.md) 和 pypto-lib reference docs。
 
-## Update protocol
+## 更新协议
 
-When a phase / sub-task / blocker state changes:
+phase / sub-task / blocker 状态变化时：
 
-| Trigger | Update what |
-|---------|-------------|
-| sub-task complete | Status section of `phases/NN-*.md` |
-| Phase entry / exit | `STATUS.md` current phase + `phases/README.md` |
-| New blocker discovered | `blockers.md` |
-| Blocker resolved | Remove from `blockers.md`, optionally add to `archive/` |
-| Session-end summary | Append to `archive/milestones-2026-Q2.md` |
-| Component pin moves | `STATUS.md` "Pin snapshot" |
+| 触发 | 更新什么 |
+|------|---------|
+| sub-task 完成 | 对应 `phases/NN-*.md` 的 Status 段 |
+| Phase 准入 / 出 | `STATUS.md` 当前 phase + `phases/README.md` |
+| 新 blocker 发现 | `blockers.md` |
+| Blocker 解决 | 从 `blockers.md` 删除，可选追加到 `archive/` |
+| session 末尾总结 | 追加 entry 到 `archive/milestones-2026-Q2.md` |
+| 组件 pin 移动 | `STATUS.md` "Pin snapshot" |
 
-`CLAUDE.md` in this repo is for Claude session bootstrap only — it
-should stay short (~50 lines). Do **not** put status / history in it.
+`CLAUDE.md` 只用作 Claude session bootstrap，**保持 50 行以内**。状态 /
+历史不要写进去。
 
-## Repo layout
+## 仓库目录
 
 ```
 pypto-project/
-├── README.md                            # this file
-├── CLAUDE.md                            # Claude session bootstrap (slim)
-├── STATUS.md                            # live status board
-├── blockers.md                          # active open issues (SSOT)
-├── deployment/                          # production deployment specs
+├── README.md                            本文件
+├── CLAUDE.md                            Claude session bootstrap（精简）
+├── STATUS.md                            实时状态板
+├── blockers.md                          活跃 open issues（SSOT）
+├── deployment/                          生产部署 spec
 │   ├── README.md
-│   ├── phase16-three-pillars.md         # driver + firmware + CANN binding
-│   ├── machine-recovery.md              # 0162/0234 runbook
-│   └── version-matrix.md                # 5-repo version compatibility
-├── phases/                              # active phase tracking
+│   ├── phase16-three-pillars.md         driver + firmware + CANN 绑定
+│   ├── machine-recovery.md              0162/0234 runbook
+│   └── version-matrix.md                5 仓库版本兼容
+├── phases/                              活跃 phase 跟踪
 │   ├── README.md
 │   ├── 20-vllm-backend-monkey-patch.md
 │   ├── 21-precision-validation.md
 │   └── 22-perf-baseline.md
-├── archive/                             # historical record
+├── archive/                             历史记录
 │   ├── README.md
 │   ├── prototype-phase-01-19-summary.md
 │   └── milestones-2026-Q2.md
-└── architecture/                        # cross-repo design notes
+└── architecture/                        跨仓库 design notes
     ├── README.md
     ├── overview.md
     └── vllm-step3p5-mapping.md

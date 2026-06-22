@@ -1,41 +1,38 @@
-# Phases
+# Phases 阶段
 
-Active phase tracking for the pypto step3p5 project. Each phase doc
-describes a coherent unit of work with goal / scope / decisions /
-tasks / exit criteria / risks / status.
+pypto step3p5 项目的活跃 phase 跟踪。每个 phase doc 描述一个相干工作
+单元：goal / scope / decisions / tasks / exit / risks / status。
 
-Phase 01-19 (pypto kernel prototype, completed June 2026) summary is
-in [`../archive/prototype-phase-01-19-summary.md`](../archive/prototype-phase-01-19-summary.md).
-Phase 20+ documents the vLLM Ascend backend integration effort and is
-tracked actively here.
+Phase 01-19（pypto kernel 原型，2026 年 6 月完成）的摘要在
+[`../archive/prototype-phase-01-19-summary.md`](../archive/prototype-phase-01-19-summary.md)。
+Phase 20+ 跟踪 vLLM Ascend 后端集成工作，在这里活跃跟踪。
 
 ## Index
 
-| Phase | Title | Status | Doc |
-|------:|-------|--------|-----|
-| **20** | vLLM backend monkey-patch — e2e flow | 📐 Design landed 2026-06-22; tasks 1.1-1.9 NOT STARTED | [20-vllm-backend-monkey-patch.md](20-vllm-backend-monkey-patch.md) |
-| **21** | Precision validation harness (vs upstream vLLM) | 📐 Design landed 2026-06-22; gated on Phase 20 | [21-precision-validation.md](21-precision-validation.md) |
-| **22** | Perf baseline + tuning | 📐 Design landed 2026-06-22; gated on Phase 21 + 2 hard blockers | [22-perf-baseline.md](22-perf-baseline.md) |
+| Phase | 标题 | 状态 | 文档 |
+|------:|------|------|------|
+| **20** | vLLM 后端 monkey-patch —— e2e 流程 | 📐 设计已落 2026-06-22；任务 1.1-1.9 未启动 | [20-vllm-backend-monkey-patch.md](20-vllm-backend-monkey-patch.md) |
+| **21** | 精度验证 harness（与 vLLM 原生对比） | 📐 设计已落 2026-06-22；gate Phase 20 | [21-precision-validation.md](21-precision-validation.md) |
+| **22** | Perf baseline + 调优 | 📐 设计已落 2026-06-22；gate Phase 21 + 2 个硬 blocker | [22-perf-baseline.md](22-perf-baseline.md) |
 
-For real-time state of each phase see [`../STATUS.md`](../STATUS.md).
+每 phase 的实时状态见 [`../STATUS.md`](../STATUS.md)。
 
-## Update protocol per phase
+## 每个 phase 的更新协议
 
-When a phase node changes state:
+phase 节点变状态时：
 
-1. Update the phase doc's `## Status` section.
-2. Update the row in the index table above.
-3. Update [`../STATUS.md`](../STATUS.md) "Phase 2 sub-phases" table.
-4. If a new blocker emerges, add to [`../blockers.md`](../blockers.md).
-5. Record the new pin snapshot at the top of the phase doc.
+1. 更新该 phase doc 的 `## Status` 段。
+2. 更新上面 index 表的对应行。
+3. 更新 [`../STATUS.md`](../STATUS.md) "Phase 2 sub-phases" 表。
+4. 如果浮现新 blocker，加到 [`../blockers.md`](../blockers.md)。
+5. 记录新的 pin snapshot 在 phase doc 顶。
 
-## Cross-references
+## 交叉引用
 
-- [`../STATUS.md`](../STATUS.md) — live status board
-- [`../blockers.md`](../blockers.md) — active open issues
-- [`../architecture/overview.md`](../architecture/overview.md) — system
-  architecture across 5 repos + vLLM
-- `pypto-lib/docs/known-pypto-pitfalls.md` — kernel / codegen hard
-  limits (in pypto-lib repo)
-- `pypto-lib/docs/dev-workflow-gotchas.md` — workflow pitfalls (in
-  pypto-lib repo)
+- [`../STATUS.md`](../STATUS.md) —— 实时状态板
+- [`../blockers.md`](../blockers.md) —— 活跃 open issues
+- [`../architecture/overview.md`](../architecture/overview.md) —— 跨 5 仓
+  + vLLM 系统架构
+- `pypto-lib/docs/known-pypto-pitfalls.md` —— kernel / codegen 硬限制
+  （在 pypto-lib 仓）
+- `pypto-lib/docs/dev-workflow-gotchas.md` —— workflow 坑（在 pypto-lib 仓）

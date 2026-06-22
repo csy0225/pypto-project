@@ -1,60 +1,59 @@
-# System Architecture Overview
+# 系统架构概览
 
-The pypto step3p5 stack assembles 5 code repos + 1 integration target
-into an end-to-end serving system. This doc shows what each piece does
-and where data flows.
+pypto step3p5 栈把 5 个代码仓 + 1 个集成目标拼成一个端到端 serving
+系统。本 doc 展示各部件做什么、数据怎么流。
 
-## Big picture
+## 大图
 
 ```
                           ┌─────────────────────────────┐
-                          │  vLLM stepcast fork         │
-                          │  (Phase 2 integration       │
-                          │   target — gitlab-internal) │
+                          │  vLLM stepcast fork          │
+                          │  (Phase 2 集成目标 ——        │
+                          │   公司内部 gitlab fork)      │
                           │                              │
-                          │  • LLM engine + scheduler    │
+                          │  • LLM 引擎 + scheduler      │
                           │  • Continuous batching       │
                           │  • Sampler + tokenizer       │
-                          │  • Paged KV cache mgr        │
+                          │  • Paged KV cache 管理       │
                           │  • Step3p5Model.forward      │
                           │                              │
-                          │  patched via                 │
+                          │  通过 monkey-patch           │
                           │  pypto.step3p5.vllm_backend  │
-                          │  (in pypto-lib)              │
+                          │  （在 pypto-lib）            │
                           └──────────────┬──────────────┘
-                                         │ calls
+                                         │ 调用
                                          ▼
                           ┌─────────────────────────────┐
-   pypto-lib             │  decode_fwd                  │
-   "model + kernels"     │  (one fused 45-layer kernel) │
-                         └──────────────┬──────────────┘
-                                        │ compiled by
-                                        ▼
-   pypto                 ┌─────────────────────────────┐
-   "framework"           │  pypto.ir.compile            │
-                         │  • multi-level IR            │
-                         │  • codegen passes            │
-                         │  • emits .so + .bin          │
-                         └──────────────┬──────────────┘
-                                        │ uses
-                                  ┌─────┴─────┐
-                                  ▼           ▼
-   pto-isa                 ┌──────────┐  ┌──────────────────────┐
-   "tile library"          │ pto-isa  │  │      PTOAS            │
-                           │ virtual  │  │   bytecode assembler │
-                           │ tile ISA │  │      (= ptoas-bin)   │
-                           └──────────┘  └──────────────────────┘
-                                        ▲
-                                        │ produces bytecode for
-                                        │
+   pypto-lib              │  decode_fwd                  │
+   "模型 + kernel"        │  （一个融合 45 层 kernel）   │
+                          └──────────────┬──────────────┘
+                                         │ 由 ... 编译
+                                         ▼
+   pypto                  ┌─────────────────────────────┐
+   "框架"                 │  pypto.ir.compile            │
+                          │  • multi-level IR            │
+                          │  • codegen passes            │
+                          │  • 出 .so + .bin             │
+                          └──────────────┬──────────────┘
+                                         │ 用
+                                   ┌─────┴─────┐
+                                   ▼           ▼
+   pto-isa                  ┌──────────┐  ┌──────────────────────┐
+   "tile 库"                │ pto-isa  │  │      PTOAS            │
+                            │ 虚拟     │  │   字节码 assembler    │
+                            │ tile ISA │  │      (= ptoas-bin)   │
+                            └──────────┘  └──────────────────────┘
+                                         ▲
+                                         │ 产字节码给 ...
+                                         │
                           ┌─────────────────────────────┐
-   simpler               │  PTO runtime                 │
-   "execution layer"     │  • AICPU + AICore dispatcher │
-   (submodule of pypto)  │  • inter-card IPC (shmem)    │
-                         │  • collectives               │
-                         └──────────────┬──────────────┘
-                                        │ runs on
-                                        ▼
+   simpler                │  PTO runtime                 │
+   "执行层"               │  • AICPU + AICore dispatcher │
+   （pypto submodule）    │  • 跨卡 IPC（shmem）         │
+                          │  • collective                │
+                          └──────────────┬──────────────┘
+                                         │ 跑在 ...
+                                         ▼
                           ┌─────────────────────────────┐
                           │  Ascend 910B / A2A3          │
                           │  • driver 25.5.2             │
@@ -63,85 +62,79 @@ and where data flows.
                           └─────────────────────────────┘
 ```
 
-## Repo roles
+## 仓库角色
 
 ### pypto
 
-Programming framework. Provides the Python DSL (`pypto.language`,
-`pypto.language.distributed`), multi-level IR, and codegen passes.
-Compiles a `@pl.program` to PTOAS bytecode + a host-side `.so` for
-dispatch.
+编程框架。提供 Python DSL（`pypto.language`，
+`pypto.language.distributed`），multi-level IR 和 codegen pass。把
+`@pl.program` 编成 PTOAS 字节码 + host 侧 dispatch `.so`。
 
-Runtime: `pypto/runtime/` is a git submodule that points to **simpler**.
+Runtime：`pypto/runtime/` 是 git submodule，指向 **simpler**。
 
 ### pypto-lib
 
-Tensor-level kernel implementations and end-to-end LLM models. Hosts
-the step3p5 family:
+Tensor 级 kernel 实现和端到端 LLM 模型。承载 step3p5 家族：
 
-- `models/step3p5/decode_fwd.py` — 45-layer fused decode + lm_head
-- `models/step3p5/decode_layer.py` — per-layer dispatcher (dense vs MoE)
-- `models/step3p5/{attention_full,attention_swa}.py` — attention variants
-- `models/step3p5/moe.py` + 5 MoE component files — MoE block
-- `models/step3p5/weight_loader.py` — HF safetensors → per-rank bundle
+- `models/step3p5/decode_fwd.py` —— 融合 45 层 decode + lm_head
+- `models/step3p5/decode_layer.py` —— 每层 dispatcher（dense vs MoE）
+- `models/step3p5/{attention_full,attention_swa}.py` —— attention 变体
+- `models/step3p5/moe.py` + 5 个 MoE 组件文件 —— MoE block
+- `models/step3p5/weight_loader.py` —— HF safetensors → 每 rank bundle
 
-Phase 2 integration code will live at
-`models/step3p5/vllm_backend/` (Phase 20 task 1.1+).
+Phase 2 集成代码会落在 `models/step3p5/vllm_backend/`（Phase 20 任务
+1.1+）。
 
 ### pto-isa
 
-Tile-ISA virtual implementations. Defines tile operations (matmul,
-reduce, broadcast, etc.) that pypto codegen lowers into. Hardware-
-specific (Ascend 910B for our case).
+Tile-ISA 虚拟实现。定义 tile 操作（matmul、reduce、broadcast 等），
+pypto codegen 下沉到这些 op。硬件特定（我们这里是 Ascend 910B）。
 
 ### PTOAS
 
-LLVM/MLIR-based bytecode assembler. Takes the MLIR pypto emits and
-produces device bytecode + dispatch metadata.
+基于 LLVM/MLIR 的字节码 assembler。把 pypto 出的 MLIR 转成设备字节码
++ dispatch metadata。
 
-Binary distribution: `ptoas-bin` (currently v0.45) — the assembler we
-actually run; PTOAS source repo is for reference / building from
-scratch.
+二进制发布：`ptoas-bin`（当前 v0.45）—— 我们实际跑的 assembler；
+PTOAS source 仓为参考 / 从源代码 build。
 
-### simpler (pypto submodule)
+### simpler（pypto submodule）
 
-PTO runtime. Manages task dispatch across AICPU + AICore, inter-card
-IPC via shmem windows, collective primitives. The most platform-touchy
-component — Phase 16 three-pillars binding exists primarily to make
-simpler work.
+PTO runtime。管 AICPU + AICore 的任务 dispatch、跨卡 shmem window
+IPC、collective primitive。最 platform-touchy 的组件 —— Phase 16 三
+剑合璧绑定主要就是为了让 simpler 跑得起来。
 
-### vLLM stepcast fork (Phase 2 target)
+### vLLM stepcast fork（Phase 2 目标）
 
-Internal fork of vLLM with step3p5 model implementation
-(`vllm/model_executor/models/step3p5.py`). Provides everything around
-the decoder: tokenizer, sampler, KV cache manager, request scheduler,
-continuous batching.
+公司内部 vLLM fork，含 step3p5 模型实现
+（`vllm/model_executor/models/step3p5.py`）。提供 decoder 之外所有部件：
+tokenizer、sampler、KV cache 管理、请求调度、continuous batching。
 
-Phase 2 integration: monkey-patch `Step3p5Model.forward` to call
-pypto-compiled `decode_fwd` instead of torch eager. See
-[`vllm-step3p5-mapping.md`](vllm-step3p5-mapping.md).
+Phase 2 集成：monkey-patch `Step3p5Model.forward` 调用 pypto-编译的
+`decode_fwd`，替代 torch eager。详见
+[`vllm-step3p5-mapping.md`](vllm-step3p5-mapping.md)。
 
-## Data flow at decode time (after Phase 2 v0.1)
+## Decode 时数据流（Phase 2 v0.1 之后）
 
 ```
-User prompt
+用户 prompt
     │
     ▼
 vLLM tokenizer ─────────────► token_ids
     │
     ▼
-vLLM scheduler ─────────────► batch (B requests)
+vLLM scheduler ─────────────► batch（B 请求）
     │
     ▼
-vLLM Step3p5Model.forward (monkey-patched)
+vLLM Step3p5Model.forward（已 monkey-patch）
     │
     ▼
-pypto decode_fwd (compiled .so)
+pypto decode_fwd（编出的 .so）
     │
-    ├─► 45 layers (dense / MoE mixed-mode)
+    ├─► 45 层（dense / MoE mixed-mode）
     │       │
     │       ├─► attention: QKV + RMS norm + RoPE + paged KV cache update + flash
-    │       └─► MoE or dense MLP
+    │       └─► MoE 或 dense MLP
     │
     └─► lm_head + rms norm
     │
@@ -149,41 +142,40 @@ pypto decode_fwd (compiled .so)
 Logits [B, VOCAB]
     │
     ▼
-vLLM Sampler ─────────────► next_token_id per batch element
+vLLM Sampler ─────────────► 每 batch 元素的 next_token_id
     │
     ▼
-vLLM appends to seq_lens, KV cache slot_mapping advances, loops
+vLLM 续 seq_lens、KV cache slot_mapping 推进，循环
 ```
 
-KV cache lives in HBM, layout shared between vLLM-side allocation and
-pypto kernel access via zero-copy view (see Phase 20 task 1.3
-`kv_bridge.py`).
+KV cache 在 HBM，layout 在 vLLM 侧分配 + pypto kernel 访问之间通过
+零拷贝 view 共享（详见 Phase 20 任务 1.3 `kv_bridge.py`）。
 
-## Build dependency order
+## Build 依赖顺序
 
-When rebuilding from source:
+从源代码 rebuild 时：
 
-1. `pypto` (the framework — provides the Python DSL pypto-lib imports)
-2. `pto-isa` (used at codegen time)
-3. `PTOAS` (used at codegen time; usually replaced by `ptoas-bin`)
-4. `simpler` (submodule under pypto/runtime)
-5. `pypto-lib` (depends on all of the above)
+1. `pypto`（框架 —— 提供 pypto-lib import 的 Python DSL）
+2. `pto-isa`（codegen 时用）
+3. `PTOAS`（codegen 时用；通常被 `ptoas-bin` 替代）
+4. `simpler`（pypto/runtime 下的 submodule）
+5. `pypto-lib`（依赖上面所有）
 
-The deploy host typically only needs:
-- `pypto-lib` source
-- `pypto` installed (`pip install -e <workspace>/pypto`)
-- `simpler` built and installed (via pypto submodule build)
-- `pto-isa` source (referenced by `$PTO_ISA_ROOT`)
-- `ptoas-bin` (in `$PATH` and `$LD_LIBRARY_PATH`)
+部署机通常只要：
+- `pypto-lib` 源码
+- `pypto` 装好（`pip install -e <workspace>/pypto`）
+- `simpler` build 好装上（通过 pypto submodule build）
+- `pto-isa` 源码（被 `$PTO_ISA_ROOT` 引用）
+- `ptoas-bin`（在 `$PATH` 和 `$LD_LIBRARY_PATH`）
 
-See [`../deployment/version-matrix.md`](../deployment/version-matrix.md)
-for pinned versions.
+参见 [`../deployment/version-matrix.md`](../deployment/version-matrix.md)
+看锁定的版本。
 
-## Related docs
+## 相关文档
 
-- [`vllm-step3p5-mapping.md`](vllm-step3p5-mapping.md) — vLLM ↔ pypto
-  operator mapping for Phase 20 monkey-patch
+- [`vllm-step3p5-mapping.md`](vllm-step3p5-mapping.md) —— vLLM ↔ pypto
+  op 映射，Phase 20 monkey-patch 用
 - [`../phases/20-vllm-backend-monkey-patch.md`](../phases/20-vllm-backend-monkey-patch.md)
-  — Phase 20 design that consumes this overview
+  —— 消费本 overview 的 Phase 20 设计
 - [`../deployment/phase16-three-pillars.md`](../deployment/phase16-three-pillars.md)
-  — hardware platform binding
+  —— 硬件平台绑定

@@ -1,113 +1,103 @@
-# Phase 16 Three-Pillars Binding
+# Phase 16 三剑合璧绑定
 
-The minimum viable deployment for any production multi-rank step3p5
-run on Ascend 910B / A2A3 platform. **All three components must be at
-the listed version.** Mixing in older versions silently breaks
-multi-card collectives.
+Ascend 910B / A2A3 平台上任何生产多卡 step3p5 run 的最低部署要求。
+**三个组件必须全在指定版本**。混入旧版本会静默破坏多卡 collective。
 
-## The binding
+## 绑定
 
-| Component | Required | Notes |
-|-----------|----------|-------|
-| Driver | `25.5.2` | Linux x86-64 .run package: `Ascend-hdk-910b-npu-driver_25.5.2_linux-x86-64.run` |
-| Firmware | `7.8.0.7.220` | .run package: `Ascend-hdk-910b-npu-firmware_7.8.0.7.220.run`. **Writes to chip flash; persists across host reboot.** |
-| CANN | `9.0.0-beta.1` | NOT GA. Toolkit + nnal. Must NOT be replaced with `9.0.0` or later GA. |
+| 组件 | 必需版本 | 说明 |
+|------|----------|------|
+| Driver | `25.5.2` | Linux x86-64 .run 包：`Ascend-hdk-910b-npu-driver_25.5.2_linux-x86-64.run` |
+| Firmware | `7.8.0.7.220` | .run 包：`Ascend-hdk-910b-npu-firmware_7.8.0.7.220.run`。**写入 chip flash，跨主机重启持久。** |
+| CANN | `9.0.0-beta.1` | NOT GA。Toolkit + nnal。**不能**被替换成 `9.0.0` 或更新的 GA 版本。 |
 
-Plus a small simpler-side patch (already in `csy0225/simpler` HEAD
-`a6e06406`):
-`comm_hccl.cpp` adds `__has_include`-guarded `*Inner` macro alias for
-forward-compatibility with CANN GA's renamed HCCL entries. No-op under
-beta.1.
+加 simpler 侧一个小 patch（已在 `csy0225/simpler` HEAD `a6e06406`）：
+`comm_hccl.cpp` 加 `__has_include` 守护的 `*Inner` macro alias，对 CANN
+GA 重命名 HCCL 入口的 forward-compatibility。beta.1 下守护不激活，
+无副作用。
 
-## Why all three are required (failure modes)
+## 为什么三件都必需（失败模式）
 
-### Older driver: `support_shmem_map_exbus = 0`
+### Driver 旧：`support_shmem_map_exbus = 0`
 
-Drivers below 25.5.2 expose this device capability flag as 0. Any
-attempt to do cross-card IPC via
-`aclrtIpcMemImportByKey + ENABLE_PEER_ACCESS` returns 507899:
+25.5.2 以下的 driver 把这个设备 capability flag 显示为 0。任何跨卡 IPC
+通过 `aclrtIpcMemImportByKey + ENABLE_PEER_ACCESS` 都返回 507899：
 
 ```
 [ERROR] aclrtIpcMemImportByKey failed: 507899
 ```
 
-This blocks every multi-card collective primitive. simpler L3
-`allreduce_distributed` cannot make progress.
+这会阻塞所有多卡 collective primitive。simpler L3
+`allreduce_distributed` 无法 progress。
 
-### Older firmware: same cap gap
+### Firmware 旧：同样 cap 缺口
 
-Firmware and driver gate the cap together. Both must move.
+Firmware 和 driver 一起 gate 这个 cap。必须一起升。
 
-### CANN GA (not beta.1): TDT does not push AICPU library
+### CANN GA（不是 beta.1）：TDT 不推 AICPU 库
 
-CANN 9.0.0 GA's TDT **does not** push
-`Ascend-aicpu_extend_syskernels.tar.gz` (encrypted aa55aa55 format)
-to the AICPU device-side at `/usr/lib64/aicpu_kernels/`. Without that
-tarball, simpler's `BootstrapDispatcher` cannot find
-`DynTileFwkKernelServerInit` and fails with:
+CANN 9.0.0 GA 的 TDT **不会** 把
+`Ascend-aicpu_extend_syskernels.tar.gz`（aa55aa55 加密格式）推到 AICPU
+设备端 `/usr/lib64/aicpu_kernels/`。没这个 tarball，simpler 的
+`BootstrapDispatcher` 找不到 `DynTileFwkKernelServerInit`，失败信息：
 
 ```
 [ERROR] Load so libaicpu_extend_kernels.so failed
 [ERROR] BootstrapDispatcher: aclrtSynchronizeStream failed: 507018
 ```
 
-This is independent of the driver/firmware cap fix. Both must be
-correct simultaneously.
+这跟 driver/firmware cap 修复独立。两件都得对。
 
-CANN beta.1's TDT, by contrast, does push the tarball at init. Hence
-the binding to beta.1 specifically.
+CANN beta.1 的 TDT 反过来，init 时会推这个 tarball。因此硬绑 beta.1。
 
-### When this binding may relax
+### 这个绑定何时可能放宽
 
-- Upstream simpler rewrites `BootstrapDispatcher` to not depend on
-  `DynTileFwkKernelServerInit` / `libaicpu_extend_kernels.so`. Then
-  CANN constraint may relax to GA. PR `#1061` did NOT do this — that
-  PR removed simpler's own `simpler_aicpu_init` monitor kernel, not
-  the upstream-AICPU-library hardcode.
-- Huawei's next CANN release (≥ 9.0.0 second beta or 9.1+) where
-  TDT's tarball-push behaviour matches beta.1 will let us upgrade.
+- 上游 simpler 改写 `BootstrapDispatcher`，不再依赖
+  `DynTileFwkKernelServerInit` / `libaicpu_extend_kernels.so`。届时 CANN
+  限制可放宽到 GA。PR `#1061` **没有** 做这件事 — 那个 PR 删的是 simpler
+  自己的 `simpler_aicpu_init` 监控 kernel，**不是** 上游 AICPU 库的
+  hardcoded 依赖。
+- Huawei 下一个 CANN 版本（≥ 9.0.0 第二个 beta，或 9.1+）TDT 行为修复
+  了 GA 那条 push 路径。届时可升级。
 
-Until then: **bind tight to the three pillars above.**
+在那之前：**死绑上面三件**。
 
-## Verifying current state on a host
+## 在主机上验证当前状态
 
 ```bash
-# Driver + firmware via npu-smi
+# driver + firmware 通过 npu-smi
 npu-smi info -t board -i 0 | grep -E "Software|Firmware"
-# Expected:
+# 期望:
 #   Software Version    : 25.5.2
 #   Firmware Version    : 7.8.0.7.220
 
-# CANN install path
+# CANN 安装路径
 ls -la /usr/local/Ascend/cann-9.0.0-beta.1
-# Expected: directory or symlink to NVMe install
+# 期望: 目录 或 symlink 指 NVMe install
 
-# CANN env script readable
+# CANN env 脚本可读
 test -f /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && echo OK
 ```
 
-If any check fails, the host is not Phase 16 compliant. See
-[`machine-recovery.md`](machine-recovery.md) for the upgrade runbook.
+任一项失败 → 主机非 Phase 16 合规。升级 runbook 见
+[`machine-recovery.md`](machine-recovery.md)。
 
-## Validation reference (gpu-a910x-0162, 2026-06-22)
+## 验证参考（gpu-a910x-0162，2026-06-22）
 
-The reference machine validating this binding is `gpu-a910x-0162` in
-the lab cluster. Validation evidence:
+验证这个绑定的参考机是实验集群里的 `gpu-a910x-0162`。验证证据：
 
-- `probe2.c` cross-card `aclrtIpcMemImportByKey + ENABLE_PEER_ACCESS`
-  returns `rc=0` with `peer_va == parent ptr = 0x12c1c0000000` (i.e.
-  same VA cross-card mapping established).
-- simpler L3 `allreduce_distributed -p a2a3 -d 0-1` produces
-  `max|out-expected|=0.000e+00` on both ranks (golden match).
+- `probe2.c` 跨卡 `aclrtIpcMemImportByKey + ENABLE_PEER_ACCESS` 返回
+  `rc=0`，`peer_va == parent ptr = 0x12c1c0000000`（即跨卡 same VA
+  mapping 建立）。
+- simpler L3 `allreduce_distributed -p a2a3 -d 0-1` 两卡都给
+  `max|out-expected|=0.000e+00`（golden match）。
 
-Source code commit `csy0225/simpler@c66b4120` originally validated this
-on `stepfun/develop`; current pin is `a6e06406`.
+源码 commit `csy0225/simpler@c66b4120` 原始验证；当前 pin `a6e06406`。
 
-## Related docs
+## 相关文档
 
-- [`machine-recovery.md`](machine-recovery.md) — how to install /
-  recover this binding on a fresh or rebooted host
-- [`version-matrix.md`](version-matrix.md) — full 5-repo + toolchain
-  pin compatibility
-- [`../blockers.md`](../blockers.md) §5 — 0234 driver+firmware upgrade
-  pending
+- [`machine-recovery.md`](machine-recovery.md) —— 怎么在新机器或重启后的
+  主机上安装/恢复这个绑定
+- [`version-matrix.md`](version-matrix.md) —— 完整 5 仓库 + 工具链 pin
+  兼容
+- [`../blockers.md`](../blockers.md) §5 —— 0234 driver+firmware 升级未做
