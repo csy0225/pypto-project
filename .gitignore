@@ -1,0 +1,36 @@
+# Build / venv / cache
+__pycache__/
+*.pyc
+*.pyo
+.venv*/
+build/
+build_output/
+dist/
+*.egg-info/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Claude session-local state (not for sharing)
+.claude/projects/
+.claude/pm-session/
+
+# Temp / backup
+*.bak
+*.tmp
+*~
+
+# Logs / profile artefacts
+*.log
+*.swimlane
+*.dep-graph
+trace_dump/
+perf-reports/raw/
+
+# Test outputs
+.pytest_cache/
+.coverage
+htmlcov/
