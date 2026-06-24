@@ -135,3 +135,25 @@ deferred 掉。
    2026-Q2.md` 里的某次 session log 等）。
 4. 在 [`STATUS.md`](STATUS.md) "硬 Blocker" 表加一行。
 5. 如果 gate 某个具体 phase，从那个 phase doc 的 "Risks" 段链过来。
+
+## 4. Final e2e precision prerequisites
+
+**严重度**：🔴 Critical —— gate 最终验收“端到端精度正确且无阻塞”。
+
+**当前预检命令**：
+
+```bash
+cd <pypto-lib>
+python tools/step3p5/e2e_precision_readiness.py --batch 2
+```
+
+**2026-06-24 结果**：host 级 smoke 全绿，但最终 e2e 精度仍被以下前置条件阻塞：
+
+1. 0162 未挂载默认真实权重目录 `/mnt/chensiyu-jfs/multi-hardware/models/step3p5_flash_release_hf_mtp3_bf16`。
+2. 当前环境未发现 vLLM / stepcast 原生 Step3p5 模型代码或 Python package。
+3. `Step3p5DecodeFwd.host_orch` 仍是 final RMS + LM head skeleton，尚未 wire 45 层 per-layer program。
+4. head_gate 当前在 PyPTO 侧是 ×1 bypass；vLLM parity 需要同策略 patch 或明确接受 L1 差异。
+5. MoE 8 卡 ST runtime 已 PASS，但还缺 MoE golden 精度验证。
+
+**解除条件**：真实权重 + vLLM oracle 可见；`decode_fwd` 45 层接线完成；能导出同一 decode step 的 hidden/KV/cache/slot 输入；8 rank logits shard concat 后与 vLLM logits/top-k 对齐。
+

@@ -40,6 +40,18 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 ---
 
+
+### Final e2e precision gate (2026-06-24)
+
+新增可执行预检：`pypto-lib/tools/step3p5/e2e_precision_readiness.py`。当前结果：
+
+- ✅ `decode_fwd` torch distributed mock：worst pass rate 1.0
+- ✅ `step3p5_decode` synthetic smoke：pass rate 1.0
+- ❌ checkpoint 不可见：`/mnt/chensiyu-jfs/.../step3p5_flash_release_hf_mtp3_bf16` 未挂载到 0162
+- ❌ vLLM / stepcast 原生模型环境不可见
+- ❌ `Step3p5DecodeFwd.host_orch` 仍未接 45 层 per-layer program，只跑 final RMS + LM head
+- ❌ head_gate ×1 parity 策略未定；MoE 8 卡 runtime 已通但 golden 精度未补
+
 ## 立即可做的下一步（按优先级）
 
 1. **Phase 20.1**：`config_align.py` — 校验 vLLM `hf_config` 与 pypto `config.py` 常量。

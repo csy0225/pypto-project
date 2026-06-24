@@ -5,6 +5,14 @@
 [`prototype-phase-01-19-summary.md`](prototype-phase-01-19-summary.md)。
 
 
+
+## 2026-06-24 —— Final e2e precision readiness preflight landed 🟡
+
+- 新增 `pypto-lib/tools/step3p5/e2e_precision_readiness.py`，作为最终端到端精度验收的前置门禁。
+- 当前 host 级整网 smoke 全绿：`decode_fwd` distributed mock worst pass rate 1.0；`step3p5_decode` synthetic smoke pass rate 1.0。
+- 预检明确剩余阻塞：真实 checkpoint 未挂载、vLLM/stepcast oracle 不可见、`Step3p5DecodeFwd.host_orch` 未接 45 层、head_gate parity 策略未定、MoE 8 卡缺 golden 精度。
+- pypto-lib pin 更新到 `stepfun/develop:cfe2093`。
+
 ## 2026-06-24 —— CANN 9.0.0 non-GA + DecodeLayerMoE 8 卡 ST runtime PASS ✅
 
 - **环境升级**：0162 切到 CANN 9.0.0 non-GA/non-beta，`/usr/local/Ascend/cann` 指向 `/mnt/persist/Ascend/cann-9.0.0/cann-9.0.0`；已重编译 pypto 与 runtime。
@@ -163,7 +171,7 @@ max|value|=0`（dummy zero weight 期望零输出）。Run time 6.69s。
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------|-----------|
-| 2026-06-24 | CANN 9.0.0 non-GA + DecodeLayerMoE 8卡 ST | `stepfun/develop:b00c8b23` | `stepfun/develop:5bef9d7` | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
+| 2026-06-24 | CANN 9.0.0 non-GA + DecodeLayerMoE 8卡 ST | `stepfun/develop:b00c8b23` | `stepfun/develop:cfe2093` | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-06-22 晚 | pypto-project 仓建立 | `develop:b00c8b23` | `develop:9c4773f` | `develop:e25732f0` | `develop:da011a3d` | `a6e06406` | `v0.45` |
 | 2026-06-22 下午 | Phase 20-22 设计 + dev-workflow docs | `develop:b00c8b23` | `develop:69f22b1` | `develop:e25732f0` | `develop:da011a3d` | `a6e06406` | `v0.45` |
 | 2026-06-20 | 5 仓 rebase + fork push | `develop:03136bf6` | `develop:ffaf5d6` | `develop:e25732f0` | `develop:da011a3d` | `a6e06406` | `v0.45` |
