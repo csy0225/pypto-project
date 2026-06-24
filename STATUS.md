@@ -3,7 +3,7 @@
 pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状态
 变化都更新这里**。历史细节查 [`archive/`](archive/)。
 
-**最后更新**：2026-06-22
+**最后更新**：2026-06-24
 
 ---
 
@@ -33,26 +33,19 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 |------|----------|----------------------|----------------------|
 | **v0.1** | 单卡 dense + mixed-mode MoE 走 vLLM | Phase 20 | 无 |
 | **v0.2** | 单卡 45 层 mixed-mode（dense pypto + MoE vLLM eager） | Phase 20 | 无 |
-| **v0.3** | TP=8 多卡 dense + mixed-mode MoE | Phase 20 + Phase 22.1-3 | barrier all_reduce UB 修复 |
-| **v1.0** | TP=8 / EP=8 全 pypto MoE + perf 数发布 | Phase 20-22 全完 | barrier all_reduce + MoE 507018 |
+| **v0.3** | TP=8 多卡 dense + mixed-mode MoE | Phase 20 + Phase 22.1-3 | ✅ kernel blocker 已清；待 vLLM harness |
+| **v1.0** | TP=8 / EP=8 全 pypto MoE + perf 数发布 | Phase 20-22 全完 | 待整网精度 + perf 优化（split task 融合） |
 
-**当前**:超出 v0.1（Phase 1 全过）。**v0.1 入场无 gate** — Phase 20 实现
-可立刻启动。
+**当前**：Decode 阶段 kernel/ST 已推进到 TP=8/EP=8 MoE runtime PASS；dense full/swa 单卡精度 ST PASS；MoE 8 卡 ST 目前只验证 runtime（validation skipped，尚未做 golden 精度）。**下一步可启动 Phase 20/21 的整网端到端精度对齐 harness**，但还不能宣称整网精度已通过。
 
 ---
 
 ## 立即可做的下一步（按优先级）
 
-1. **Phase 20.1**：`config_align.py` — 校验 vLLM `hf_config` 与 pypto
-   `config.py` 各项常量。1 天，无依赖。最便宜入手点。
-2. **Phase 20.2**：`weight_translate.py` — vLLM `nn.Module` → pypto
-   bundle dict。5 天，Phase 20 核心工作量。
-3. **并行做 — gate 1**：写 UB-friendly barrier all_reduce 重写
-   （`acc` carry → 在 `local` 上 in-place store/reload）。目标 Phase 22
-   多卡入场。详见 [`blockers.md`](blockers.md) §1。
-4. **并行做 — gate 2**：写 `P19_DISPATCH_LIMIT` dispatch-cut bisect 工具
-   解 MoE 507018。目标 Phase 22 v1.0 入场。详见
-   [`blockers.md`](blockers.md) §2。
+1. **Phase 20.1**：`config_align.py` — 校验 vLLM `hf_config` 与 pypto `config.py` 常量。
+2. **Phase 20.2**：`weight_translate.py` — vLLM `nn.Module` → pypto bundle dict。
+3. **Phase 21 入场准备**：先跑整网 decode-only 端到端精度对齐（L1 hidden / L2 logits），确认 head_gate ×1 旁路的可接受策略。
+4. **后续性能优化**：当前 MoE dispatch 采用 split task 保正确性；恢复/融合成非 split task 作为 Phase 22 perf 优化项，不阻塞精度 harness。
 
 ---
 
@@ -66,15 +59,13 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 ---
 
-## 硬 Blocker（gate Phase 22）
+## 当前 Blocker / Deferred Items
 
 | # | Blocker | 严重度 | gate 什么 | Owner | 详情 |
 |--:|---------|--------|-----------|-------|------|
-| 1 | barrier `tp_all_reduce` UB overflow（`pl.range(constant)` 展开 unroll，624KB > 184KB UB 限） | 🔴 Critical | Phase 22.3 多卡 dense / v0.3+ | 未指派 | [`blockers.md`](blockers.md) §1 |
-| 2 | MoE device runtime 507018（kernel 内 AICPU/AICore fault，host log 无元数据） | 🔴 Critical | Phase 22 v1.0 全 pypto MoE | 未指派 | [`blockers.md`](blockers.md) §2 |
-| 3 | head_gate × 1 旁路 — vLLM 原生语义偏离（sigmoid gate 用 identity 替代） | 🟡 精度 | Phase 21 L1 layer-级 parity | TASK-L（pto-isa 上游） | [`blockers.md`](blockers.md) §3 |
-| 4 | Prefill MoE L1 overflow（TASK-29） | 🟢 Deferred | Phase 17 prefill e2e（Phase 22 decode-only 不需要） | 未指派 | [`blockers.md`](blockers.md) §4 |
-| 5 | 0234 driver+firmware 升级未做 | 🟢 基础设施 | 备用部署机 | 未指派 | [`blockers.md`](blockers.md) §5 |
+| 1 | head_gate × 1 旁路 — vLLM 原生语义偏离（sigmoid gate 用 identity 替代） | 🟡 精度 | Phase 21 L1 layer-级 parity | TASK-L（pto-isa 上游） | [`blockers.md`](blockers.md) §1 |
+| 2 | Prefill MoE L1 overflow（TASK-29） | 🟢 Deferred | Phase 17 prefill e2e（Phase 22 decode-only 不需要） | 未指派 | [`blockers.md`](blockers.md) §2 |
+| 3 | 0234 driver+firmware 升级未做 | 🟢 基础设施 | 备用部署机 | 未指派 | [`blockers.md`](blockers.md) §3 |
 
 ---
 
@@ -84,13 +75,13 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 |------|------|------|
 | driver 25.5.2 | ✅ 2026-06-22 | `npu-smi info -t board -i 0` 报上 |
 | firmware 7.8.0.7.220 | ✅（chip flash） | 跨重启持久 |
-| CANN 9.0.0-beta.1 | ✅ symlink `/usr/local/Ascend/cann-9.0.0-beta.1` → NVMe | NOT GA — 见 [`deployment/phase16-three-pillars.md`](deployment/phase16-three-pillars.md) |
-| simpler L3 allreduce_distributed -d 0-1 | ✅ 2026-06-22 | `max\|out-expected\|=0` 双卡 golden match |
-| pypto-lib 前端 smoke rc=0 | ✅ 2026-06-22 | 4 个 program builder + 8 个 layer-idx variant |
-| Phase 19 ST-1 full dense @ device 0 | ✅ 7.93s（ratio_allclose PASS） | 保 TP=8 per-rank slice 宽度 |
-| Phase 19 ST-2 swa dense @ device 0 | ✅ 14.85s（ratio_allclose PASS） | 同上 |
+| CANN 9.0.0 non-GA/non-beta | ✅ `/usr/local/Ascend/cann` → `/mnt/persist/Ascend/cann-9.0.0/cann-9.0.0` | 2026-06-24 已重装并重编译 pypto/runtime |
+| simpler L3 allreduce_distributed -d 0-1 | ✅ 2026-06-24 | 1 passed / 1 skipped（pytest harness） |
+| pypto-lib 前端 smoke rc=0 | ✅ 2026-06-24 | `_smoke_program_build` 通过 |
+| Decode dense full ST @ device 0 | ✅ 8.54s（ratio_allclose PASS，2026-06-24） | CANN 9.0.0 non-GA 重编译后验证 |
+| Decode dense SWA ST @ device 0 | ✅ 15.61s（ratio_allclose PASS，2026-06-24） | CANN 9.0.0 non-GA 重编译后验证 |
 | Phase 19 MoE 6 variants smoke compile | ✅ 6/6 PASS | TP=8 per-rank slice 路径 |
-| Phase 19 MoE device runtime | ⏸ 5 秒内 507018 fault | blocker §2 |
+| Decode MoE full_silu_silu ST @ 8 cards | ✅ runtime PASS 26.51s（validation skipped，2026-06-24） | `tile_valid > 0` guard + split EP dispatch；需继续补 golden 精度 |
 | Phase 15 单卡 e2e | ✅ rc=0，20 tasks complete | head_gate ×1 旁路 + TP=1 patch 路径 |
 
 ---

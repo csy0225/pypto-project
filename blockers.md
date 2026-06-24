@@ -7,106 +7,11 @@ Blocker 解决时，**删掉本文件里这一节**，到
 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)
 "Resolved blockers" 段补一条 post-mortem。
 
-**最后检视**：2026-06-22。
+**最后检视**：2026-06-24。
 
 ---
 
-## 1. Barrier `tp_all_reduce` UB overflow
-
-**严重度**：🔴 Critical —— gate Phase 22.3（多卡 dense）和所有 v0.3+ tier。
-
-**症状**：pypto 编译在 `AllocateMemoryAddr` pass 报：
-
-```
-Verification failed after 'AllocateMemoryAddr':
-  Function 'tp_all_reduce': Vec buffer usage (655360 bytes)
-  exceeds platform limit (188416 bytes)
-  Location: <pypto-lib>/models/step3p5/decode_layer.py:487
-```
-
-**根因**：pypto 编译器把 `for peer in pl.range(group_size=8)` unroll
-展开，因为 `group_size` 是 factory closure 里捕获的 Python int；展开
-后每次迭代的 `recv` / `recv_fp32` / loop-carried `acc` 被当成不同的
-SSA 值，没有 UB 复用。UB 成本 = `7 × ~80 KB ≈ 560 KB`，远超
-A2A3 的 184 KB Vec UB 限。
-
-分类参考：`pypto-lib/docs/known-pypto-pitfalls.md` §7。
-
-**WIP 在哪**：`csy0225/pypto-lib` 分支
-`wip/step3p5-barrier-allreduce-20260622` HEAD `b5bb6ee`。分支保留*意图*
-（把 ring all_reduce 换成 barrier-style，mirror
-`pypto/tests/st/distributed/test_l3_allreduce.py`），但 dense ST device 0
-编译时触发 UB overflow。
-
-**解除条件**（任一）：
-
-A. 把 `acc` 不 carry，改成在 `local` 上 in-place store/reload（每次
-   迭代 UB 工作集 ≈ 144 KB，能装下 184 KB）。详见
-   `pypto-lib/docs/known-pypto-pitfalls.md` §7 "avoidance recipe B"。
-B. peer 循环边界改成 runtime-dynamic 用 `pld.nranks(ctx)`（mirror
-   canonical test）。同 doc recipe A。
-C. A + B 一起，保险。
-
-**估时**：~3-5 天的 pypto-lib 工作 + dense ST device 0 回归检查。无
-上游依赖。
-
-**Owner**：未指派。
-
----
-
-## 2. MoE device runtime 507018
-
-**严重度**：🔴 Critical —— gate Phase 22 v1.0（全 pypto MoE）。Phase 2
-v0.1-v0.3（mixed-mode MoE）**不**依赖此 blocker。
-
-**症状**：6 个 MoE variant 编译干净（smoke 6/6 PASS at canonical TP=8
-per-rank widths）但 device runtime 5 秒内 fault：
-
-```
-[ERROR] sync_run_streams: aclrtSynchronizeStreamWithTimeout (AICPU) failed: 507018
-[ERROR] orch_error_code=2 sched_error_code=0 runtime_status=-2
-RuntimeError: run_prepared failed with code 507018
-```
-
-host plog（`~/ascend/log/run/plog/plog-*.log`）只能看到清晰 init 然后
-unrecoverable stream sync timeout。device log（`device-*_*.log`）也只看到
-init 段。**没有具体 task_id / kernel_name / fault address 落到 host log**
-（不像 Phase 15 dense 暴露了 `tslot:6` + `errcode 0x800`）。
-
-**根因假设**：MoE 专属路径（gate_topk → dispatch EP-a2a → routed expert
-MLP → combine EP-a2a → shared expert）某个 task 触发 AICore/AICPU
-fault。CLAUDE.md 老 memory 归类「same family as simpler#1023 zero-shape
-view」是过时的 — dense ST 通过说明 simpler#1023 已修。真因在 MoE 专属
-kernel 里。
-
-**复现器**：`gpu-a910x-0162`，2026-06-22：
-
-```bash
-cd <pypto-lib>
-python -m tests.step3p5.test_decode_layer_moe_st \
-    --variant full_silu_silu -p a2a3 -d 0
-# 5 秒内 runtime fault
-```
-
-**解除条件**：dispatch-cut bisect 工具定位。两条路：
-
-A. **加 `P19_DISPATCH_LIMIT` env hook**（仿 Phase 15
-   `P15_DISPATCH_LIMIT`）。host_orch 只跑前 N 个 task。二分定位是哪个
-   task 触发 fault。然后查该 task 的 IR / generated kernel / runtime
-   trace 进一步定位。
-
-B. **开 DFX swimlane + dep-graph dump**：
-   `PYPTO_DISTRIBUTED_DEP_GEN=1` + `PYPTO_DISTRIBUTED_L2_SWIMLANE=1`
-   （pypto `03136bf6` 加的 env hook）。看 fault 前最后一个完成的 task。
-
-**估时**：1-2 周（深度 upstream-touching debug；可能要发 simpler 上游
-issue 如果根因在 runtime）。
-
-**Owner**：未指派。
-
----
-
-## 3. head_gate × 1 旁路 —— 跟 vLLM 原生精度对齐
+## 1. head_gate × 1 旁路 —— 跟 vLLM 原生精度对齐
 
 **严重度**：🟡 精度 —— gate Phase 21 L1（per-layer hidden_states）严格
 对齐。**不**阻塞 v0.1 / v0.2 功能 bring-up；只是"精度验证全绿"准出条件
@@ -146,7 +51,7 @@ C. 拓宽 Phase 21 L1 容忍区间，吸收 attention-output-only 路径 ~50%
 
 ---
 
-## 4. Prefill MoE L1 overflow (TASK-29)
+## 2. Prefill MoE L1 overflow (TASK-29)
 
 **严重度**：🟢 Deferred —— gate Phase 17（完整 prompt processing
 e2e），**Phase 22 decode-only perf 不需要**。

@@ -39,6 +39,7 @@
 
 | 问题 | 路径 |
 |------|------|
+| 术语 / 缩写看不懂？ | [`GLOSSARY.md`](GLOSSARY.md) |
 | 现在工作状态怎样？ | [`STATUS.md`](STATUS.md) |
 | 当前活跃 phase 的任务从哪挑？ | [`phases/`](phases/) |
 | 哪些卡住了 / 帮忙解什么？ | [`blockers.md`](blockers.md) |

@@ -4,6 +4,14 @@
 高层 Phase 01-19 总结见
 [`prototype-phase-01-19-summary.md`](prototype-phase-01-19-summary.md)。
 
+
+## 2026-06-24 —— CANN 9.0.0 non-GA + DecodeLayerMoE 8 卡 ST runtime PASS ✅
+
+- **环境升级**：0162 切到 CANN 9.0.0 non-GA/non-beta，`/usr/local/Ascend/cann` 指向 `/mnt/persist/Ascend/cann-9.0.0/cann-9.0.0`；已重编译 pypto 与 runtime。
+- **回归**：`_smoke_program_build` 通过；dense full ST 8.54s PASS；dense SWA ST 15.61s PASS；L3 allreduce 1 passed / 1 skipped。
+- **MoE 8 卡**：复现 `507018 / sched_error_code=100` 后重新切分定位，`dispatch-only` PASS、`dispatch+routed` FAIL，最终确认 routed expert 对 `tile_valid <= 0` 的空 tile 仍提交 kernel。加 `if tile_valid > 0` guard 后，`DecodeLayerMoE full_silu_silu --world-size 8` runtime PASS 26.51s。
+- **边界**：MoE ST 当前验证 runtime，不带 golden 精度；整网端到端精度对齐仍属于 Phase 20/21 下一步。split dispatch 先保正确性，非 split/fusion 恢复归 Phase 22 perf 优化。
+
 ## 2026-06-22（晚） —— 项目跟踪仓库建立 ✅
 
 在 `<dev-host>/data/chensiyu/hw_project/pypto/pypto-project/` 建了
@@ -155,6 +163,7 @@ max|value|=0`（dummy zero weight 期望零输出）。Run time 6.69s。
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------|-----------|
+| 2026-06-24 | CANN 9.0.0 non-GA + DecodeLayerMoE 8卡 ST | `stepfun/develop:b00c8b23` | `stepfun/develop:23f92dd` | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-06-22 晚 | pypto-project 仓建立 | `develop:b00c8b23` | `develop:9c4773f` | `develop:e25732f0` | `develop:da011a3d` | `a6e06406` | `v0.45` |
 | 2026-06-22 下午 | Phase 20-22 设计 + dev-workflow docs | `develop:b00c8b23` | `develop:69f22b1` | `develop:e25732f0` | `develop:da011a3d` | `a6e06406` | `v0.45` |
 | 2026-06-20 | 5 仓 rebase + fork push | `develop:03136bf6` | `develop:ffaf5d6` | `develop:e25732f0` | `develop:da011a3d` | `a6e06406` | `v0.45` |

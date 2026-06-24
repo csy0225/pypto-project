@@ -9,6 +9,7 @@ pypto step3p5 栈的跨仓库 design notes。这些 doc 描述 5 个代码仓怎
 |------|------|
 | [`overview.md`](overview.md) | 大图：5 仓 + vLLM 各自做什么，数据怎么流 |
 | [`vllm-step3p5-mapping.md`](vllm-step3p5-mapping.md) | vLLM 的 `Step3p5Model` 与 pypto 的 `decode_fwd` 之间的 op-级映射 —— Phase 20 monkey-patch 实现必读 |
+| [`aclgraph-vs-pypto-execution-model.md`](aclgraph-vs-pypto-execution-model.md) | pypto tile 融合 vs vllm-ascend aclgraph：兼容性、program 切分、AICPU 调度模型、roofline 上限对比、大 batch 收益曲线 —— Phase 20 `enforce_eager` 决策 + Phase 22 perf 假设的理论依据 |
 
 ## 什么时候加新 arch doc
 
