@@ -36,10 +36,21 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 | **v0.3** | TP=8 多卡 dense + mixed-mode MoE | Phase 20 + Phase 22.1-3 | ✅ kernel blocker 已清；待 vLLM harness |
 | **v1.0** | TP=8 / EP=8 全 pypto MoE + perf 数发布 | Phase 20-22 全完 | 待整网精度 + perf 优化（split task 融合） |
 
-**当前**：Decode 阶段 kernel/ST 已推进到 TP=8/EP=8 MoE runtime PASS；dense full/swa 单卡精度 ST PASS；MoE 8 卡 ST 目前只验证 runtime（validation skipped，尚未做 golden 精度）。**下一步可启动 Phase 20/21 的整网端到端精度对齐 harness**，但还不能宣称整网精度已通过。
+**当前**：Decode 阶段 kernel/ST 已推进到 TP=8/EP=8 MoE 多卡 golden 精度验证 **5/6 PASS**；dense full/swa 单卡精度 ST PASS；MoE 8 卡剩余 `swa_swiglu7_swiglu16` 输出全 NaN，需继续定位 shared-swiglu16 × SWA 组合。**下一步可启动 Phase 20/21 的整网端到端精度对齐 harness**，但还不能宣称整网精度已通过。
 
 ---
 
+
+### MoE 8-card precision ST update (2026-06-24 evening)
+
+本轮在 0162 当前代码和 CANN 9.0.0 non-GA 环境下补齐了 `test_decode_layer_moe_st --world-size 8` 的 rank-wise golden：
+
+- ✅ dense 多卡基线：`test_decode_layer_full_dense_multirank_st -p a2a3 -d 0,1,2,3,4,5,6,7` PASS，8 rank `bad_ratio=0.0004`。
+- ✅ MoE smoke：6 variants compile-only 全 PASS。
+- ✅ MoE 8 卡 golden：`full_silu_silu` / `full_swiglu7_silu` / `full_swiglu7_swiglu16` / `swa_silu_silu` / `swa_swiglu7_silu` PASS。
+- ❌ MoE 8 卡剩余：`swa_swiglu7_swiglu16` runtime 完成但 validate 失败，`next_hidden_out` 全 NaN。
+
+相关 0162 日志位于 `/data/chensiyu/hw_project/pypto/workspace/moe8-precision-st-*.log`；代码侧进展同步在 `pypto-lib` 的 `test_decode_layer_moe_st.py` 和 `docs/upstream-issues/step3p5-moe-8card-fence-gap.md`。
 
 ### Final e2e precision gate (2026-06-24)
 
@@ -47,10 +58,12 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 - ✅ `decode_fwd` torch distributed mock：worst pass rate 1.0
 - ✅ `step3p5_decode` synthetic smoke：pass rate 1.0
+- ✅ MoE 8 卡 ST 已补 rank-wise golden；6 个 variant 中 5 个 PASS
 - ❌ checkpoint 不可见：`/mnt/chensiyu-jfs/.../step3p5_flash_release_hf_mtp3_bf16` 未挂载到 0162
 - ❌ vLLM / stepcast 原生模型环境不可见
 - ❌ `Step3p5DecodeFwd.host_orch` 仍未接 45 层 per-layer program，只跑 final RMS + LM head
-- ❌ head_gate ×1 parity 策略未定；MoE 8 卡 runtime 已通但 golden 精度未补
+- ❌ head_gate ×1 parity 策略未定
+- ❌ `swa_swiglu7_swiglu16` 8 卡 MoE ST runtime 完成但 `next_hidden_out` 全 NaN
 
 ## 立即可做的下一步（按优先级）
 
@@ -78,6 +91,7 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 | 1 | head_gate × 1 旁路 — vLLM 原生语义偏离（sigmoid gate 用 identity 替代） | 🟡 精度 | Phase 21 L1 layer-级 parity | TASK-L（pto-isa 上游） | [`blockers.md`](blockers.md) §1 |
 | 2 | Prefill MoE L1 overflow（TASK-29） | 🟢 Deferred | Phase 17 prefill e2e（Phase 22 decode-only 不需要） | 未指派 | [`blockers.md`](blockers.md) §2 |
 | 3 | 0234 driver+firmware 升级未做 | 🟢 基础设施 | 备用部署机 | 未指派 | [`blockers.md`](blockers.md) §3 |
+| 7 | `swa_swiglu7_swiglu16` MoE 8 卡 golden 输出 NaN | 🟡 精度 | Phase 21/22 全 MoE 精度准出 | 未指派 | 需切 SWA residual / combine output / shared-swiglu16 |
 
 ---
 
@@ -93,7 +107,12 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 | Decode dense full ST @ device 0 | ✅ 8.54s（ratio_allclose PASS，2026-06-24） | CANN 9.0.0 non-GA 重编译后验证 |
 | Decode dense SWA ST @ device 0 | ✅ 15.61s（ratio_allclose PASS，2026-06-24） | CANN 9.0.0 non-GA 重编译后验证 |
 | Phase 19 MoE 6 variants smoke compile | ✅ 6/6 PASS | TP=8 per-rank slice 路径 |
-| Decode MoE full_silu_silu ST @ 8 cards | ✅ runtime PASS 26.51s（validation skipped，2026-06-24） | `tile_valid > 0` guard + split EP dispatch；需继续补 golden 精度 |
+| Decode MoE full_silu_silu ST @ 8 cards | ✅ golden PASS 32.61s（2026-06-24） | rank-wise golden；retry 后通过 |
+| Decode MoE full_swiglu7_silu ST @ 8 cards | ✅ golden PASS 27.64s（2026-06-24） | full attention + routed swiglu7 + shared silu |
+| Decode MoE full_swiglu7_swiglu16 ST @ 8 cards | ✅ golden PASS 26.74s（2026-06-24） | full attention + routed swiglu7 + shared swiglu16 |
+| Decode MoE swa_silu_silu ST @ 8 cards | ✅ golden PASS 33.61s（2026-06-24） | SWA + routed/shared silu |
+| Decode MoE swa_swiglu7_silu ST @ 8 cards | ✅ golden PASS 35.97s（2026-06-24） | retry 后通过；前一轮出现 transient 507018 |
+| Decode MoE swa_swiglu7_swiglu16 ST @ 8 cards | ❌ validation FAIL（2026-06-24） | runtime 完成但 `next_hidden_out` 全 NaN（524288/524288） |
 | Phase 15 单卡 e2e | ✅ rc=0，20 tasks complete | head_gate ×1 旁路 + TP=1 patch 路径 |
 
 ---
