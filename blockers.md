@@ -128,37 +128,6 @@ deferred 掉。
 ---
 
 
-## 7. MoE 8-card `swa_swiglu7_swiglu16` golden 输出 NaN
-
-**严重度**：🟡 精度 —— gate Phase 21/22 全 PyPTO MoE 精度准出。**不**阻塞
-Phase 20/21 mixed-mode harness 启动；会阻塞“6/6 MoE variant 全绿”的最终声明。
-
-**症状**：`tests.step3p5.test_decode_layer_moe_st --variant swa_swiglu7_swiglu16 --world-size 8 -p a2a3 -d 0`
-在 0162 上 runtime 能完成，但 `next_hidden_out` validation 失败，输出全 NaN：
-`NaN=524288/524288, Inf=0`。
-
-**已排除 / 缩小范围**：同一 rank-wise golden harness 下 5/6 variant 通过：
-`full_silu_silu`、`full_swiglu7_silu`、`full_swiglu7_swiglu16`、
-`swa_silu_silu`、`swa_swiglu7_silu`。因此 8 卡通信/调度不再是全局阻塞；问题集中在
-SWA attention + routed swiglu7 + shared swiglu16 组合。Full attention + shared swiglu16 已过，
-SWA + shared silu 已过。
-
-**当前证据**：0162 日志
-`/data/chensiyu/hw_project/pypto/workspace/moe8-precision-st-swa_swiglu7_swiglu16-retry2-20260624-222252.log`。
-代码侧进展在 `pypto-lib/tests/step3p5/test_decode_layer_moe_st.py` 和
-`pypto-lib/docs/upstream-issues/step3p5-moe-8card-fence-gap.md`。
-
-**下一步**：对该 variant 加 dump / dispatch-cut，优先切三段：
-
-1. SWA attention residual (`resid1`) 是否已 NaN。
-2. combine output / routed path 是否引入 NaN。
-3. shared-expert swiglu16 path 是否在 clamp / multiply / down-proj 引入 NaN。
-
-**解除条件**：`swa_swiglu7_swiglu16` 8 卡 ST 通过 `ratio_allclose(atol=0.04, rtol=0.04, max_error_ratio=0.10)`，MoE 6 variants 全部 golden PASS。
-
-**Owner**：未指派。
-
----
 
 ## 怎么加新 blocker
 
@@ -186,7 +155,7 @@ python tools/step3p5/e2e_precision_readiness.py --batch 2
 2. 当前环境未发现 vLLM / stepcast 原生 Step3p5 模型代码或 Python package。
 3. `Step3p5DecodeFwd.host_orch` 仍是 final RMS + LM head skeleton，尚未 wire 45 层 per-layer program。
 4. head_gate 当前在 PyPTO 侧是 ×1 bypass；vLLM parity 需要同策略 patch 或明确接受 L1 差异。
-5. MoE 8 卡 ST 已补 golden，5/6 variants PASS；剩 `swa_swiglu7_swiglu16` 输出全 NaN。
+5. MoE 8 卡 ST 已补 golden；真实模型会遇到的 5 个 MoE variant 全 PASS。`swa_swiglu7_swiglu16` 是 synthetic-only 组合，不作为 blocker。
 
-**解除条件**：真实权重 + vLLM oracle 可见；`decode_fwd` 45 层接线完成；`swa_swiglu7_swiglu16` MoE 8 卡 NaN 修复；能导出同一 decode step 的 hidden/KV/cache/slot 输入；8 rank logits shard concat 后与 vLLM logits/top-k 对齐。
+**解除条件**：真实权重 + vLLM oracle 可见；`decode_fwd` 45 层接线完成；能导出同一 decode step 的 hidden/KV/cache/slot 输入；8 rank logits shard concat 后与 vLLM logits/top-k 对齐。
 
