@@ -3,7 +3,7 @@
 pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状态
 变化都更新这里**。历史细节查 [`archive/`](archive/)。
 
-**最后更新**：2026-06-24
+**最后更新**：2026-06-25
 
 ---
 
@@ -36,9 +36,23 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 | **v0.3** | TP=8 多卡 dense + mixed-mode MoE | Phase 20 + Phase 22.1-3 | ✅ kernel blocker 已清；待 vLLM harness |
 | **v1.0** | TP=8 / EP=8 全 pypto MoE + perf 数发布 | Phase 20-22 全完 | 待整网精度 + perf 优化（split task 融合） |
 
-**当前**：Decode 阶段 kernel/ST 已推进到 TP=8/EP=8 MoE 多卡真实模型组合 golden 精度验证 **全 PASS**；dense full/swa 单卡精度 ST PASS。`swa_swiglu7_swiglu16` 的 NaN 只发生在 synthetic coverage variant，真实 Step3p5 layer table 不会出现该组合，因此不作为 active blocker。**下一步可启动 Phase 20/21 的整网端到端精度对齐 harness**，但还不能宣称整网精度已通过。
+**当前**：Step3p5 BF16 decode 精度验证已完成 vLLM dump-based 整网闭环：主层 `0~44` + MTP3 `45~47` 全部逐层 tensor-input 对齐通过；final logits 全 step 对齐通过；权重加载/dispatcher/acceptance 通过。当前验证口径是 vLLM eager all-to-all 真实请求 detail dump 作为 oracle，PyPTO torch/reference 逐层复算非 attention-backend 内核边界并比较 `layer_out/logits`。若要宣称 PyPTO 自身 NPU full decode runner 从输入一路执行到 logits，还需后续接 `Step3p5DecodeFwd`/MTP runtime runner；但精度 blocker 已清.
 
 ---
+
+### Step3p5 BF16 vLLM-vs-PyPTO detail precision closure (2026-06-25)
+
+本轮在 0162 isolated vLLM 容器中使用 BF16 checkpoint `/mnt/nvme1/chensiyu/step3p5_flash_release_hf_mtp3_bf16` 采集真实请求 detail dump，并在 PyPTO 侧完成逐层 tensor-input 对齐：
+
+- ✅ 权重加载/dispatcher acceptance：`tools/step3p5/decode_acceptance.py --json` PASS。
+- ✅ final logits 全 step：`pypto_final_logits_from_vllm_all_steps_eps1e5/final_logits_report.json` `ok=True`。
+- ✅ 主 45 层 detail：`0~44` 共 `3960` checks，worst pass rate `0.9995659589767456`，报告 `/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/pypto_all_layers_detail_compare_topk_final_atol02_report.json`。
+- ✅ MTP3 detail：`45~47` 共 `279` checks，worst pass rate `0.9995659589767456`，报告 `/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/pypto_mtp3_detail_compare_report.json`。
+- ✅ ST：`test_step3p5_all_layers_detail_st.py` + `test_step3p5_mtp3_detail_st.py` 组合 PASS (`2 passed in 286.34s`)。
+
+关键修复：`models/step3p5/config.py` 的 `EPS` 从 `1e-6` 修正为 vLLM `GemmaRMSNorm` 实际使用的 `1e-5`；MoE 对齐使用 vLLM fused router dump 的 `topk_ids/topk_weights` 驱动 PyPTO MoE reference。
+
+BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_e2e_st_regression_20260625.tar`。
 
 
 ### MoE 8-card precision ST update (2026-06-24 evening)
@@ -77,7 +91,7 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler（submodule） | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------------------|-----------|
-| 2026-06-22 | Phase 2 设计落地；建项目跟踪仓 | `stepfun/develop:b00c8b23` | `stepfun/develop:9c4773f`（已撤回误置 docs） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `a6e06406` | `v0.45` |
+| 2026-06-22 | Phase 2 设计落地；建项目跟踪仓 | `stepfun/develop:b00c8b23` | `stepfun/develop:d4c01b9`（BF16 0~47 detail ST） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `a6e06406` | `v0.45` |
 
 历史 pin snapshot 见 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)。
 
