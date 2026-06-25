@@ -54,6 +54,19 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_e2e_st_regression_20260625.tar`。
 
+**本次涉及仓库 commit 组合（记录于 2026-06-26）**：
+
+| 仓库 | 分支/用途 | Commit | 备注 |
+|------|-----------|--------|------|
+| `pypto-lib` | `stepfun/develop` | `d4c01b9` | 本次 BF16 0~47 detail precision gates 代码与 ST |
+| `pypto-project` | `main` | `b771c7e` | 首次记录本次验收状态的文档提交；本段会由后续文档提交推进 |
+| `pypto` | `stepfun/develop` | `b00c8b23` | 本次未改代码；沿用当前 pin |
+| `pto-isa` | `stepfun/develop` | `e25732f0` | 本次未改代码；沿用当前 pin |
+| `PTOAS` | `stepfun/develop` | `da011a3d` | 本次未改代码；沿用当前 pin |
+| `simpler` | submodule/runtime pin | `c66b4120` | 本次未改代码；沿用当前 pin |
+
+BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_e2e_st_regression_20260625.tar`，SHA256 `bce502f4cbafb61fe541385ab1828d33a1f9c32bdfb7d2009e871adba4c896c4`。
+
 
 ### MoE 8-card precision ST update (2026-06-24 evening)
 

@@ -14,6 +14,8 @@
 - 组合 ST：`tests/step3p5/test_step3p5_all_layers_detail_st.py tests/step3p5/test_step3p5_mtp3_detail_st.py` → `2 passed in 286.34s`。
 - 关键修复：`Step3p5 EPS = 1e-5`（对齐 vLLM `GemmaRMSNorm`）；MoE reference 使用 vLLM fused router dump 的 `topk_ids/topk_weights`。
 - BF16 回归数据已打包为 `/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_e2e_st_regression_20260625.tar`，包含 coarse golden、全层 detail、MTP3 detail、final logits artifacts 与报告。
+- 本次涉及仓库 commit 组合：`pypto-lib d4c01b9`、`pypto-project b771c7e`（本次文档记录提交，后续文档补记会前进）、`pypto b00c8b23`、`pto-isa e25732f0`、`PTOAS da011a3d`、`simpler c66b4120`。
+- BF16 tar SHA256：`bce502f4cbafb61fe541385ab1828d33a1f9c32bdfb7d2009e871adba4c896c4`。
 
 
 
