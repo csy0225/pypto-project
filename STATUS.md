@@ -3,7 +3,7 @@
 pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状态
 变化都更新这里**。历史细节查 [`archive/`](archive/)。
 
-**最后更新**：2026-06-25
+**最后更新**：2026-06-26
 
 ---
 
@@ -18,8 +18,8 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 | Sub-phase | 范围 | 状态 | 文档 | 估时 |
 |-----------|------|------|------|------|
-| **2.0（Phase 20）** | vLLM monkey-patch e2e — 整模型 patch `Step3p5Model.forward`；单卡 TP=1；mixed-mode MoE | 📐 设计已落；**任务 1.1-1.9 未启动** | [`phases/20-vllm-backend-monkey-patch.md`](phases/20-vllm-backend-monkey-patch.md) | 3-4 周 |
-| **2.1（Phase 21）** | 与 vLLM 原生精度对比 harness；L1/L2/L3 三层 | 📐 设计已落；gate Phase 20 | [`phases/21-precision-validation.md`](phases/21-precision-validation.md) | 3-4 周 |
+| **2.0（Phase 20）** | vLLM monkey-patch e2e — 整模型 patch `Step3p5Model.forward`；单卡/TP=8 mixed/full PyPTO runner 接入 | 🟡 **待实现**；dump-based 精度 blocker 已清，但 production backend 未接 | [`phases/20-vllm-backend-monkey-patch.md`](phases/20-vllm-backend-monkey-patch.md) | 3-4 周 |
+| **2.1（Phase 21）** | 与 vLLM 原生精度对比 harness；L1/L2/L3 三层 | ✅ **dump-based 精度闭环完成**（BF16 decode、W8A8 decode、W8A8 prefill）；待 Phase20 backend 后做在线 L1/L2/L3 gate | [`phases/21-precision-validation.md`](phases/21-precision-validation.md) | 1-2 周补在线 gate |
 | **2.2（Phase 22）** | Perf baseline + 两轮优化；TP=8 多卡 | 📐 设计已落；gate Phase 21 + 2 个硬 blocker | [`phases/22-perf-baseline.md`](phases/22-perf-baseline.md) | 6-8 周 |
 
 **到 v1.0 production decode 的总目标**：自 2026-06-22 起约 12-16 周
@@ -36,7 +36,11 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 | **v0.3** | TP=8 多卡 dense + mixed-mode MoE | Phase 20 + Phase 22.1-3 | ✅ kernel blocker 已清；待 vLLM harness |
 | **v1.0** | TP=8 / EP=8 全 pypto MoE + perf 数发布 | Phase 20-22 全完 | 待整网精度 + perf 优化（split task 融合） |
 
-**当前**：Step3p5 BF16 decode 精度验证已完成 vLLM dump-based 整网闭环：主层 `0~44` + MTP3 `45~47` 全部逐层 tensor-input 对齐通过；final logits 全 step 对齐通过；权重加载/dispatcher/acceptance 通过。当前验证口径是 vLLM eager all-to-all 真实请求 detail dump 作为 oracle，PyPTO torch/reference 逐层复算非 attention-backend 内核边界并比较 `layer_out/logits`。若要宣称 PyPTO 自身 NPU full decode runner 从输入一路执行到 logits，还需后续接 `Step3p5DecodeFwd`/MTP runtime runner；但精度 blocker 已清.
+**当前口径拆分**：
+
+- ✅ **dump-based 精度验证已闭环**：BF16 decode、W8A8 decode、W8A8 prefill（1k/4k/8k/32k/64k/128k）均已用 vLLM eager detail dump 作为 oracle，在 PyPTO 侧 reference/detail/final-logits 口径通过。
+- 🟡 **production backend 仍未完成**：上述验证并不等价于“真实 vLLM 请求已经走 PyPTO NPU full runner”。后续仍需 Phase 20 把 `Step3p5DecodeFwd`/prefill runner、权重翻译、KV/cache ABI、vLLM monkey-patch 接入生产路径。
+- 🟡 **真实 PyPTO NPU prefill kernel 仍待开发**：本轮 W8A8 prefill 是 vLLM golden + PyPTO reference 对齐；`prefill_moe.py` 的 L1 overflow 仍阻塞真正 PyPTO NPU prefill kernel。
 
 ---
 
@@ -107,24 +111,23 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 相关 0162 日志位于 `/data/chensiyu/hw_project/pypto/workspace/moe8-precision-st-*.log`；代码侧进展同步在 `pypto-lib` 的 `test_decode_layer_moe_st.py` 和 `docs/upstream-issues/step3p5-moe-8card-fence-gap.md`。
 
-### Final e2e precision gate (2026-06-24)
+### Final e2e precision gate preflight (2026-06-24; superseded by 2026-06-25/26 dumps)
 
-新增可执行预检：`pypto-lib/tools/step3p5/e2e_precision_readiness.py`。当前结果：
+`pypto-lib/tools/step3p5/e2e_precision_readiness.py` 作为早期预检保留；其中“checkpoint/vLLM 不可见”等环境 blocker 已由 0162 上 BF16/W8A8 dump-based precision 闭环解除。当前仍有效的结论是：
 
-- ✅ `decode_fwd` torch distributed mock：worst pass rate 1.0
-- ✅ `step3p5_decode` synthetic smoke：pass rate 1.0
-- ✅ MoE 8 卡 ST 已补 rank-wise golden；真实模型会遇到的 5 个 MoE variant 全 PASS
-- ❌ checkpoint 不可见：`/mnt/chensiyu-jfs/.../step3p5_flash_release_hf_mtp3_bf16` 未挂载到 0162
-- ❌ vLLM / stepcast 原生模型环境不可见
-- ❌ `Step3p5DecodeFwd.host_orch` 仍未接 45 层 per-layer program，只跑 final RMS + LM head
-- ❌ head_gate ×1 parity 策略未定
+- ✅ `decode_fwd` torch distributed mock：worst pass rate 1.0。
+- ✅ `step3p5_decode` synthetic smoke：pass rate 1.0。
+- ✅ MoE 8 卡 ST 已补 rank-wise golden；真实模型会遇到的 5 个 MoE variant 全 PASS。
+- 🟡 `Step3p5DecodeFwd`/prefill runner 尚未接入真实 vLLM online backend；见 Phase 20 production backend blocker。
+- 🟡 head_gate ×1 parity 策略仍待在线 backend L1 gate 决策。
 
 ## 立即可做的下一步（按优先级）
 
-1. **Phase 20.1**：`config_align.py` — 校验 vLLM `hf_config` 与 pypto `config.py` 常量。
-2. **Phase 20.2**：`weight_translate.py` — vLLM `nn.Module` → pypto bundle dict。
-3. **Phase 21 入场准备**：先跑整网 decode-only 端到端精度对齐（L1 hidden / L2 logits），确认 head_gate ×1 旁路的可接受策略。
-4. **后续性能优化**：当前 MoE dispatch 采用 split task 保正确性；恢复/融合成非 split task 作为 Phase 22 perf 优化项，不阻塞精度 harness。
+1. **Phase 20 backend 接入（P1）**：实现 `config_align.py` / `weight_translate.py`，把 vLLM `nn.Module` 权重翻译成 PyPTO bundle，并接 `Step3p5DecodeFwd`/runner 到 vLLM 请求路径。
+2. **真实 PyPTO prefill NPU kernel（P2）**：重构 `prefill_moe.py`，用 multi-step gate/up chunking 清 L1 overflow，完成 1k~128k NPU prefill ST。
+3. **在线精度 gate（P3）**：Phase 20 backend 能跑后，补 vLLM patched backend 的 L1/L2/L3 gate；当前 dump-based precision artifacts 作为 oracle/regression baseline。
+4. **性能 baseline（P3/P4）**：做 decode-only TPS/ITL、prefill TTFT、1k~128k 性能曲线；分析 MoE dispatch/combine、TP/EP 通信、host launch overhead。
+5. **MTP speculative 集成（P4）**：把 MTP 拼进 `decode_fwd` 和 vLLM speculative pipeline；该项不阻塞当前 correctness。 
 
 ---
 
@@ -132,6 +135,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler（submodule） | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------------------|-----------|
+| 2026-06-26 | W8A8 prefill 1k~128k dump-based precision PASS | `stepfun/develop:b00c8b23` | `stepfun/develop:81252e9`（W8A8 prefill precision suite；decode W8A8 基线 `b918e60`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-06-22 | Phase 2 设计落地；建项目跟踪仓 | `stepfun/develop:b00c8b23` | `stepfun/develop:b918e60`（W8A8 precision alignment；BF16 0~47 detail ST 基线 `d4c01b9`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `a6e06406` | `v0.45` |
 
 历史 pin snapshot 见 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)。
@@ -142,9 +146,11 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | # | Blocker | 严重度 | gate 什么 | Owner | 详情 |
 |--:|---------|--------|-----------|-------|------|
-| 1 | head_gate × 1 旁路 — vLLM 原生语义偏离（sigmoid gate 用 identity 替代） | 🟡 精度 | Phase 21 L1 layer-级 parity | TASK-L（pto-isa 上游） | [`blockers.md`](blockers.md) §1 |
-| 2 | Prefill MoE L1 overflow（TASK-29） | 🟢 Deferred | Phase 17 prefill e2e（Phase 22 decode-only 不需要） | 未指派 | [`blockers.md`](blockers.md) §2 |
-| 3 | 0234 driver+firmware 升级未做 | 🟢 基础设施 | 备用部署机 | 未指派 | [`blockers.md`](blockers.md) §3 |
+| 1 | Phase 20 production backend 未接入 | 🟡 功能 | 真实 vLLM 请求走 PyPTO runner | 未指派 | `phases/20-vllm-backend-monkey-patch.md` |
+| 2 | Prefill MoE L1 overflow（TASK-29） | 🟡 功能/性能 | 真实 PyPTO NPU prefill kernel + TTFT | 未指派 | [`blockers.md`](blockers.md) §2 |
+| 3 | head_gate × 1 旁路 — vLLM 原生语义偏离 | 🟡 精度 | 在线 backend L1 layer parity | TASK-L（pto-isa 上游） | [`blockers.md`](blockers.md) §1 |
+| 4 | 0234 driver+firmware 升级未做 | 🟢 基础设施 | 备用部署机 | 未指派 | [`blockers.md`](blockers.md) §3 |
+| 5 | MTP 集成进 `decode_fwd` | 🟢 Deferred | speculative decoding 吞吐 | 未指派 | [`blockers.md`](blockers.md) §6 |
 
 ---
 

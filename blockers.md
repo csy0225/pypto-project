@@ -7,7 +7,26 @@ Blocker 解决时，**删掉本文件里这一节**，到
 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)
 "Resolved blockers" 段补一条 post-mortem。
 
-**最后检视**：2026-06-24。
+**最后检视**：2026-06-26。
+
+---
+
+## 0. Phase 20 production backend 未接入
+
+**严重度**：🟡 功能 —— dump-based 精度闭环已完成，但真实 vLLM 请求还没有走 PyPTO NPU full runner。
+
+**症状**：当前 BF16/W8A8 decode 与 W8A8 prefill 的结论来自 vLLM eager detail dump + PyPTO reference/detail/final-logits replay；这证明数值路径与权重翻译口径可对齐，但还不是 production backend。
+
+**根因**：`Step3p5DecodeFwd` / prefill runner、vLLM `Step3p5Model.forward` monkey-patch、runtime weight bundle 注入、KV cache / block table / slot mapping ABI 尚未接入成一条在线请求路径。
+
+**解除条件**：Phase 20 落地：
+
+1. `config_align.py` 校验 vLLM `hf_config` 与 PyPTO constants；
+2. `weight_translate.py` 支持 vLLM module → PyPTO bundle；
+3. runner 接入 vLLM 请求路径，至少 decode-only 能返回 token；
+4. Phase 21 在线 L1/L2/L3 precision gate 通过。
+
+**Owner**：未指派。
 
 ---
 
