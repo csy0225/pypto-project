@@ -45,6 +45,19 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 ---
 
 
+### Step3p5 vLLM + PyPTO monkey-patch tail E2E smoke (2026-06-26)
+
+Phase 20 monkey-patch surface 已在 0162 的 stepcast 容器内完成在线 smoke：
+
+- ✅ `sitecustomize.py` autoload 验证：容器内 `tools.step3p5.vllm_monkey_patch.status()` 返回 `installed=True, mode=tail`，patch 目标模块 `/vllm-workspace/vllm/vllm/model_executor/models/step3p5.py`。
+- ✅ 带 patch 的 vLLM 服务：`PYPTO_STEP3P5_PATCH_MODE=tail`，port `8001`，served model `step3.5-flash-w8a8-pypto`，TP=EP=8，`--quantization ascend`，eager。
+- ✅ 在线端到端请求 PASS：`/v1/completions`，prompt `请用一句话介绍北京。`，`max_tokens=1`，HTTP 200，输出 top-1 text `?\n`。
+- ✅ 与现有 unpatched baseline 服务（port `8000`）同 prompt/top-1 对齐：均输出 `?\n`。
+
+报告与 artifacts：`/mnt/nvme1/chensiyu/logs/step3p5_910b_w8a8_pypto_patch_v001/PYPTO_TAIL_PATCH_E2E_REPORT.md`。
+
+边界：这是 **tail-mode online smoke**，证明 vLLM monkey patch/autoload/服务端到端路径可用；**full-network replacement 仍未完成**，因为 `Step3p5DecodeFwd.host_orch` 仍未 wire 45 层 per-layer NPU program，`full` mode 保持 fail-closed。
+
 ### Step3p5 W8A8 prefill precision closure (2026-06-26)
 
 在 0162 目标机完成 W8A8 prefill 多长度精度闭环，流程对齐 decode 阶段：vLLM eager W8A8 detail dump 作为 oracle，PyPTO 侧复算非 attention-core per-layer detail，并对 final RMSNorm + LM-head logits 做端到端比较。
@@ -123,7 +136,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 ## 立即可做的下一步（按优先级）
 
-1. **Phase 20 backend 接入（P1）**：`config_align.py` 已启动并在 W8A8 checkpoint 上 PASS（pypto-lib `e616407`）；`weight_translate.py` 已提供 per-rank bundle manifest/export contract（pypto-lib `0511d27`）；`vllm_monkey_patch.py` 已提供 tail/shadow/full patch surface（full 目前 fail-closed，等待真实 runner；pypto-lib `9718083`；autoload helper `588610e`，已在 stepcast 容器内通过 `sitecustomize` autoload smoke，status 显示 `installed=True, mode=tail`）。下一步接 vLLM `nn.Module` in-memory 权重翻译，并把 `Step3p5DecodeFwd`/runner 接到 vLLM 请求路径。
+1. **Phase 20 backend 接入（P1）**：`config_align.py` 已启动并在 W8A8 checkpoint 上 PASS（pypto-lib `e616407`）；`weight_translate.py` 已提供 per-rank bundle manifest/export contract（pypto-lib `0511d27`）；`vllm_monkey_patch.py` 已提供 tail/shadow/full patch surface（full 目前 fail-closed，等待真实 runner；pypto-lib `9718083`；autoload helper `588610e`，已在 stepcast 容器内通过 `sitecustomize` autoload smoke，并完成 tail-mode vLLM 在线 E2E 请求 PASS）。下一步接 vLLM `nn.Module` in-memory 权重翻译，并把 `Step3p5DecodeFwd`/runner 接到 vLLM 请求路径。
 2. **真实 PyPTO prefill NPU kernel（P2）**：重构 `prefill_moe.py`，用 multi-step gate/up chunking 清 L1 overflow，完成 1k~128k NPU prefill ST。
 3. **在线精度 gate（P3）**：Phase 20 backend 能跑后，补 vLLM patched backend 的 L1/L2/L3 gate；当前 dump-based precision artifacts 作为 oracle/regression baseline。
 4. **性能 baseline（P3/P4）**：做 decode-only TPS/ITL、prefill TTFT、1k~128k 性能曲线；分析 MoE dispatch/combine、TP/EP 通信、host launch overhead。
