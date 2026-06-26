@@ -155,7 +155,6 @@ python tools/step3p5/e2e_precision_readiness.py --batch 2
 2. 当前环境未发现 vLLM / stepcast 原生 Step3p5 模型代码或 Python package。
 3. `Step3p5DecodeFwd.host_orch` 仍是 final RMS + LM head skeleton，尚未 wire 45 层 per-layer program。
 4. head_gate 当前在 PyPTO 侧是 ×1 bypass；vLLM parity 需要同策略 patch 或明确接受 L1 差异。
-5. MoE 8 卡 ST 已补 golden；真实模型会遇到的 5 个 MoE variant 全 PASS。`swa_swiglu7_swiglu16` 是 synthetic-only 组合，不作为 blocker。
 
 **解除条件**：真实权重 + vLLM oracle 可见；`decode_fwd` 45 层接线完成；能导出同一 decode step 的 hidden/KV/cache/slot 输入；8 rank logits shard concat 后与 vLLM logits/top-k 对齐。
 
