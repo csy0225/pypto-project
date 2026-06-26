@@ -96,6 +96,9 @@ test -f /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && echo OK
 
 ## 相关文档
 
+- [`troubleshooting-multirank-507899.md`](troubleshooting-multirank-507899.md)
+  —— **还在撞 `507899` / `507018`？** 自助诊断决策树（哪个错误码对应哪件
+  没配齐）+ 排查清单 + issue 链
 - [`machine-recovery.md`](machine-recovery.md) —— 怎么在新机器或重启后的
   主机上安装/恢复这个绑定
 - [`version-matrix.md`](version-matrix.md) —— 完整 5 仓库 + 工具链 pin
