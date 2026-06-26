@@ -8,6 +8,7 @@
 |------|------|------|
 | [`prototype-phase-01-19-summary.md`](prototype-phase-01-19-summary.md) | Phase 01-19（2026-05 至 2026-06-22） | pypto kernel 原型开发的压缩历史 |
 | [`milestones-2026-Q2.md`](milestones-2026-Q2.md) | 2026-Q2 各 session | session-by-session milestone 日志 + pin snapshot 历史 + 已解 blocker |
+| [`step3p5-w8a8-prefill-delivery-20260626.md`](step3p5-w8a8-prefill-delivery-20260626.md) | Step3p5 W8A8 prefill 精度交付（2026-06-26） | 1k~128k prefill golden、PyPTO detail/final-logits 对齐结果、测试报告与 tar 包 |
 | [`step3p5-w8a8-e2e-delivery-20260626.md`](step3p5-w8a8-e2e-delivery-20260626.md) | Step3p5 W8A8 端到端精度交付（2026-06-26） | W8A8 vLLM golden、PyPTO 对齐结果、测试报告与复现命令 |
 
 ## 什么内容归哪里

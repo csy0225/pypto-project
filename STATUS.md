@@ -40,6 +40,19 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 ---
 
+
+### Step3p5 W8A8 prefill precision closure (2026-06-26)
+
+在 0162 目标机完成 W8A8 prefill 多长度精度闭环，流程对齐 decode 阶段：vLLM eager W8A8 detail dump 作为 oracle，PyPTO 侧复算非 attention-core per-layer detail，并对 final RMSNorm + LM-head logits 做端到端比较。
+
+- ✅ 覆盖长度：`1k / 4k / 8k / 32k / 64k / 128k`（`1024, 4096, 8192, 32768, 65536, 131072`）。
+- ✅ vLLM W8A8 prefill golden：`/mnt/nvme1/chensiyu/logs/step3p5_910b_w8a8_prefill_v001/golden_step3p5_w8a8_prefill_vllm_sampled`；长序列采用 sampled detail dump（每个 forward 最多 128 rows）并裁剪到 PyPTO comparator 所需 tensor，避免 128k full dump 爆盘。
+- ✅ detail + final logits 报告：`/mnt/nvme1/chensiyu/logs/step3p5_910b_w8a8_prefill_v001/pypto_prefill_precision/STEP3P5_W8A8_PREFILL_REPORT.json`，`ok=true`；acceptance 为 sampled W8A8 prefill detail `pass_rate >= 0.997`，final logits 全 case PASS。
+- ✅ 各长度 worst pass rate：1k `0.999349`，4k `0.998698`，8k `0.999023`，32k `0.999349`，64k `0.999756`，128k `0.997559`。
+- ✅ ST：`STEP3P5_PREFILL_REPORT_ROOT=/mnt/nvme1/chensiyu/logs/step3p5_910b_w8a8_prefill_v001/pypto_prefill_precision PYTHONPATH=. pytest -q tests/step3p5/test_step3p5_w8a8_prefill_st.py` PASS (`1 passed in 0.01s`)。
+
+W8A8 prefill 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_w8a8_prefill_v001/step3p5_w8a8_prefill_regression_20260626.tar`，SHA256 `cd34f034e017c68437547e5f7f453a2f6b481a1e97e162a89ac21c422fe76b6e`。报告归档：[`archive/step3p5-w8a8-prefill-delivery-20260626.md`](archive/step3p5-w8a8-prefill-delivery-20260626.md)。代码提交：`pypto-lib` `81252e9`。
+
 ### Step3p5 W8A8 vLLM-vs-PyPTO precision closure (2026-06-26)
 
 本轮按 BF16 golden 构造方式在 0162 重新部署 W8A8 checkpoint `/mnt/nvme1/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp`，vLLM 使用 `--quantization ascend`、eager、TP=EP=8、NPU 8-15、port 8001 采集 int8/W8A8 detail dump，没有复用 BF16 golden。
@@ -73,7 +86,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 仓库 | 分支/用途 | Commit | 备注 |
 |------|-----------|--------|------|
-| `pypto-lib` | `stepfun/develop` | `b918e60` | W8A8 precision alignment；BF16 gate 基线为 `d4c01b9` |
+| `pypto-lib` | `stepfun/develop` | `81252e9` | W8A8 prefill precision suite；decode W8A8 基线为 `b918e60`，BF16 gate 基线为 `d4c01b9` |
 | `pypto-project` | `main` | `b771c7e` | 首次记录本次验收状态的文档提交；本段会由后续文档提交推进 |
 | `pypto` | `stepfun/develop` | `b00c8b23` | 本次未改代码；沿用当前 pin |
 | `pto-isa` | `stepfun/develop` | `e25732f0` | 本次未改代码；沿用当前 pin |
