@@ -90,7 +90,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 仓库 | 分支/用途 | Commit | 备注 |
 |------|-----------|--------|------|
-| `pypto-lib` | `stepfun/develop` | `e616407` | 新增 Phase20 HF config alignment check；W8A8 prefill suite 基线 `81252e9` |
+| `pypto-lib` | `stepfun/develop` | `0511d27` | 新增 Phase20 weight bundle translation manifest；config-align 基线 `e616407`，W8A8 prefill suite 基线 `81252e9` |
 | `pypto-project` | `main` | `b771c7e` | 首次记录本次验收状态的文档提交；本段会由后续文档提交推进 |
 | `pypto` | `stepfun/develop` | `b00c8b23` | 本次未改代码；沿用当前 pin |
 | `pto-isa` | `stepfun/develop` | `e25732f0` | 本次未改代码；沿用当前 pin |
@@ -123,7 +123,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 ## 立即可做的下一步（按优先级）
 
-1. **Phase 20 backend 接入（P1）**：`config_align.py` 已启动并在 W8A8 checkpoint 上 PASS（pypto-lib `e616407`）；下一步实现 `weight_translate.py`，把 vLLM `nn.Module` 权重翻译成 PyPTO bundle，并接 `Step3p5DecodeFwd`/runner 到 vLLM 请求路径。
+1. **Phase 20 backend 接入（P1）**：`config_align.py` 已启动并在 W8A8 checkpoint 上 PASS（pypto-lib `e616407`）；`weight_translate.py` 已提供 per-rank bundle manifest/export contract（pypto-lib `0511d27`）。下一步接 vLLM `nn.Module` in-memory 权重翻译，并把 `Step3p5DecodeFwd`/runner 接到 vLLM 请求路径。
 2. **真实 PyPTO prefill NPU kernel（P2）**：重构 `prefill_moe.py`，用 multi-step gate/up chunking 清 L1 overflow，完成 1k~128k NPU prefill ST。
 3. **在线精度 gate（P3）**：Phase 20 backend 能跑后，补 vLLM patched backend 的 L1/L2/L3 gate；当前 dump-based precision artifacts 作为 oracle/regression baseline。
 4. **性能 baseline（P3/P4）**：做 decode-only TPS/ITL、prefill TTFT、1k~128k 性能曲线；分析 MoE dispatch/combine、TP/EP 通信、host launch overhead。
@@ -135,7 +135,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler（submodule） | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------------------|-----------|
-| 2026-06-26 | W8A8 prefill 1k~128k dump-based precision PASS + Phase20 config-align 启动 | `stepfun/develop:b00c8b23` | `stepfun/develop:e616407`（config-align；W8A8 prefill suite 基线 `81252e9`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
+| 2026-06-26 | W8A8 prefill 1k~128k dump-based precision PASS + Phase20 config/weight contract 启动 | `stepfun/develop:b00c8b23` | `stepfun/develop:0511d27`（weight_translate manifest；config-align `e616407`；W8A8 prefill suite `81252e9`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-06-22 | Phase 2 设计落地；建项目跟踪仓 | `stepfun/develop:b00c8b23` | `stepfun/develop:b918e60`（W8A8 precision alignment；BF16 0~47 detail ST 基线 `d4c01b9`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `a6e06406` | `v0.45` |
 
 历史 pin snapshot 见 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)。
