@@ -62,6 +62,8 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 边界：这是 **45-layer online layer orchestration replacement**，但 heavy math 仍复用 vLLM NPU kernels；真正 @pl PyPTO full-network replacement 仍需把 45 个 per-layer @pl program wire 进 `Step3p5DecodeFwd.host_orch`。
 
+ABI probe：新增 `PYPTO_STEP3P5_FORWARD_CONTEXT_REPORT` 后在线 dump 显示 vLLM `ForwardContext` 在 layer-level 可见，但当前 vLLM-Ascend eager path 暴露到 Python 的 `attn_metadata=None`、`slot_mapping={}`、sample `kv_cache` shape `[0]`，说明真正 PyPTO runner 不能只依赖 `ForwardContext`，还需要继续从 vLLM-Ascend `model_runner.input_batch` / attention backend 内部拿 block table、slot mapping 和 KV cache view。
+
 ### Step3p5 live vLLM parameter metadata contract (2026-06-27)
 
 为 Phase 20 `nn.Module -> PyPTO bundle` 翻译补齐在线参数命名/shape contract：
@@ -130,7 +132,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 仓库 | 分支/用途 | Commit | 备注 |
 |------|-----------|--------|------|
-| `pypto-lib` | `stepfun/develop` | `408a041` | online 45-layer layer_ref replacement coverage；layer_ref smoke `099aefa` |
+| `pypto-lib` | `stepfun/develop` | `b198dcd` | vLLM forward-context ABI probe；45-layer coverage `408a041` |
 | `pypto-project` | `main` | `b771c7e` | 首次记录本次验收状态的文档提交；本段会由后续文档提交推进 |
 | `pypto` | `stepfun/develop` | `b00c8b23` | 本次未改代码；沿用当前 pin |
 | `pto-isa` | `stepfun/develop` | `e25732f0` | 本次未改代码；沿用当前 pin |
@@ -175,7 +177,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler（submodule） | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------------------|-----------|
-| 2026-06-27 | Phase20 online 45-layer layer_ref replacement coverage PASS | `stepfun/develop:b00c8b23` | `stepfun/develop:408a041`（45/45 layers replaced; layer_ref mode `099aefa`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
+| 2026-06-27 | Phase20 online 45-layer layer_ref replacement + context ABI probe | `stepfun/develop:b00c8b23` | `stepfun/develop:b198dcd`（forward-context probe; 45/45 layer coverage `408a041`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-06-22 | Phase 2 设计落地；建项目跟踪仓 | `stepfun/develop:b00c8b23` | `stepfun/develop:b918e60`（W8A8 precision alignment；BF16 0~47 detail ST 基线 `d4c01b9`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `a6e06406` | `v0.45` |
 
 历史 pin snapshot 见 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)。
