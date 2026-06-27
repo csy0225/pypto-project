@@ -54,6 +54,7 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 - ✅ `layer_ref` mode 替换全部 45 个 `Step3p5DecoderLayer.forward` 的 Python orchestration（input RMSNorm → attention backend → residual → post RMSNorm → MLP/MoE backend → residual），重用 vLLM 的 attention/KV 与 dense/MoE NPU kernels。
 - ✅ 带 patch 的 vLLM 服务：port `8001`，served model `step3.5-flash-w8a8-pypto-layer`，TP=EP=8，`--quantization ascend`，eager。
 - ✅ 在线 `/v1/completions` E2E PASS：prompt `请用一句话介绍北京。`，`max_tokens=1`，HTTP 200，top-1 text `?\n`，top-5 logprobs 正常返回。
+- ✅ 多 token/长上下文补充验证 PASS：`max_tokens=4/8/16` + `1k prompt, max_tokens=8` 共 4 个 case，patched `layer_ref` 与 unpatched baseline 输出文本 4/4 完全一致。
 - ✅ coverage artifact：`pypto_layer_ref_calls.json` 显示 `num_layers_observed=45`、`num_layers_replaced=45`、`all_observed_layers_replaced=true`，每层 `0..44` 均记录 patched layer_ref 调用。
 - ✅ 与现有 unpatched baseline 服务（port `8000`）同 prompt top-1 对齐：均输出 `?\n`。
 
