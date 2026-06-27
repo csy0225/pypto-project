@@ -54,9 +54,10 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 - ✅ `layer_ref` mode 替换全部 45 个 `Step3p5DecoderLayer.forward` 的 Python orchestration（input RMSNorm → attention backend → residual → post RMSNorm → MLP/MoE backend → residual），重用 vLLM 的 attention/KV 与 dense/MoE NPU kernels。
 - ✅ 带 patch 的 vLLM 服务：port `8001`，served model `step3.5-flash-w8a8-pypto-layer`，TP=EP=8，`--quantization ascend`，eager。
 - ✅ 在线 `/v1/completions` E2E PASS：prompt `请用一句话介绍北京。`，`max_tokens=1`，HTTP 200，top-1 text `?\n`，top-5 logprobs 正常返回。
+- ✅ coverage artifact：`pypto_layer_ref_calls.json` 显示 `num_layers_observed=45`、`num_layers_replaced=45`、`all_observed_layers_replaced=true`，每层 `0..44` 均记录 patched layer_ref 调用。
 - ✅ 与现有 unpatched baseline 服务（port `8000`）同 prompt top-1 对齐：均输出 `?\n`。
 
-报告：`/mnt/nvme1/chensiyu/logs/step3p5_910b_w8a8_pypto_layer_v001/PYPTO_LAYER_REF_E2E_REPORT.md`。代码提交：`pypto-lib` `099aefa`。
+报告：`/mnt/nvme1/chensiyu/logs/step3p5_910b_w8a8_pypto_layer_v001/PYPTO_LAYER_REF_E2E_REPORT.md`。代码提交：`pypto-lib` `099aefa`；随后 coverage report 提交 `408a041`。
 
 边界：这是 **45-layer online layer orchestration replacement**，但 heavy math 仍复用 vLLM NPU kernels；真正 @pl PyPTO full-network replacement 仍需把 45 个 per-layer @pl program wire 进 `Step3p5DecodeFwd.host_orch`。
 
@@ -128,7 +129,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 仓库 | 分支/用途 | Commit | 备注 |
 |------|-----------|--------|------|
-| `pypto-lib` | `stepfun/develop` | `099aefa` | online 45-layer layer_ref replacement smoke；transform plan `c4fca8a` |
+| `pypto-lib` | `stepfun/develop` | `408a041` | online 45-layer layer_ref replacement coverage；layer_ref smoke `099aefa` |
 | `pypto-project` | `main` | `b771c7e` | 首次记录本次验收状态的文档提交；本段会由后续文档提交推进 |
 | `pypto` | `stepfun/develop` | `b00c8b23` | 本次未改代码；沿用当前 pin |
 | `pto-isa` | `stepfun/develop` | `e25732f0` | 本次未改代码；沿用当前 pin |
@@ -173,7 +174,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler（submodule） | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------------------|-----------|
-| 2026-06-27 | Phase20 online 45-layer layer_ref replacement smoke PASS | `stepfun/develop:b00c8b23` | `stepfun/develop:099aefa`（layer_ref mode；transform plan `c4fca8a`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
+| 2026-06-27 | Phase20 online 45-layer layer_ref replacement coverage PASS | `stepfun/develop:b00c8b23` | `stepfun/develop:408a041`（45/45 layers replaced; layer_ref mode `099aefa`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-06-22 | Phase 2 设计落地；建项目跟踪仓 | `stepfun/develop:b00c8b23` | `stepfun/develop:b918e60`（W8A8 precision alignment；BF16 0~47 detail ST 基线 `d4c01b9`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `a6e06406` | `v0.45` |
 
 历史 pin snapshot 见 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)。
