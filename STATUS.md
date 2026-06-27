@@ -45,6 +45,17 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 ---
 
 
+
+### Step3p5 live vLLM parameter metadata contract (2026-06-27)
+
+为 Phase 20 `nn.Module -> PyPTO bundle` 翻译补齐在线参数命名/shape contract：
+
+- ✅ `vllm_monkey_patch.py` 新增 `PYPTO_STEP3P5_DUMP_PARAM_META`，在 tail patch 首次 `compute_logits` 时 dump live `Step3p5ForCausalLM.named_parameters()` metadata。
+- ✅ 0162 `stepcast-vllm-w8a8` 容器内已生成 `/logs/pypto_tail_param_meta.json`（host 映射：`/mnt/nvme1/chensiyu/logs/step3p5_910b_w8a8_v001/pypto_tail_param_meta.json`），共 `744` 个 local-rank 参数。
+- ✅ `weight_translate.py --vllm-param-meta ...` 校验 live vLLM 参数命名/shape/dtype 与 PyPTO 预期 local-rank contract 一致：`ok=true`，`num_expected=744`，`num_observed=744`，无 missing/extra/mismatch。
+
+代码提交：`pypto-lib` `a59c7fe`。下一步可基于该 metadata contract 实现真正的 tensor extraction / orientation transform（qkv split、gate_up split、MoE w13/w2 dequant/orientation）到 PyPTO bundle。
+
 ### Step3p5 vLLM + PyPTO monkey-patch tail E2E smoke (2026-06-26)
 
 Phase 20 monkey-patch surface 已在 0162 的 stepcast 容器内完成在线 smoke：
@@ -103,7 +114,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 仓库 | 分支/用途 | Commit | 备注 |
 |------|-----------|--------|------|
-| `pypto-lib` | `stepfun/develop` | `588610e` | 新增 vLLM patch autoload helper；monkey patch skeleton `9718083`，weight contract `0511d27` |
+| `pypto-lib` | `stepfun/develop` | `a59c7fe` | live vLLM parameter metadata contract；autoload helper `588610e`，monkey patch skeleton `9718083` |
 | `pypto-project` | `main` | `b771c7e` | 首次记录本次验收状态的文档提交；本段会由后续文档提交推进 |
 | `pypto` | `stepfun/develop` | `b00c8b23` | 本次未改代码；沿用当前 pin |
 | `pto-isa` | `stepfun/develop` | `e25732f0` | 本次未改代码；沿用当前 pin |
@@ -136,7 +147,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 ## 立即可做的下一步（按优先级）
 
-1. **Phase 20 backend 接入（P1）**：`config_align.py` 已启动并在 W8A8 checkpoint 上 PASS（pypto-lib `e616407`）；`weight_translate.py` 已提供 per-rank bundle manifest/export contract（pypto-lib `0511d27`）；`vllm_monkey_patch.py` 已提供 tail/shadow/full patch surface（full 目前 fail-closed，等待真实 runner；pypto-lib `9718083`；autoload helper `588610e`，已在 stepcast 容器内通过 `sitecustomize` autoload smoke，并完成 tail-mode vLLM 在线 E2E 请求 PASS）。下一步接 vLLM `nn.Module` in-memory 权重翻译，并把 `Step3p5DecodeFwd`/runner 接到 vLLM 请求路径。
+1. **Phase 20 backend 接入（P1）**：`config_align.py` 已启动并在 W8A8 checkpoint 上 PASS（pypto-lib `e616407`）；`weight_translate.py` 已提供 per-rank bundle manifest/export contract（pypto-lib `0511d27`）；`vllm_monkey_patch.py` 已提供 tail/shadow/full patch surface（full 目前 fail-closed，等待真实 runner；pypto-lib `9718083`；autoload helper `588610e`，已在 stepcast 容器内通过 `sitecustomize` autoload smoke，并完成 tail-mode vLLM 在线 E2E 请求 PASS）；live vLLM parameter metadata contract 已验证（pypto-lib `a59c7fe`）。下一步接 vLLM `nn.Module` in-memory 权重翻译，并把 `Step3p5DecodeFwd`/runner 接到 vLLM 请求路径。
 2. **真实 PyPTO prefill NPU kernel（P2）**：重构 `prefill_moe.py`，用 multi-step gate/up chunking 清 L1 overflow，完成 1k~128k NPU prefill ST。
 3. **在线精度 gate（P3）**：Phase 20 backend 能跑后，补 vLLM patched backend 的 L1/L2/L3 gate；当前 dump-based precision artifacts 作为 oracle/regression baseline。
 4. **性能 baseline（P3/P4）**：做 decode-only TPS/ITL、prefill TTFT、1k~128k 性能曲线；分析 MoE dispatch/combine、TP/EP 通信、host launch overhead。
@@ -148,7 +159,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler（submodule） | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------------------|-----------|
-| 2026-06-26 | W8A8 prefill PASS + Phase20 config/weight/monkey-patch surface 启动 | `stepfun/develop:b00c8b23` | `stepfun/develop:588610e`（autoload helper；vLLM monkey patch skeleton `9718083`；weight_translate `0511d27`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
+| 2026-06-27 | Phase20 live vLLM parameter metadata contract PASS | `stepfun/develop:b00c8b23` | `stepfun/develop:a59c7fe`（744 live params match local-rank contract；autoload helper `588610e`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-06-22 | Phase 2 设计落地；建项目跟踪仓 | `stepfun/develop:b00c8b23` | `stepfun/develop:b918e60`（W8A8 precision alignment；BF16 0~47 detail ST 基线 `d4c01b9`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `a6e06406` | `v0.45` |
 
 历史 pin snapshot 见 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)。
