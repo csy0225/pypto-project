@@ -54,7 +54,7 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 - ✅ 0162 `stepcast-vllm-w8a8` 容器内已生成 `/logs/pypto_tail_param_meta.json`（host 映射：`/mnt/nvme1/chensiyu/logs/step3p5_910b_w8a8_v001/pypto_tail_param_meta.json`），共 `744` 个 local-rank 参数。
 - ✅ `weight_translate.py --vllm-param-meta ...` 校验 live vLLM 参数命名/shape/dtype 与 PyPTO 预期 local-rank contract 一致：`ok=true`，`num_expected=744`，`num_observed=744`，无 missing/extra/mismatch。
 
-代码提交：`pypto-lib` `a59c7fe`。下一步可基于该 metadata contract 实现真正的 tensor extraction / orientation transform（qkv split、gate_up split、MoE w13/w2 dequant/orientation）到 PyPTO bundle。
+代码提交：`pypto-lib` `a59c7fe`；随后 `weight_translate.py --emit-vllm-transform-plan` 已输出 live vLLM -> PyPTO decode bundle transform plan（qkv split、gate_up split、MoE w13/w2 dequant/orientation 等），代码提交 `c4fca8a`。下一步是把 transform plan 落成真正的 in-memory tensor extraction。
 
 ### Step3p5 vLLM + PyPTO monkey-patch tail E2E smoke (2026-06-26)
 
@@ -114,7 +114,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 仓库 | 分支/用途 | Commit | 备注 |
 |------|-----------|--------|------|
-| `pypto-lib` | `stepfun/develop` | `a59c7fe` | live vLLM parameter metadata contract；autoload helper `588610e`，monkey patch skeleton `9718083` |
+| `pypto-lib` | `stepfun/develop` | `c4fca8a` | live vLLM transform plan；metadata contract `a59c7fe`，autoload helper `588610e` |
 | `pypto-project` | `main` | `b771c7e` | 首次记录本次验收状态的文档提交；本段会由后续文档提交推进 |
 | `pypto` | `stepfun/develop` | `b00c8b23` | 本次未改代码；沿用当前 pin |
 | `pto-isa` | `stepfun/develop` | `e25732f0` | 本次未改代码；沿用当前 pin |
@@ -159,7 +159,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler（submodule） | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------------------|-----------|
-| 2026-06-27 | Phase20 live vLLM parameter metadata contract PASS | `stepfun/develop:b00c8b23` | `stepfun/develop:a59c7fe`（744 live params match local-rank contract；autoload helper `588610e`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
+| 2026-06-27 | Phase20 live vLLM parameter metadata + transform plan PASS | `stepfun/develop:b00c8b23` | `stepfun/develop:c4fca8a`（live transform plan；744 params contract `a59c7fe`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-06-22 | Phase 2 设计落地；建项目跟踪仓 | `stepfun/develop:b00c8b23` | `stepfun/develop:b918e60`（W8A8 precision alignment；BF16 0~47 detail ST 基线 `d4c01b9`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `a6e06406` | `v0.45` |
 
 历史 pin snapshot 见 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)。
