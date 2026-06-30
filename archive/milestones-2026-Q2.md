@@ -6,6 +6,18 @@
 
 
 
+## 2026-06-30 —— Step3p5 attention 设备共享 e2e PASS + device-shared 地基提交 ✅
+
+- 在 `gpu-a910x-0162` 打通 **attention 层经 device-IPC 共享 KV 的离线端到端**：独立进程 ctypes 零初始化 `(2,4096,128)` bf16 KV 块 + `aclrtIpcMemGetExportKey`；worker 编译 `select_decode_layer(0)`（full_dense，L3 fork chip child）→ `DistributedWorker` → `rt.import_ipc(key)` → K/V `DeviceTensor` → `rt.run`，对 torch golden（`_torch_attn_no_gate + _torch_dense_mlp`）`bad_ratio=0.0000`。脚本 `_stage_attn_e2e.py`。
+- 关键修复 **`DeviceTensor.__getitem__`**：生成的 L3 `host_orch.py` per-rank 切片 `k_cache[r,0:R,0:H]`；新增连续子视图（row-major offset ptr + 降维/resize；非连续内层 slice 报错）。
+- option B 底层代码提交（本地 feature 分支 `pypto/device-shared`，未 push）：simpler `18bddac2`（import_ipc 全链路：CTRL_IMPORT_IPC + DistributedWorker.import_ipc）；pypto `0c4b8749`（`DeviceTensor.__getitem__` + import_ipc + 子模块 bump）。8 文件 b-csy-develop↔0162 md5 一致。
+- vllm-ascend 镜像源同步到 `0162:/data/chensiyu/hw_project/pypto/vllm-ascend`（shallow，tar `.git` + `git reset --hard`），分支 `pypto/attention-integration`（off fork `fbfe288`），提交 live 集成蓝图 `PYPTO_ATTN_INTEGRATION.md@ba72967`（Option A：复用 `attention_full`，patch `Step3p5DecoderLayer` attention 子块；checkpoint 权重名 / 独立 attention 程序 `build_tp_attention_full_program` / KV-rows ABI / socket 协议 / S1-S4 步骤已逆向）。
+- 8001 在线服务恢复（dense 0-2 + shared 3-44），8000=200/8001=200，8 worker，正常出 token。**修正恢复顺序铁律**：先起 8001 做完 TP=8 HCCL init → `Application startup complete` → 再起 pypto worker；worker 占卡 8-15 期间 vLLM HCCL init 会 `hcclCommInitRootInfoConfig error 15 / rtBinaryGetFunction 107000` 全挂，`aclrtResetDeviceForce` 不解。另：`pkill -f pypto_mlp_worker` 自匹配 ssh shell → 用 `'[p]ypto_mlp_worker'`；e2e exporter 须 `aclrtIpcMemClose`（泄漏 exbus 句柄会脏卡）。
+- 涉及仓库：`pypto pypto/device-shared:0c4b8749`（local）、`simpler pypto/device-shared:18bddac2`（local）、`vllm-ascend pypto/attention-integration:ba72967`（local，0162）、`pypto-project main`（本提交）。
+- 边界：attention 设备共享 **离线 e2e + 机制 + 地基齐备，未接 live vLLM**；live 接线（worker `attn` op + 每层 KV 导出 + 窗口 A/B）按蓝图 S1-S4 推进，最大卡点 KV-rows ABI。
+
+
+
 ## 2026-06-25 —— Step3p5 BF16 0~47 vLLM-vs-PyPTO detail precision PASS ✅
 
 - 在 `gpu-a910x-0162` isolated vLLM 容器中以 eager + all-to-all 路径采集真实请求 detail dump，checkpoint 为 `/mnt/nvme1/chensiyu/step3p5_flash_release_hf_mtp3_bf16`。

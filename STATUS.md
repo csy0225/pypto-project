@@ -3,7 +3,7 @@
 pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状态
 变化都更新这里**。历史细节查 [`archive/`](archive/)。
 
-**最后更新**：2026-06-26
+**最后更新**：2026-06-30
 
 ---
 
@@ -46,6 +46,32 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 
 
+
+### Step3p5 attention 设备共享 e2e PASS + device-shared 地基提交 (2026-06-30)
+
+在 0162 打通 **attention 层经 device-IPC 共享 KV 的离线端到端**，并把 option B（device-mem IPC）底层代码提交到 feature 分支。
+
+- ✅ **attention e2e**：独立进程 ctypes 零初始化 `(2,4096,128)` bf16 KV 块 + `aclrtIpcMemGetExportKey`；worker 编译 `select_decode_layer(0)`（full_dense，L3 fork chip child）→ `DistributedWorker` → `rt.import_ipc(key)` → `DeviceTensor` K/V → `rt.run`，输出对 torch golden（`_torch_attn_no_gate + _torch_dense_mlp`）`bad_ratio=0.0000`。证明 forked chip child 原地读写跨进程 IPC KV 正确。脚本 `_stage_attn_e2e.py`。
+- ✅ **关键修复 `DeviceTensor.__getitem__`**：生成的 L3 `host_orch.py` 对每个输入 per-rank 切片 `k_cache[r,0:R,0:H]`，DeviceTensor 之前无下标；新增返回连续子视图（offset ptr + 降维/resize slice）。
+- ✅ **device-shared 地基已提交**（本地 feature 分支，未 push）：simpler `pypto/device-shared@18bddac2`（import_ipc 全链路）；pypto `pypto/device-shared@0c4b8749`（`DeviceTensor.__getitem__` + `DistributedWorker.import_ipc` + 子模块 bump）。
+- ✅ **vllm-ascend 镜像源同步**：`/data/chensiyu/hw_project/pypto/vllm-ascend`（0162），分支 `pypto/attention-integration`（off fork `fbfe288`），提交 live 集成蓝图 `PYPTO_ATTN_INTEGRATION.md@ba72967`（Option A：复用 `attention_full`，patch `Step3p5DecoderLayer` attention 子块；权重名/落点/KV-rows ABI 已逆向）。
+- ✅ **8001 在线服务恢复**：腾卡跑 e2e 后恢复 dense(0-2)+shared(3-44)，8000=200/8001=200，8 worker，正常出 token。学到**正确恢复顺序**：先起 8001 做完 HCCL init → `Application startup complete` → 再起 worker（否则 worker 占卡 8-15 致 vLLM TP=8 HCCL init `rtBinaryGetFunction 107000` 全挂；`aclrtResetDeviceForce` 不解）。
+- 下一步：按蓝图 S1-S4 把 `attention_full` 接进 live vLLM（worker `attn` op + 每层 KV 导出 + 窗口 A/B）。最大卡点 = **KV-rows ABI**（`attention_full` 编译 `KV_CACHE_ROWS` 须等于 vLLM 真实 `num_blocks*block_size`，远大于 e2e 用的 4096）。
+
+边界：attention 设备共享**离线 e2e 已通 + 机制+地基齐备**，但**尚未接 live vLLM**；MoE-routed（EP）、tail 仍待。
+
+### Step3p5 dense-MLP 真实 PyPTO kernel vLLM 集成 (2026-06-28)
+
+在 0162 完成 **vLLM-Ascend + PyPTO 端到端集成**：dense 层（global 0,1,2）的 SwiGLU 由 **真实 PyPTO @pl NPU kernel** 计算，替代 vLLM 原生 `Step3p5MLP` 的矩阵乘；vLLM 保留 API / KV / 调度 / 显存 / RMSNorm / TP all_reduce。
+
+- ✅ **架构（agent 投票）**：Option C（独立 host worker + IPC）+ Topology B（每 rank 一 worker，1:1，cards 8-15）+ Unix socket on shared mount。kernel 只算 per-rank partial（gate_up+silu+down，无 collective/无 rmsnorm），vLLM 做 RMSNorm（前）+ `tensor_model_parallel_all_reduce`（后）。
+- ✅ **关键发现**：PyPTO 运行时本就是多进程（`chip_process` 子进程），故 host worker 不损失"同进程"收益；host-pypto 与 container-torch_npu **同物理卡共存实测通过**；W8A8 模型 dense 层权重是 BF16（只 MoE 量化），worker 直接读 W8A8 ckpt 无需反量化。
+- ✅ **离线/单元**：kernel@device vs golden PASS；worker round-trip（真实 ckpt 权重）layer 0/1/2 `bad_ratio=0.0000`；跨容器 UDS bridge PASS；sum(8 rank partials) vs full SwiGLU `bad_ratio≈0.019` PASS。
+- ✅ **在线 A/B**：patched 8001（`step3.5-flash-w8a8-pypto-densemlp`，TP=EP=8）与 baseline 8000 同 prompt `max_tokens=8` 输出**逐字一致**，**0 fallback**；patch 在 8 个 TP worker 进程经 sitecustomize 自动安装。
+- ⚠ **性能**：当前 host round-trip（d2h→UDS→h2d，每 16 行一 tile）为正确性优先，patched ~2.6 tps vs baseline ~4.9-9.4 tps（baseline 含 MTP speculative）；perf benefit 待 Phase 22 device-IPC/零拷贝 + 全模型覆盖。
+- 交付物（pypto-lib）：`models/step3p5/vllm_dense_mlp.py`、`tools/step3p5/pypto_mlp_worker.py`、`tools/step3p5/pypto_dense_mlp_backend.py`(monkey patch)、`tools/step3p5/test_pypto_dense_mlp_e2e.py`、`tools/step3p5/PYPTO_DENSE_MLP_E2E_REPORT.md`。
+
+边界：dense 3/45 层走真实 kernel；attention（需 KV/block-table ABI）、MoE（需清 507018）、tail 仍由 vLLM 原生执行。这是"真实 @pl kernel 进 vLLM 在线 loop"的第一个完整闭环。
 
 ### Step3p5 45-layer online layer replacement smoke (2026-06-27)
 
