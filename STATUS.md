@@ -47,6 +47,17 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 
 
+### Step3p5 attention 多 position (ctx>1 / prefill) 乱码根因定位 + 修复 (2026-07-02)
+
+full-attention 多 position（prefill / 带历史 batched decode）乱码、单 position 正确的 bug **根因找到并修复**。
+
+- **根因**：Scope 2 里 Q 的 partial-RoPE 打包进 `all_q_padded` 的 pypto/ptoas **codegen 数值 bug**，定位在 `rot_q_hi` 段（列 `ROTARY_HALF_FULL..ROTARY_DIM`）。`reshape([8,128])` + col-32 子列切片 + `[8,32]@col-32` assemble 链路 miscompile；单行 K 路径（`[1,32]`）正确。
+- **为什么一直没发现**：ctx=1 输出恒=V₀ 与 q·k 分数无关，掩盖了错误的 q 值；只有 ctx>1 暴露。`test_decode_layer_full_dense_st` 只测 ctx=1。
+- **定位工具**：`_stage_scope12_qk.py`（逐字复制 Scope1/2/QK 的 standalone L3 程序，逐层 dump 对拍 golden）—— `q_proj_norm`/`k_proj_norm`/`k_cache` 全对，唯 `all_q_padded` 首错 (row0,col32)。
+- **修复**：Q RoPE 打包改成逐 head `[1, ROTARY_HALF]` 连续切片（镜像 K 路径），落在 `pypto-lib/models/step3p5/{attention_full,attention_swa}.py`（**本地工作树，未 push**）。
+- **验证（0162 card 8）**：`_stage_scope12_qk` scores 0.25/0.90→~0；`_stage_attn_e2e ATTN_PERRANK=1` crossrow 全 decode 层 0.8374→**0.0000 PASS**；dense ST 无回归 PASS 7.97s。
+- **遗留**：SWA 修复已应用+编译过，runtime 待空闲卡（共享卡 OOM）；prefill 路径待确认；深度 writeup 待落 `pypto-lib/docs/known-pypto-pitfalls.md`；上游 codegen bug 待提（复现器 `_stage_scope12_qk.py`）。详见 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) 2026-07-02 段。
+
 ### Step3p5 attention 设备共享 e2e PASS + device-shared 地基提交 (2026-06-30)
 
 在 0162 打通 **attention 层经 device-IPC 共享 KV 的离线端到端**，并把 option B（device-mem IPC）底层代码提交到 feature 分支。

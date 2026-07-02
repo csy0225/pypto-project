@@ -6,6 +6,20 @@
 
 
 
+## 2026-07-02 —— Step3p5 attention 多 position (ctx>1 / prefill) 乱码根因定位 + 修复 ✅
+
+- **症状**：step3p5 full-attention 在**多 position（ctx_len>1 / prefill、带历史的 batched decode）**输出乱码，**单 position（ctx_len=1）正确**。离线复现（`_stage_attn_e2e.py`，`seq_lens=arange(BATCH)+1` crossrow）：row 0（ctx=1）对，rows 1..15 全错（`bad_ratio≈0.90`）。因为 `test_decode_layer_full_dense_st` 只测 ctx=1，一直没暴露；2026-06-30 的 attention device-shared e2e 也是 ctx=1（`bad_ratio=0.0000`），同样掩盖了它。
+- **为什么 ctx=1 掩盖 bug**：ctx_len=1 时 softmax 只有一个元素、权重恒=1，attention 输出恒=V₀，**与 q·k 分数无关**。所以错误的 q·k **值**在 ctx=1 完全不可见，只在 ctx>1（按分数加权）时暴露。
+- **定位方法**：新建独立最小复现器 `_stage_scope12_qk.py`（standalone L3 `@pl.program`，逐字复制 `attention_full.py` Scope 1（RMSNorm+Q/K/V proj+q_norm/k_norm）+ Scope 2（partial RoPE + KV-cache 写 + all_q_padded 打包）+ Stage-1 QK，per-rank 配置 `apply_perrank_patch`），逐层 dump 对拍 torch golden：`q_proj_norm`✅ `k_proj_norm`✅ `k_cache`✅，唯独 `all_q_padded`（打包后的 Q）**首错在 (row0, col32)**（col32 = `ROTARY_HALF_FULL` = `rot_q_hi` 段起点；`rot_q_lo` 的 cols 0..31 正确）。`REAL_ROPE=1` 时误差更大（all_q_padded 0.19、scores 0.90）。
+- **根因**：Scope 2 里 Q 的 partial-RoPE 打包进 `all_q_padded` 是一个 **pypto/ptoas codegen 数值 bug**，定位在 `rot_q_hi` 写入区（列 `ROTARY_HALF_FULL..ROTARY_DIM`）。原写法 `q_block = reshape(slice(q_proj_norm,[1,8*128]),[8,128])` → 对 reshape 后的 `[8,128]` tile 在 col offset 32 切 `q_hi` → `[8,32]` `col_expand_mul` + assemble 到 `all_q_padded` col 32 —— 这条"reshape + col-offset 子列切片 + `[8,32]@col-32` assemble"链路 miscompile。**单行 K 路径（`[1,32]` 切 `k_proj_norm`）正确**，只有多行 Q 出错。
+- **修复（model-side，已落地并本地验证）**：把 Q RoPE 打包改成**逐 head 用 `[1, ROTARY_HALF]` 连续切片**（完全镜像已验证正确的 K 路径），逐 head assemble 进 `all_q_padded`。应用到 `pypto-lib/models/step3p5/attention_full.py`（Scope 2）和 `attention_swa.py`（Scope 2；SWA 无 full-row assemble，保留其结构）。数学等价。
+- **验证（0162 card 8，修复后）**：`_stage_scope12_qk` scores identity 0.2482→**0.0018**（bf16 噪声）、`REAL_ROPE=1` 0.8998→**0.0000**；`_stage_attn_e2e.py ATTN_PERRANK=1` crossrow 全 decode 层（attn+MLP）0.8374→**0.0000 PASS**；`test_decode_layer_full_dense_st -d 8` 单 position 无回归 **PASS 7.97s**。
+- **涉及仓库**：修复在 `pypto-lib/models/step3p5/{attention_full,attention_swa}.py`（**本地工作树，尚未 push**，本次会话按用户要求只推 pypto-project 文档）。复现器 `_stage_scope12_qk.py` + e2e `ATTN_PERRANK`/`ATTN_FULL64` 开关（默认关）在 pypto workspace root（本地）。
+- **另一个独立 bug（非本根因）**：`apply_tp1_patch`/unsliced 路径下 Stage-1 `q_padded_row = fa_b*Q_HEAD_PAD_FULL` 与 Scope-2 打包 stride（含 `KV_HEADS_LOCAL`）不一致，仅 `KV_HEADS_LOCAL>1` 触发；生产 per-rank（`KV_HEADS_LOCAL=1`）不受影响。
+- **遗留**：SWA 修复已应用+编译通过，但 SWA ST 在共享卡 runtime OOM（tensor-14 需 3.3GB，co-tenant 占内存，非本修复回归）→ SWA runtime + crossrow 精度待空闲卡验证；`prefill_attention_full.py` 已用 `[1,32]` 逐 token 切片，大概率不受影响，待单独确认；深度技术 writeup 按协议应落 `pypto-lib/docs/known-pypto-pitfalls.md`（待 pypto-lib push 时补）；上游 pypto/ptoas codegen bug 待用 `_stage_scope12_qk.py` 提。
+
+
+
 ## 2026-06-30 —— Step3p5 attention 设备共享 e2e PASS + device-shared 地基提交 ✅
 
 - 在 `gpu-a910x-0162` 打通 **attention 层经 device-IPC 共享 KV 的离线端到端**：独立进程 ctypes 零初始化 `(2,4096,128)` bf16 KV 块 + `aclrtIpcMemGetExportKey`；worker 编译 `select_decode_layer(0)`（full_dense，L3 fork chip child）→ `DistributedWorker` → `rt.import_ipc(key)` → K/V `DeviceTensor` → `rt.run`，对 torch golden（`_torch_attn_no_gate + _torch_dense_mlp`）`bad_ratio=0.0000`。脚本 `_stage_attn_e2e.py`。
