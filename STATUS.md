@@ -3,7 +3,13 @@
 pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状态
 变化都更新这里**。历史细节查 [`archive/`](archive/)。
 
-**最后更新**：2026-06-30
+**最后更新**：2026-07-03
+
+> **2026-07-03 方向纠偏 + 卡点解除**：零拷贝 KV-IPC 集成 step 1-5 device 验证通过，
+> IPC 主卡点（507899 / 207001 MemPool OOM）经「一 key 整池 map」正解**解除**；
+> 范式回正为 PyPTO runtime 接管（非算子桥接）。详见
+> [`phases/23-zero-copy-kv-ipc-validation.md`](phases/23-zero-copy-kv-ipc-validation.md)
+> （验证报告 + 技术问题 + 重制定 plan：Phase 24 整层 / 25 全网 / 26 perf）。
 
 ---
 
@@ -201,6 +207,13 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 - 🟡 head_gate ×1 parity 策略仍待在线 backend L1 gate 决策。
 
 ## 立即可做的下一步（按优先级）
+
+0. **（新，2026-07-03 主线）Phase 24 —— step 6 整层 live 替换（P0）**：把已验证的
+   零拷贝 KV-IPC「一 key 整池 map」接进 live 8001 —— patch `_allocate_kv_cache_tensors`
+   产出「一 buffer + 一 key + map」（取代会 OOM 的 per-tensor MemPool）→ worker 一次
+   import 整池建 VA-map → page_attention 走 map + block_table → 扩到全 45 层 decode
+   A/B `bad_ratio=0`。详见 [`phases/23-zero-copy-kv-ipc-validation.md`](phases/23-zero-copy-kv-ipc-validation.md) §5。
+   完成后 → Phase 25（step 7 真 module 全网 + Wave-3 whole-model orchestration）→ Phase 26（perf）。
 
 1. **Phase 20 backend 接入（P1）**：`config_align.py` 已启动并在 W8A8 checkpoint 上 PASS（pypto-lib `e616407`）；`weight_translate.py` 已提供 per-rank bundle manifest/export contract（pypto-lib `0511d27`）；`vllm_monkey_patch.py` 已提供 tail/shadow/full patch surface（full 目前 fail-closed，等待真实 runner；pypto-lib `9718083`；autoload helper `588610e`，已在 stepcast 容器内通过 `sitecustomize` autoload smoke，并完成 tail-mode vLLM 在线 E2E 请求 PASS）；live vLLM parameter metadata contract 已验证（pypto-lib `a59c7fe`）。下一步接 vLLM `nn.Module` in-memory 权重翻译，并把 `Step3p5DecodeFwd`/runner 接到 vLLM 请求路径。
 2. **真实 PyPTO prefill NPU kernel（P2）**：重构 `prefill_moe.py`，用 multi-step gate/up chunking 清 L1 overflow，完成 1k~128k NPU prefill ST。
