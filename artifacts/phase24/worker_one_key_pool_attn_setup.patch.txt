@@ -1,0 +1,35 @@
+        # Phase 24.2: one-key whole-pool KV. If pypto_kvpool_backend consolidated
+        # all layers' KV into ONE buffer and wrote a per-rank key+map (on shared
+        # PYPTO_KVPOOL_DIR), import the pool ONCE and address this layer's K/V by
+        # the map's byte offset -- no per-layer key, no per-tensor MemPool.
+        _pool_dir = os.environ.get("PYPTO_KVPOOL_DIR", "/logs")
+        _pool_key_f = os.path.join(_pool_dir, f"pypto_kvpool.key.rank{self._rank}")
+        _pool_map_f = os.path.join(_pool_dir, f"pypto_kvpool_map.json.rank{self._rank}")
+        if os.path.exists(_pool_key_f) and os.path.exists(_pool_map_f):
+            if getattr(self, "_pool_base", None) is None:
+                with open(_pool_key_f, "rb") as f:
+                    _pool_key = f.read()
+                self._pool_base = int(self._rt.import_ipc(_pool_key, worker_id=0))
+                with open(_pool_map_f) as f:
+                    self._pool_map = json.load(f)["map"]
+                print(f"[attn-stage server] KV one-key-pool import rank={self._rank} "
+                      f"pool_base={hex(self._pool_base)} map_entries={len(self._pool_map)}",
+                      flush=True)
+            mk = self._pool_map.get(f"L{layer_idx}.K")
+            mv = self._pool_map.get(f"L{layer_idx}.V")
+            if mk is None or mv is None:
+                raise RuntimeError(
+                    f"one-key-pool map missing L{layer_idx} K/V "
+                    f"(have {list(self._pool_map)[:6]}...)")
+            k_off, v_off = int(mk["offset"]), int(mv["offset"])
+            k_dt = self._DeviceTensor(
+                self._pool_base + k_off, (1, expected_rows, expected_hd),
+                self._torch.bfloat16)
+            v_dt = self._DeviceTensor(
+                self._pool_base + v_off, (1, expected_rows, expected_hd),
+                self._torch.bfloat16)
+            self._kv[layer_idx] = (self._pool_base + k_off, k_dt, v_dt)
+            print(f"[attn-stage server] one-key-pool layer={layer_idx} "
+                  f"k_off={k_off} v_off={v_off} rows={expected_rows} hd={expected_hd}",
+                  flush=True)
+            return self._pool_base + k_off
