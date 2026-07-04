@@ -3,7 +3,7 @@
 pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状态
 变化都更新这里**。历史细节查 [`archive/`](archive/)。
 
-**最后更新**：2026-07-03
+**最后更新**：2026-07-04
 
 > **2026-07-03 方向纠偏 + 卡点解除**：零拷贝 KV-IPC 集成 step 1-5 device 验证通过，
 > IPC 主卡点（507899 / 207001 MemPool OOM）经「一 key 整池 map」正解**解除**；
@@ -52,6 +52,34 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 
 
+
+### Step3p5 decode 尾部 (final RMSNorm + LM-head) 接入 live 并逐字对齐 (2026-07-04)
+
+decode 的 **tail（末尾 zero-centered RMSNorm + vocab 切片 LM-head）现已完全在 pypto 上运行**，
+在线 vLLM 8001 与 vanilla 8000 逐字（token-exact）一致。
+
+- **内核根因修复（pypto-lib `2df9613`，已推送 fork stepfun/develop）**：`rms_lm_head` 在一个
+  `pl.at(CORE_GROUP)` scope 产生 `final_normed` 暂存、在另一组 matmul scope 消费。作为顶层
+  `@pl.jit` 能过（monolithic `lm_real` PASS），但被 inline 进 `@pl.program` chip_orch（decode_fwd /
+  mtp / fused lm_head_orch）时，orchestration 把每个 CORE_GROUP scope 拆成独立 task，RMSNorm-scope →
+  1007 个 matmul-scope 对 `final_normed` 的 fan-out 依赖被误追踪 → logits 错（~99.9% 或 60x 放大）。
+  **修复**：把 RMSNorm + 所有 vocab-block matmul 折进**单一 scope**，只算一次 `inv_rms`，在 matmul
+  循环内**内联归一化**每个 k-chunk（不再 materialize `final_normed`，无跨 scope/跨 task GM 暂存）。
+  另 `_build_tp_rms_lm_head_program` 用 `vocab_per_tp=VOCAB_LOCAL`（非 `VOCAB//tp_size`），使单卡
+  tp_size=1 构建仍按 per-rank 宽度切词表（对 8 卡规范构建后向兼容）。
+- **验证**：8×910B 上 `TpRmsLmHead` 8 卡 PASS、`test_rms_lm_head` 单卡 PASS、`FusedDenseLmHead`
+  PASS（bad 0.0000）；worker 离线 round-trip max 与 golden 一致（bad 0.077=bf16 噪声）。
+- **live 接入**：worker `_stage_attn_worker.py` 加 `--fuse-lmhead`（构建 TpRmsLmHead(tp=1) + 加载
+  `model.norm`/本 rank `lm_head` vocab 切片 + `lm_head()` RPC）；backend `_stage_attn_backend.py` 加
+  `PYPTO_TAIL_LMHEAD=1`（替换 `Step3p5ForCausalLM.compute_logits`：每 rank 算 vocab 分片 →
+  `tensor_model_parallel_all_gather(dim=-1)` → 全词表 `[.,128896]` logits）。fallback 为**响亮**（打印
+  + 计数，非静默），startup profiling / worker 未起时才回退。
+- **在线 A/B（8001 dense0-2 fused + tail 全 pypto vs 8000 vanilla，temp=0 seed=42，3 prompt）**：
+  **全部逐字一致**；8 rank 均 `first compute_logits SUCCESS logits.shape=(1,128896)`；serving 期间
+  fallback 增量 **0**。W8A8 的 `lm_head.weight`/`model.norm.weight` 均为 BF16（未量化）。
+- **边界**：worker/backend/probe 代码仍在 0162 工作树（非 git 仓，未提交，属 live 集成 harness）；
+  剩余 full decode 替换 = MoE 层 3-44 的 MLP/MoE 本体 pypto 化（model-B EP，最大一块；这些层 attention
+  已在 Phase 24.3 live）。
 
 ### Step3p5 attention 多 position (ctx>1 / prefill) 乱码根因定位 + 修复 (2026-07-02)
 
@@ -227,6 +255,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler（submodule） | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------------------|-----------|
+| 2026-07-04 | tail lm_head 单-scope 修复 + 接入 live（token-exact） | `stepfun/develop:b00c8b23` | `stepfun/develop:2df9613`（single-scope rms_lm_head inline fix；已推送 fork） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-06-27 | Phase20 online 45-layer layer_ref replacement + context ABI probe | `stepfun/develop:b00c8b23` | `stepfun/develop:b198dcd`（forward-context probe; 45/45 layer coverage `408a041`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-06-22 | Phase 2 设计落地；建项目跟踪仓 | `stepfun/develop:b00c8b23` | `stepfun/develop:b918e60`（W8A8 precision alignment；BF16 0~47 detail ST 基线 `d4c01b9`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `a6e06406` | `v0.45` |
 
