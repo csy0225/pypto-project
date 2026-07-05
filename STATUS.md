@@ -293,6 +293,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler（submodule） | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------------------|-----------|
+| 2026-07-05 | @pl.jit routed device-run PASS（真 W8A8，co-resident live 路径解锁） | `stepfun/develop:b00c8b23` | `stepfun/develop:ae00e9a`（_routed_jit_probe --device-run；已推送 fork） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-07-05 | MoE routed backend hook `_apply_mlp` + device glue-test PASS（bad=0.0000） | `stepfun/develop:b00c8b23` | `stepfun/develop:20292aa`（pypto_moe_backend.py；已推送 fork） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-07-05 | worker `routed` op device round-trip PASS（bad=0.0000）+ _serve bf16 fix | `stepfun/develop:b00c8b23` | `stepfun/develop:e17b4ab`（_serve bf16 序列化修复；已推送 fork） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-07-05 | MoE routed-expert per-rank 内核（真 W8A8 bad=0.0000）+ worker `routed` op | `stepfun/develop:b00c8b23` | `stepfun/develop:fc0bafb`（vllm_routed_experts.py + _routed_jit_probe.py；已推送 fork） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |

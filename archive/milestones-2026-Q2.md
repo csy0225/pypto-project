@@ -6,6 +6,26 @@
 
 
 
+## 2026-07-05 (later-3) —— @pl.jit routed device-run PASS：co-resident live 路径解锁 ✅
+
+- **`_routed_jit_probe.py --device-run`（pypto-lib `ae00e9a`）证明 RECV-tiled routed body 作为 plain
+  `@pl.jit` 在 device 上 RUN 正确**（不只是 compile）：真 W8A8 layer 3，ratio_allclose(atol=0.04,
+  rtol=0.04) PASS，4.37s。
+- **为什么关键（解掉一直卡的 live blocker）**：`@pl.program` 的 `_serve` worker 太重，**不能**和
+  vLLM Worker_TP 共卡（co-tenancy → 507018 → card-8 事故）。但 live 8001 的 TP=8 Worker_TP 占满
+  cards 8-15，独立 routed `@pl.program` 进程无处可跑。`@pl.jit` 变体轻量、可共卡（现有
+  attn/dense/shared/tail 的 @pl.jit op 就是这样共驻在 `_stage_attn_worker.py`）。→ **正确的 live 集成 =
+  把 routed op 作为 `@pl.jit` 注册进现有共驻 attn worker（`ChipWorker.register`），而非独立 `_serve`
+  进程**；backend `pypto_moe_backend.py` client 连 attn worker 的 socket 即可。
+- 这修正了 `deployment/moe-routed-live-wiring.md §4.1` 的 live 路径（`_serve` 独立进程仅适合离线验证，
+  我正是用它离线验的；live 用 co-resident @pl.jit）。
+- **本 session 累计（全部 device 验证 + 已推送）**：routed 内核真 W8A8 bad=0（fc0bafb）→ `_serve` bf16
+  fix + worker round-trip（e17b4ab）→ backend hook `_apply_mlp` + glue selftest（20292aa）→ @pl.jit
+  device-run + co-resident 路径（ae00e9a）。剩余 live e2e = 把 routed @pl.jit 注册进 attn worker +
+  layer_idx 注入 + 42 层权重内存（LRU/按需）+ 8001 拉起 + A/B。
+
+
+
 ## 2026-07-05 (later-2) —— MoE routed backend hook `_apply_mlp` 落地 + device glue-test PASS ✅
 
 - **backend hook 代码写完（不是 spec，是可用代码）**：`pypto-lib/tools/step3p5/pypto_moe_backend.py`
