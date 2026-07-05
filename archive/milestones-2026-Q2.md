@@ -6,6 +6,26 @@
 
 
 
+## 2026-07-05 (later) —— MoE routed worker `routed` op device round-trip 验证通过 + _serve bf16 bug 修复 ✅
+
+- **worker `routed` op device round-trip PASS**：腾空 cards 8-15（8001 已是死状态——Worker_TP
+  zombie + 重复 host attn worker，stop 容器 + pkill 清干净）后，在干净 card 8 起 `--serve` worker +
+  socket client 打真实往返：真 W8A8 layer 3，`max|y|==max|golden|=0.4551`，maxdiff=0.0020，
+  **bad_ratio@0.05=0.0000**，rtt 3.25s。serialize→`compiled(...)`device→deserialize 全路径证通
+  （`deployment/moe-routed-live-wiring.md` §4.1 完成）。
+- **修复 `_serve` bf16 序列化 bug（pypto-lib `e17b4ab`）**：原 `y1[0].contiguous().numpy().tobytes()`
+  在 bfloat16 上 `TypeError: unsupported ScalarType BFloat16`——即 fc0bafb 的 worker op 返回时必崩。
+  改 `.view(torch.uint16).numpy().tobytes()`（client 端 uint16→bfloat16 反序列化，2-byte 布局一致）。
+  device 计算本身正常（`chip_process dev=8 ready`），仅序列化行。round-trip 测试的价值正在于此。
+- **0162 launch gotchas（记入避坑）**：(1) `pkill -f "vllm_routed_experts --serve"` 自匹配自身 shell →
+  SIGKILL 自己 → 后续 rm+launch 不执行、无输出 → 用 bracket trick `pkill -f "[v]llm_routed_experts"`；
+  (2) netboot/cgroup 激进回收：ssh 里 nohup/setsid/tmux 全在 ssh 断开时被杀（tmux server 都不留）→
+  可靠做法是 worker 跑在一条**保持打开的前台 ssh**（后台 hold）+ 另开 ssh poll log/跑 client。
+- **边界**：这坐实了 worker 侧（内核 + 真权重 + socket 往返）完全 OK；剩余仍是 backend `_apply_mlp`
+  hook（层号注入 + shared 合并 + group_list→CSR）多周工程，见 `deployment/moe-routed-live-wiring.md` §4.2。
+
+
+
 ## 2026-07-04/05 —— MoE routed-expert 内核真权重验证 + vLLM serving 从零重建 + pypto dense/attn/tail live 逐字对齐 ✅
 
 - **MoE routed-expert per-rank 内核（最后一块 MoE 计算内核）验证通过**：新增

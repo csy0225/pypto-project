@@ -293,6 +293,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler（submodule） | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------------------|-----------|
+| 2026-07-05 | worker `routed` op device round-trip PASS（bad=0.0000）+ _serve bf16 fix | `stepfun/develop:b00c8b23` | `stepfun/develop:e17b4ab`（_serve bf16 序列化修复；已推送 fork） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-07-05 | MoE routed-expert per-rank 内核（真 W8A8 bad=0.0000）+ worker `routed` op | `stepfun/develop:b00c8b23` | `stepfun/develop:fc0bafb`（vllm_routed_experts.py + _routed_jit_probe.py；已推送 fork） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-07-04 | tail lm_head 单-scope 修复 + 接入 live（token-exact） | `stepfun/develop:b00c8b23` | `stepfun/develop:2df9613`（single-scope rms_lm_head inline fix；已推送 fork） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-06-27 | Phase20 online 45-layer layer_ref replacement + context ABI probe | `stepfun/develop:b00c8b23` | `stepfun/develop:b198dcd`（forward-context probe; 45/45 layer coverage `408a041`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
