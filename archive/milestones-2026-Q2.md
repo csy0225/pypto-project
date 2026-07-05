@@ -6,6 +6,25 @@
 
 
 
+## 2026-07-05 (later-5) —— backend↔co-resident-worker code path 完成：live 单层 MoE 代码全就绪 ✅
+
+- **`pypto_moe_backend.py`（pypto-lib `bdcb1b7`）改用 co-resident worker 协议**：`RoutedClient` 从
+  `_serve` LE 协议改成 **`pypto_mlp_worker` BE/nbytes 协议**（op=routed, rows/layer/offsets/counts +
+  int16 bf16），这样 backend 直接对接**共驻 @pl.jit worker**（非 @pl.program `_serve`）。加
+  `FusedMoE.forward` layer-idx 追踪（threadlocal），只 route `PYPTO_MOE_LAYERS`（tracking 不可用时
+  单层 shortcut）。**backend selftest vs 共驻 worker：bad_ratio@0.05=0.0000** —— `_apply_mlp` →
+  共驻 worker `routed` → 正确 y 的全路径已用 LIVE 协议在 device 上端到端验证。
+- **live 单层 MoE 的全部代码已就绪 + device 验证（六连，fork stepfun/develop）**：`fc0bafb`（内核）→
+  `e17b4ab`（_serve fix）→ `20292aa`（backend v1）→ `ae00e9a`（@pl.jit device-run）→ `0249700`（共驻
+  worker routed op）→ `bdcb1b7`（backend 共驻协议 + layer targeting）。每个都 bad_ratio@0.05=0.0000。
+- **剩余 = 纯部署 + 42 层内存（无更多代码设计）**：单层 live A/B 只需 (1) 8001 拉起；(2) 起 8 个共驻
+  routed worker（`pypto_mlp_worker --routed-layers 3`，cards 8-15，与 vLLM Worker_TP 共驻，@pl.jit
+  ChipWorker 无 co-tenancy）；(3) sitecustomize `pypto_moe_backend.install()` + env
+  `PYPTO_MOE=1/PYPTO_MOE_SOCK/PYPTO_MOE_LAYERS=3`；(4) curl A/B vs 8000。全模型 42 层需 worker 侧
+  专家权重 LRU/按需（~47GB/rank，多周硬点；单层可放下）。
+
+
+
 ## 2026-07-05 (later-4) —— co-resident worker routed op device PASS：live worker config 成立 ✅
 
 - **`pypto_mlp_worker.py` 加 `op=routed`（pypto-lib `0249700`）**：把 `routed_experts_jit` 注册进与
