@@ -6,6 +6,23 @@
 
 
 
+## 2026-07-05 (later-8) —— 穷尽调参矩阵：507018 co-tenancy 不可调，socket-worker 路径判定不可行 ⏸
+
+- **穷尽 (worker-env × vLLM-gpu-mem) 网格**：(default,0.80)→routed 507018；(RING_HEAP=4GB,0.80)→
+  16GB arena OOM(207001)；(4GB,0.55)→507018(rank0,2)；(default,0.55)→507018(rank2)。**只有 16GB arena
+  OOM 可用 gpu-mem 调掉；507018 对 env/内存全不敏感**。→ 重型 routed grouped-GEMM 内核在独立 ChipWorker
+  里与 active vLLM Worker_TP 同卡 → AICPU device-context co-tenancy 507018（部分卡、非确定）。卡从未 poison，
+  每次干净拆除。
+- **最终判定**：socket-worker + 独立 pypto runtime 对重型 routed MoE 内核在 live vLLM co-tenancy 下**根本
+  不可行**（轻内核 dense/tail 可共驻；routed 36 专家 ~16GB arena 不行）。**唯一可行路径 = 项目既定的
+  device-IPC 零拷贝重构（Phase 23/24）**：pypto runtime 在进程内接管计算（一个 device context，无第二争用
+  runtime）——这正是 Phase 23/24 存在的原因。多周级，是下个 session 的正确方向。**不要再试 socket-worker
+  路径**——调参空间已穷尽（上表）。
+- goal（live A/B）**用当前架构不可达**；非数学/接线问题（所有 compute 已验证 bad=0 入库）。机器干净收尾：
+  8001 down，cards 8-15 OK，8000 up，0 worker。
+
+
+
 ## 2026-07-05 (later-7) —— live MoE A/B 迭代调试：507018 co-tenancy 定为 definitive blocker ⏸
 
 - **3 轮 live 部署迭代调错**：(1) 默认 env → routed worker `507018`（co-tenancy）；(2) 加
