@@ -6,6 +6,34 @@
 
 
 
+## 2026-07-05 (later-6) —— live 单层 MoE 部署实跑 → 运行时 507018 co-tenancy blocker（实测定位）⏸
+
+- **实际执行了完整 live 单层（layer 3）MoE 部署**（非 spec）：
+  - 起 8 个共驻 routed worker（setsid，cards 8-15，`pypto_mlp_worker --routed-layers 3`）→ 全部
+    `listening`（setsid 持久化 OK；之前 setsid「失败」其实是自匹配 pkill 先杀了 shell）。
+  - 8001 带 MoE backend 启动（`nerdctl start vllm-8001` + `start_8001_moe.sh`，gpu-mem 0.80，
+    PYTHONPATH=/logs/pypto_patch_moe，PYPTO_MOE=1，PYPTO_MOE_LAYERS=3）→ **8 个 rank 全部
+    `[pypto_moe_backend] installed sock_dir=/logs layers={3}` + FusedMoE.forward layer-tracking，
+    Health 200，Application startup complete**。lazy rank 解析（local_rank）生效。
+  - 首个真实请求 → **routed worker `run_prepared failed with code 507018`**，vLLM 收到
+    `ConnectionError: worker closed`，8001 请求失败；8000 vanilla 正常。
+  - **事后卡健康 8-15 全 OK（本次未 poison）**——507018 只杀了 worker 进程、未 Alarm 卡（task 级 fault，
+    比早先 IPC-map 事故轻）。已干净拆除（stop 8001 + pkill workers），卡 OK，8000 up。
+- **实测定位的真 blocker**：routed pypto 内核**与 active vLLM Worker_TP 共卡运行时 507018**。关键对比：
+  dense-MLP + tail 的 @pl.jit worker **不会**触发（此前共驻 3/3 token-exact）——所以是 routed 专属
+  （36 专家 RECV-tiled grouped-GEMM 的重 task graph 与 vLLM live device context/AICPU 调度器争用）。
+  之前「共驻 routed PASS」是 worker 单独占 card 8（无 vLLM）；只有 vLLM Worker_TP 同时 active 才暴露。
+- **含义**：socket-worker + 独立 ChipWorker 路径对 routed MoE 内核在 live co-tenancy 下不可行。正解是
+  项目既定的 **device-IPC 零拷贝方向**（Phase 23/24，一个 runtime、无独立争用 device context），或对
+  routed 内核与 vLLM stream 做序列化。这是真正的多周硬点。**所有 compute（内核/worker/backend/协议/
+  layer-targeting）已验证 + 入库；blocker 是运行时 device-context 争用，不是数学或接线。**
+- 下步选项：(1) dispatch-cut 排查为何 routed 507018 而 dense/tail 不会（缩到 1 专家能否共驻）；
+  (2) 换 device-IPC 零拷贝（Phase 23 机制）替代 socket + 独立 ChipWorker；(3) stream/event 序列化避免
+  routed 与 vLLM 在 AICPU 调度器上重叠。部署产物已 stage 在 w8a8 logdir（`start_8001_moe.sh` /
+  `restart_routed_workers.sh` / `pypto_patch_moe/`）供下个 session 直接复现。
+
+
+
 ## 2026-07-05 (later-5) —— backend↔co-resident-worker code path 完成：live 单层 MoE 代码全就绪 ✅
 
 - **`pypto_moe_backend.py`（pypto-lib `bdcb1b7`）改用 co-resident worker 协议**：`RoutedClient` 从
