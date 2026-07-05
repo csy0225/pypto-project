@@ -6,6 +6,25 @@
 
 
 
+## 2026-07-05 (later-4) —— co-resident worker routed op device PASS：live worker config 成立 ✅
+
+- **`pypto_mlp_worker.py` 加 `op=routed`（pypto-lib `0249700`）**：把 `routed_experts_jit` 注册进与
+  dense/shared/tail **同一个 `ChipWorker`**（一进程一卡）+ 加载 per-rank dequant-W8A8 专家；
+  `routed_partial` pad 到 LOCAL_RECV_MAX、run、unpad；`--routed-layers` CLI。
+- **device 验证 co-resident**（card 8 上 dense layer 0 + routed layer 3 同 ChipWorker，client 打真实
+  往返）：**MLPW_ROUTED_PASS**，rows=1024，maxdiff=0.0020，bad_ratio@0.05=0.0000。这是**正式 live
+  worker 配置**（routed 与 dense/shared/tail 共驻一进程）→ **无独立 @pl.program 进程 → 无 507018
+  co-tenancy**（避开 card-8 事故那类问题）。live wiring 组件 #1 完成且可提交。
+- **本 session 五连（全部 device 验证 + 已推送 fork stepfun/develop）**：`fc0bafb`（routed 内核真 W8A8
+  bad=0 + _serve）→ `e17b4ab`（_serve bf16 fix，worker round-trip）→ `20292aa`（backend hook
+  `_apply_mlp` glue selftest）→ `ae00e9a`（@pl.jit device-run）→ `0249700`（co-resident worker routed op）。
+- **剩余 full live e2e A/B**：(a) backend layer_idx 注入（多层；单层现成）；(b) **42 层专家权重内存**
+  （全驻 ~47GB/rank → LRU/按需，多周硬点；单层可放下）；(c) 8001 拉起 + backend client 指向 worker
+  的 routed sock（协议 BE >I + nbytes + int16 bf16）+ live A/B vs 8000。五个组件均已单独 device 验证 +
+  入库，剩余是 live 组装 + 内存扩展。
+
+
+
 ## 2026-07-05 (later-3) —— @pl.jit routed device-run PASS：co-resident live 路径解锁 ✅
 
 - **`_routed_jit_probe.py --device-run`（pypto-lib `ae00e9a`）证明 RECV-tiled routed body 作为 plain
