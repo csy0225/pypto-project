@@ -6,6 +6,25 @@
 
 
 
+## 2026-07-05 (later-2) —— MoE routed backend hook `_apply_mlp` 落地 + device glue-test PASS ✅
+
+- **backend hook 代码写完（不是 spec，是可用代码）**：`pypto-lib/tools/step3p5/pypto_moe_backend.py`
+  （`20292aa`）monkey-patch `MoECommMethod._apply_mlp` → pypto RoutedExperts worker：
+  - `_to_csr(group_list, group_list_type)`：type 1=counts / 0=cumsum→diff，offsets=exclusive
+    prefix-sum；`torch.equal` 验证与 `_balanced_csr` 一致。
+  - `RoutedClient`（UDS，uint16-view bf16 协议）+ `_pypto_apply_mlp`（pad 到 LOCAL_RECV_MAX、route、
+    unpad 回 num_recv；`num_recv>1024` → vanilla fallback）。
+  - `install()` 经 sitecustomize autoload（`PYPTO_MOE=1` / `PYPTO_MOE_SOCK` / `PYPTO_MOE_LAYERS`）。
+- **device self-test PASS**（`--selftest`，真 W8A8 layer 3，worker on card 8）：num_recv=1024，
+  y_shape=(1024,4096)，maxdiff=0.0020，**bad_ratio@0.05=0.0000**。`_apply_mlp` 替换的 compute+glue
+  全部在 device 上证对。
+- **至此 worker + backend-glue 均已 device 验证**。剩余 live e2e = (1) in-vLLM autoload（8001 全栈拉起
+  多步重建 + 8 个 per-rank routed worker + install 进 sitecustomize）；(2) 多层的 layer_idx 注入
+  （单层现成）；(3) **42 层专家权重内存**（全驻留 ~47GB/rank → 需 per-layer LRU / 按需加载，真正多周
+  硬点）；(4) live A/B vs 8000。见 `deployment/moe-routed-live-wiring.md`。
+
+
+
 ## 2026-07-05 (later) —— MoE routed worker `routed` op device round-trip 验证通过 + _serve bf16 bug 修复 ✅
 
 - **worker `routed` op device round-trip PASS**：腾空 cards 8-15（8001 已是死状态——Worker_TP
