@@ -6,6 +6,74 @@
 
 
 
+## 2026-07-04/05 —— MoE routed-expert 内核真权重验证 + vLLM serving 从零重建 + pypto dense/attn/tail live 逐字对齐 ✅
+
+- **MoE routed-expert per-rank 内核（最后一块 MoE 计算内核）验证通过**：新增
+  `pypto-lib/models/step3p5/vllm_routed_experts.py` —— per-rank 36 本地专家的 grouped
+  SwiGLU（`N_LOCAL_EXPERTS=36`、`LOCAL_RECV_MAX=1024`、SiLU），**无 collective**，正好是
+  vLLM FusedMoE all-to-all dispatch/combine 包裹的 per-rank 计算 seam。body 来自
+  `moe.py::_expert_routed`，RECV_TILE=32 行分块（naive `[1024,1280]` FP32 累加器=5MB 会爆
+  188KB UB，必须行分块），封成 `@pl.function(Inline)` 塞进 `@pl.program RoutedExperts`
+  （chip_orch + host_orch per-rank dispatch）。**关键：tile body 外必须加 `if tile_valid > 0:`
+  守卫**（否则 ~31/32 空尾块提交 expert kernel with tile_valid<=0 → 507018；这是第一次 device
+  失败的根因）。
+  - **device 结果（真实 W8A8，恢复后的 card 8/9）**：synthetic PASS bad_ratio=0.0067；
+    **真实 W8A8 layer 3 rank 0 PASS bad_ratio=0.0000**，max|out|=max|ref|=0.428。真权重经
+    `weight_loader._load_quantized_expert_projector`（INT8 + `_scale`/`_offset`→BF16）+ HF
+    gate/up `[INTER,HIDDEN]`→`[HIDDEN,INTER]` 转置。
+  - **worker `routed` op 已实现**：`vllm_routed_experts.py::_serve()` 起最小 UDS worker
+    （4-byte len + JSON header + BF16 body），收 BF16 hidden + `offsets`/`counts`，跑编译好的
+    RoutedExperts（真实 dequant W8A8 专家），回 BF16 y；host 已验证。`_routed_jit_probe.py`
+    另证 RECV-tiled body 也能编成 `@pl.jit`（worker 可像 dense/shared 一样 `register`）。
+  - 代码已 push：**`pypto-lib` `fc0bafb`**（csy0225 fork stepfun/develop）。
+- **机器事故 + 完整恢复（自伤 → 全恢复）**：首次 routed device-run 误在 -d 8 与 live 8001
+  worker **co-tenant** 跑重型 `@pl.program` → 507018 → card 8 Health=Alarm → `npu-smi set -t
+  reset -i 8` 在 AMP+HCCS 模式下**重启全部 16 卡**（用户批准）→ 固件 load 卡死（`flag_r=0x6666`/
+  `dcmi -8005`）→ `sudo RECOVERY.sh` 重装 driver 但需重启 → host 重启 → **netboot 抹掉
+  authorized_keys → SSH 锁死 ~8h**（cluster provisioning 最终恢复 key）。恢复顺序（netboot
+  tmpfs 丢失 `/` 全部）：(1) 挂 NVMe（`/dev/nvme0n1`→/mnt/persist、`/dev/nvme1n1`→/data；
+  w8a8 ckpt 在 `/data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp`）；
+  (2) 建 `HwHiAiUser`（否则 driver 装报 0x0091）；(3) `sudo RECOVERY.sh` → driver 25.5.2 +
+  firmware 7.8.0.7.220 + ptoas 0.45，**16 卡 Health=OK（card 8 Alarm 清除）**；(4) 修 cann
+  symlink → CANN 9.0.0 non-GA（workspace runtime 编译所依赖，RECOVERY.sh 指向 beta.1 是 stale）；
+  (5) `apt install libstdc++-12-dev`（CCEC 需 `<cstdint>`）。**铁律**：AMP+HCCS netboot 机上
+  **绝不**单卡 `npu-smi set -t reset`（会重启全部卡）+ **绝不**在有 live vLLM worker 的卡上跑重型
+  `@pl.program`（co-tenancy → 507018 → 需 root reset）。
+- **vLLM serving 从零重建（早先"需 cluster provisioning"的判断是错的）**：用户提示"镜像在某个盘里"
+  破局。正确镜像不是 skew 的 lijiahui/vllm-ascend，而是
+  **`hub.i.basemind.com/stepcast/stepcast:0.19.0-...`**，从 **docker data-root
+  `/mnt/nvme1/chensiyu/docker-data`** 找到（dockerd 已随 netboot 消失，但
+  `containers/<id>/config.v2.json`+`hostconfig.json` 存了每个原容器 spec，
+  `image/overlay2/repositories.json` 列出镜像）。重建配方（可复现）：
+  (1) 挂 NVMe；(2) 从 `/mnt/persist/k8s-install/containerd` 起 containerd（root bind-mount）；
+  (3) **runc 1.1.8 `--no-pivot` wrapper**（netboot `/`=rootfs，默认 pivot_root 失败）；
+  (4) `nerdctl -n k8s.io pull` 正确 stepcast 镜像；(5) `nerdctl run -d --privileged --network
+  host`（privileged→全 NPU）；(6) `nerdctl exec` 起 serve 脚本。**3 个 gotcha**：(a) 不能
+  `set -u`（set_env.sh 有 unbound var → 静默退出、0-byte log）；(b) 必须 `export VLLM_USE_V1=1`
+  （否则 `hf_overrides must be a dict`）；(c) **DROP `--speculative_config`（MTP）**——draft
+  config 再触发 hf_overrides bug；MTP 是 spec-decode，greedy(temp=0) 输出与不带 MTP 完全一致 →
+  仍是有效 A/B oracle。**8000 oracle UP（health 200，cards 0-7）**，生成"北京，简称京，是中华人民
+  共和国的首都…"。同配方起 8001（cards 8-15）跑 pypto。
+- **pypto dense0-2 + attn + tail 在重建平台上 LIVE 且逐字对齐**：8001 pypto = 可用 vanilla boot
+  env + `PYPTO_*` 开关（ATTN_BACKEND=1、KV_IPC=1、AB=0、LAYERS=0,1,2、FUSE_MLP_LAYERS=0,1,2、
+  TAIL_LMHEAD=1）+ 8 host worker（cards 8-15，8/8 socket）。backend `pypto_attn_backend.py`
+  经 `/logs/pypto_patch/sitecustomize.py` autoload。**A/B 结果：3/3 token-EXACT**（8001 pypto vs
+  8000 vanilla，temp=0，prompts 北京/中国首都/1+1）。GOTCHA：pypto decode ~2.5s/token（per-layer
+  socket round-trip）→ curl 需 `-m150`（否则超时看似"empty"，非 bug，Phase 26 perf）。
+  RESTART GOTCHA：kill 旧 8001 后 Worker_TP 仍占 HBM → 用 bracket-pattern `pkill -9` 确认
+  HBM<10% 再重启。**live pypto pipeline（attn + dense-MLP + tail lm-head，layers 0-2）在重建
+  平台证明正确 = 加 MoE routed experts 的地基**。
+- **剩余（full MoE live，多周级）**：接 validated routed 内核 —— worker `routed` op（已实现，需
+  device round-trip 在空闲卡验证）+ **backend hook `MoECommMethod._apply_mlp`→`unified_apply_mlp`**
+  （映射 `MoEMlpComputeInput.group_list`→CSR offset(cumsum)/count；处理 W8A8 dynamic act-quant），
+  覆盖 MoE 层 3-44，再对 8000 oracle 做 live A/B。内核 + hook seam 已定位/验证，集成是多周工程。
+- **边界**：本 session 交付 = routed 内核真权重精度闭环 + serving 重建配方 + dense/attn/tail live
+  逐字对齐 + worker op 实现；**未做** = backend `_apply_mlp` hook + MoE 层 live A/B（下个 session
+  从此继续）。容器侧改动（step3p5.py `tp_in_dp` drop、optimus stub、start 脚本）在 disposable
+  container overlay，非 repo；仅 `vllm_routed_experts.py` + `_routed_jit_probe.py` 入 git。
+
+
+
 ## 2026-07-03 —— 零拷贝 KV-IPC 集成 step 1-5 验证通过 + IPC 主卡点解除 + 重制定 plan ✅
 
 - **背景/纠偏**：项目此前偏成「算子桥接」（每 rank 独立 worker + socket/device-IPC 桥单算子，丢融合收益 + host round-trip ~2.6 tps）。按用户+技术专家 7 步路线，验证「PyPTO runtime 通过 device-IPC 零拷贝接管 vLLM KV 计算」。

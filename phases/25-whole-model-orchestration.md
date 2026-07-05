@@ -82,3 +82,40 @@ dequant）。**待落地真实 in-memory tensor extraction**（当前只到 plan
   wire gate ABI。
 - **与 24.4 的关系**:whole-model program（一个 chip_process）**取代** 24.4 的单-worker 合并
   中间态 —— 不必再做 24.4 的 attn+MLP worker 合并,直接在 Phase 25 收敛。
+
+## 9. 进展 — 核心可行性 de-risk（2026-07-04）
+
+两个最大未知已用最小 device probe 验证清除:
+
+- **§7 融合规模 — 45 层链 COMPILE OK**:`_stage_chain_scale.py`（0162,host-only compile,
+  TP=8 DistributedConfig）用 `pl.unroll(N)` 把自包含的 `_dense_mlp_body_tp` 在**一个**
+  `@pl.program` chip_orch 里串 N 次(复用一对 window,只探 compile 规模)。**N=1 / 8 / 45 全部
+  `COMPILE OK`**(完整 frontend→IR→ptoas→distributed codegen)。→ 整网融合在 dense 路径上
+  **编译规模可行到 45 层**;§7 的 task-DAG / L0/L1/UB buffer 规模不再是未知。
+- **head-gate on-device — matmul_acc N=16 不是 blocker**:`_stage_gate_matmul.py`(0162 card 8)
+  证明 `normed[16,4096] @ w_g[4096,16]` 经 K-chunk matmul_acc(真实 KC=256)**PASS**——历史
+  记载的 "N=16 matmul_acc 丢 K 累加" 是 context-specific(stale/reused normed_all),非小-N
+  matmul 本质缺陷。N=8 触发 `alloc_tile` 列须 mult-of-16(所以真实 gate pad 到 16)。→ whole-model
+  的 on-device gate 可行:gate_logits matmul(N=16) → sigmoid → block-diag expand(常量 gate_r
+  [16,1024],large-N 安全)→ 乘 attn_out。免去 live worker 的 Python per-step gate 预算。
+- **§10 many-body inline 已被 DecodeLayerMoE 证明**(整套 EpTpMoE + attention 内联进一个
+  chip_orch,8 卡 runtime PASS);chain probe 又证明 DEPTH(45)也能编。
+
+frontend 关键规则(写真实融合 chip_orch 必看):(1) 层循环用 `pl.unroll(N)` 不能用裸 `range()`;
+(2) `pl.inline(fn._func)` 的 body free-var 按**调用方 module globals** 解析 → whole-model builder
+必须 import 所有被内联 body 引用的常量(K_CHUNK/EPS/LAYER_*_DYN/MLP_OUT_CHUNK/SWIGLU_LIMITS…);
+(3) `_dense_mlp_body_tp` 调 `self.tp_all_reduce(...)` → 外层 program 必须定义 barrier
+`tp_all_reduce` @pl.function(InCore)。注意 attention 的 tmp_window 是 `[BATCH, HIDDEN//TP]`
+(只有 TP=1 时才 == `[BATCH,HIDDEN]`)。
+
+### 剩余工作(after de-risk;仍多 session)
+1. 真实融合 chip_orch:逐层 {attention_full|attention_swa} + {dense_mlp|MoE} + 末尾 rms_lm_head,
+   `pl.unroll` 45 层,layer-indexed 权重切片,per-call-site 新 window(数量爆炸 = 设计项)。
+2. on-device gate 落 attention_full(已 de-risk,待 in-context 验证)。
+3. RUN 融合 program 对 golden(8 张空闲卡 + 真实权重 bundle + vLLM dump 的真实 decode 输入;
+   oracle = 8000 vanilla logits)。MoE 段在融合上下文可能撞 507018(单层 MoE 8 卡已过,融合-45 未测)。
+4. 25.4 live:in-memory 权重翻译 + block_table/slot_mapping/KV ABI(eager ForwardContext
+   `attn_metadata=None` → 大概率要 vLLM-Ascend 上游 patch)+ 真实 decode 请求走 whole-model runner。
+
+probe 脚本(0162 `/data/chensiyu/hw_project/pypto/`):`_stage_chain_scale.py`(CHAIN_N 环境)、
+`_stage_gate_matmul.py`(GATE_KC/GATE_N)。

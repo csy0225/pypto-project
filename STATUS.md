@@ -53,6 +53,44 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 
 
+### Step3p5 MoE 层 + tail 融合程序 (FusedMoELmHead) 编译通过 — Phase 25.3 building block (2026-07-04)
+
+> **2026-07-04 追加 — mixed dense-MLP + MoE 融合编译通过（§10 命名墙已破）**：给
+> `_dense_mlp_body_tp` 的 pl-tensor 局部名加 `dm_` 前缀（`patch_dmlp_rename.py`，行为不变、
+> standalone 仍 rc=0），解决了 dense-MLP body 与 MoE chip_orch 同名 RMSNorm 局部（post_norm/
+> resid1_fp32/scaled/normed…）在 `pl.inline` 下的冲突；再给 `_build_decode_layer_moe_program` 加
+> `with_dense_mlp`（`patch_moe_dense_mixed.py`）——chip_orch 在 attention 之后内联 dense-MLP、其输出
+> 作为 resid1 喂进 MoE。`_stage_mixed_compile.py -p a2a3` **COMPILE OK**：一个 **mixed dense-MLP +
+> EP+TP MoE decode 层融进一个 @pl.program chip_orch**。§5(mixed shape)+§10(many-body inline+命名) 对
+> dense+MoE 已证。剩余：mixed RUN（需 config-bound-shrink 让层堆叠权重装得下）、full-45 mixed
+> chip_orch（decode_fwd.chip_orch 逐层 dispatch，仍 tail-only 占位）→ full-45 COMPILE、25.4 live
+> 分片权重 ABI（唯一内存可行 run 路径）。
+
+在腾出 cards 8-15（临时下线 live 8001，8000 vanilla 保留作 oracle）后推进整网融合：
+
+- **基础复验**：`test_decode_layer_moe_st --variant full_silu_silu --world-size 8 -p a2a3`
+  （`MOE_ST_DEV_OFFSET=8` cards 8-15，当前树 pypto-lib `2df9613`+工作树改动）→ `next_hidden_out`
+  golden **PASS 28.9s**。注意 MoE ST 用**零权重专家**（golden=attention resid1），验证程序 8 卡
+  能跑（无 507018）+ attention，不含 expert-precision。
+- **FusedMoELmHead 编译通过**：给 `_build_decode_layer_moe_program` 加 `with_lmhead` 开关——镜像已工作的
+  dense `FusedDenseLmHead`，把 `rms_lm_head` 作为独立 `lm_head_orch`(@pl.function Orchestration) 内联，
+  host_orch 两遍循环（先所有 chip_orch 再所有 lm_head_orch）。**host COMPILE OK**
+  （`_stage_moe_lmhead_compile.py` -p a2a3，完整 frontend→IR→ptoas→distributed codegen）→ 一个 MoE
+  decode 层（attn + EP+TP MoE）与末尾 RMSNorm+LM-head **融进一个 @pl.program**。这是整网融合的 building
+  block（与 dense FusedDenseLmHead 平行）；§5 mixed-shape / §10 many-body inline 对 MoE+tail 成立。
+- **8 卡 RUN 被 weight-staging OOM 挡住（非融合/精度/507018 问题）**：`--with-lmhead` ST run →
+  `rtMalloc failed 207001 (size≈3.02GB) tensor 14` at `runtime_maker.cpp:209`。tensor 14 = `wo`
+  [tp,46080,4096]bf16=3.02GB（45×1024 层堆叠 full-attn wo）；MoE-only 能分配这 3GB，加 tail 的
+  lm_head_weight(≈1GB)+logits 后 bind OOM。降 `PTO2_RING_HEAP` 4GB→1GB 无效（非 ring heap 累积；疑为
+  full multi-rank input 在 bind 设备上的 staging）。属**测试 harness 供给问题**（ST 总是分配全 45 层
+  堆叠权重），与融合正确性正交；tail-fusion 数值机制已由 dense 版 FusedDenseLmHead（8 卡 bad=0.0000）证明。
+  下一步修法：单层测试收缩堆叠权重动态界 / 只喂 layer_idx 切片 / 缩小 lm_head 测试词表 / 诊断 3GB alloc
+  在 61GB-free 卡上为何失败。
+- **边界/交付**：`patch_moe_lmhead.py`（加 with_lmhead，applied 到 pypto-lib decode_layer.py 工作树，
+  备份 /tmp/decode_layer.py.bak_moelmhead）、`patch_moe_st_lmhead.py`（ST --with-lmhead）、
+  `_stage_moe_lmhead_compile.py`（host 编译 probe，PASS）。均在 0162 project root，**未 git commit**。
+  live MoE 整网仍是 model-B 全网程序（Phase 25.4，多周级；per-card model-A 因 EP 跨卡不可行）。
+
 ### Step3p5 decode 尾部 (final RMSNorm + LM-head) 接入 live 并逐字对齐 (2026-07-04)
 
 decode 的 **tail（末尾 zero-centered RMSNorm + vocab 切片 LM-head）现已完全在 pypto 上运行**，
@@ -255,6 +293,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler（submodule） | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------------------|-----------|
+| 2026-07-05 | MoE routed-expert per-rank 内核（真 W8A8 bad=0.0000）+ worker `routed` op | `stepfun/develop:b00c8b23` | `stepfun/develop:fc0bafb`（vllm_routed_experts.py + _routed_jit_probe.py；已推送 fork） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-07-04 | tail lm_head 单-scope 修复 + 接入 live（token-exact） | `stepfun/develop:b00c8b23` | `stepfun/develop:2df9613`（single-scope rms_lm_head inline fix；已推送 fork） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-06-27 | Phase20 online 45-layer layer_ref replacement + context ABI probe | `stepfun/develop:b00c8b23` | `stepfun/develop:b198dcd`（forward-context probe; 45/45 layer coverage `408a041`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-06-22 | Phase 2 设计落地；建项目跟踪仓 | `stepfun/develop:b00c8b23` | `stepfun/develop:b918e60`（W8A8 precision alignment；BF16 0~47 detail ST 基线 `d4c01b9`） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `a6e06406` | `v0.45` |
