@@ -6,6 +6,28 @@
 
 
 
+## 2026-07-05 (later-7) —— live MoE A/B 迭代调试：507018 co-tenancy 定为 definitive blocker ⏸
+
+- **3 轮 live 部署迭代调错**：(1) 默认 env → routed worker `507018`（co-tenancy）；(2) 加
+  `PTO2_RING_HEAP=4GB` → fault 变显式 `rtMalloc 207001 size=16GB`（routed 运行时 pooled static arena
+  要 ~16GB，vLLM gpu-mem 0.80 下每卡仅 ~14GB free 装不下）；(3) 再把 vLLM gpu-mem 降到 0.55（~28GB
+  free/卡）→ arena OOM 消失，**但 routed 内核仍在 rank 0 & 2 上 `507018`**（跨 rank 非确定）与 active
+  vLLM Worker_TP 共卡。卡从未 poison（task 级 fault），每次干净拆除，8-15 OK，8000 up。
+- **Definitive blocker**：重型 routed grouped-GEMM 内核在**独立 ChipWorker 进程**里与**active vLLM
+  Worker_TP 同卡**运行 → 部分 rank `507018`（AICPU stream sync / device 争用），即便修掉 16GB arena
+  OOM 也在。dense-MLP + tail 的 @pl.jit worker 不会（task graph 轻）。→ **socket-worker + 独立 runtime
+  对 routed 内核在 live vLLM 下不可行**，是真正多周硬点。
+- **下步（按优先级）**：(1) **device-IPC 零拷贝**（Phase 23/24 机制，一个 runtime 无第二争用 context ——
+  项目既定方向，socket-bridge 一直只是 oracle 回退）；(2) dispatch-cut 缩小 routed（更少专家/更小 arena）
+  看能否共驻 + 查 16GB arena 为何这么大（疑过度预留）；(3) stream/event 序列化 routed 与 vLLM 避免
+  AICPU 调度重叠。
+- **目标状态**：live 单层 MoE A/B **未通过**——卡在 507018 运行时 co-tenancy，**非数学/接线**（所有
+  compute 已验证 bad=0，8 commit 入库）。部署已全接线 + 可复现（w8a8 logdir：`start_8001_moe.sh`
+  gpu-mem 0.55、`restart_routed_workers.sh` +PTO2 ring env、`pypto_patch_moe/`）。收尾机器干净：8001 down，
+  cards 8-15 OK，8000 oracle up，0 worker。
+
+
+
 ## 2026-07-05 (later-6) —— live 单层 MoE 部署实跑 → 运行时 507018 co-tenancy blocker（实测定位）⏸
 
 - **实际执行了完整 live 单层（layer 3）MoE 部署**（非 spec）：
