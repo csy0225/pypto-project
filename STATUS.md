@@ -3,7 +3,18 @@
 pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状态
 变化都更新这里**。历史细节查 [`archive/`](archive/)。
 
-**最后更新**：2026-07-04
+**最后更新**：2026-07-06
+
+> **2026-07-06 MoE 单块 8 卡 bring-up**：standalone `EpTpMoE` 8 卡真实 W8A8。
+> ✅ **gate_topk 8 卡死锁（507018/sched=100）真解决** —— 对照 DeepSeek 定位到错误的
+> format2 两路 `mrgsort`（合并未完全排序的半块 → 归并状态机不终止），改成 DeepSeek 式
+> format1 渐进链 `sort32→mrgsort(64)→mrgsort(256)`；canonical gate 8 卡跑通 ~20s，
+> topk 与 vLLM 一致（gate 仍在 pypto 上算）。✅ **shared expert 路径验证数值正确**（对
+> 0.12% torch 参考 PASS，含 ring→barrier-mesh tp_all_reduce）。⏸ **routed 路径精度未过**
+> （41.8% 符号翻转，已隔离到 `_expert_routed` grouped-GEMM，排除 gate/权重/act-quant/
+> dispatch/combine 数据搬运；下一步逐级设备 dump 定位）。代码：`csy0225/pypto-lib`
+> 分支 `wip/moe-gate-fix-20260706`（956aede）。详见
+> [`deployment/troubleshooting-moe-block-8card-gate-topk.md`](deployment/troubleshooting-moe-block-8card-gate-topk.md)。
 
 > **2026-07-03 方向纠偏 + 卡点解除**：零拷贝 KV-IPC 集成 step 1-5 device 验证通过，
 > IPC 主卡点（507899 / 207001 MemPool OOM）经「一 key 整池 map」正解**解除**；
