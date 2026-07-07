@@ -7,7 +7,36 @@ Blocker 解决时，**删掉本文件里这一节**，到
 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)
 "Resolved blockers" 段补一条 post-mortem。
 
-**最后检视**：2026-06-26。
+**最后检视**：2026-07-08。
+
+---
+
+## ⭐ NEW 2026-07-08 — 多程序 DistributedWorker N=8 co-prepare 死锁（whole-decode 整网 dispatch 硬 blocker）
+
+**严重度**：🔴 阻塞整网 live single-handoff —— whole-decode worker 需把全部层程序 co-prepare 到一个 worker，N=8 时死锁。
+
+**症状**：whole-decode worker（`_stage_whole_decode_run.py --worker`，多程序 DistributedWorker #1706）：
+- prepare **3 程序**（dense L0/L1/L2）✅、**5 程序**（dense + 1 MoE Option-C）✅ 均 rc=0，residual 串接正确（30.4→53.5→64.0）。
+- prepare **8 程序**（全 45 层 deduped：dense_full/swa + attn_full/swa + 4 个 MoE 变体）→ **第一次 rt.run dispatch（L0 full_dense，已验证程序）即死锁**。3 次 device 尝试：
+  1. 默认 ring → `sched_error_code=100`（SCHEDULER_TIMEOUT，dev8）。
+  2. `PTO2_RING_*` env raise（16GB/524288）→ `code -1`（SCOPE_DEADLOCK，dev14）。
+  3. `RunConfig(ring_task_window=2^20, ring_heap=16GB, ring_dep_pool=2^20)` per-dispatch → `code -1`（SCOPE_DEADLOCK，dev8）。
+
+**根因（wiki 定位，https://github.com/hw-native-sys/simpler/wiki/Device-Error-Codes_zh）**：
+- `code -1` = **SCOPE_DEADLOCK**（编排码 1）：单个 scope 内任务数达 task_window 上限、slot 到 scope_end 才释放。`sched=100` = SCHEDULER_TIMEOUT。
+- L0 dense 单独 + N≤5 均 PASS → **不是 L0 kernel bug**，是 **N=8 co-prepare 把共享 worker ring 在 prepare/init（COW pre-fork）阶段顶满**。
+- **关键**：per-dispatch `RunConfig(ring_*)` **不解决** → 耗尽的是 prepare-time 的**共享 worker ring**，不是 per-dispatch ring。（`PTO2_RING_*` env 本 build 疑似不读取；RunConfig 是 per-dispatch，也没覆盖共享 ring。）
+
+**当前状态**：机制在 N≤5 验证通过（dense + MoE Option-C dispatch、residual 串接）；N=8（全 45 层所需）死锁。cards 已全恢复（16 OK，8000 up）。**停止盲目 device 重试**（3 次失败，避免 reset 退化卡）。
+
+**解除条件（待 team 根因，rule-5 root-cause 非绕过）**：
+1. **prepare-time ring sizing**：DistributedWorker init/prepare 是否有 ring 配置入口（非 per-dispatch RunConfig）？→ hw-analyst 查 distributed_runner。
+2. **上游 N-limit 修复**：#1706 是否有 co-prepare 程序数上限 / prepare-time ring 分配修复？TestMultiProgram 是否测过大 N？→ upstream-scout。
+3. 若上游无解，候选（按 rule-5 优先 root-cause）：(a) prepare-time ring 配置；(b) scope 拆分（kernel 侧）；(c) 单融合程序（Phase 25 DenseChainN，perf 路线 + NaN 风险 + swa_moe 编译级联）；(d) 分批 co-prepare（≤5/批，host 侧跨批串 residual）= 明确的 work-around，仅 root-cause 不可行时用。
+
+**链接**：memory `project_whole_model_pypto_design.md` 2026-07-08 段；harness `_stage_whole_decode_run.py --worker`（backups `/tmp/_stage_whole_decode_run.py.bak_worker{,2,3}`）。
+
+**Owner**：未指派（team `vllm-pypto-e2e` hw-analyst + upstream-scout 调查中）。
 
 ---
 
