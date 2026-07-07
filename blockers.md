@@ -38,6 +38,18 @@ Blocker 解决时，**删掉本文件里这一节**，到
 
 **Owner**：未指派（team `vllm-pypto-e2e` hw-analyst + upstream-scout 调查中）。
 
+### 2026-07-08 续 — root cause 定位 + 两条路 + path-1 fix 在验证
+
+**N 阈值实测**：N=5 co-prepared 通、**N=6 起就 SCOPE_DEADLOCK**（`--layers 0,1,2,3,4`）。2-批 prepare **对 serving 不可行**（prepare 是 load 时一次性 + chip 常驻;不能 per-token 重 prepare,也不能在 8 卡上跑两套 8-chip worker）→ per-layer 路线**必须**把全部 8 个程序 co-prepare 到一个 worker → 必须解 N 天花板。
+
+**为什么 `PTO2_RING_TASK_WINDOW` env 没生效（源码定位）**：`runtime/src/a2a3/runtime/tensormap_and_ringbuffer/host/runtime_maker.cpp:261`：`task_window_size = ring_task_window ? ring_task_window : parse_env("PTO2_RING_TASK_WINDOW")`。**call_config 的 `ring_task_window` 优先于 env**;多程序 worker 的 INIT call_config（`distributed_runner.py:709` `_make_call_config(dc)` 无 run_config → `CallConfig()` 默认非零 ring）压过了我设的 env。且 per-dispatch RunConfig（line 930）太晚——共享 ring 在 `_w.init()` 时已按 line-709 call_config 分配。默认 `PTO2_TASK_WINDOW_SIZE=16384`;官方 sizing 指南（`tensormap_and_ringbuffer/docs/RUNTIME_LOGIC.md:243-245`）：task_window ≥ 最大并行 scope 任务数,生产建议 65536。
+
+**两条路（按用户「先 env,没有则改源码」）**：
+- **路径1（per-layer,进行中）**：改 pypto 源码 `distributed_runner.py:709`,给 INIT call_config 注入大 ring（helper `_wd_init_ring_config()`,env `PYPTO_WD_INIT_RING=1` 默认开,ring_task_window=2^20 / heap=16GB / dep_pool=2^20）。backup `/tmp/distributed_runner.py.bak_initring`。**正在 device 验证 N=8（全 45 层）**。成 → per-layer whole-decode 解锁,复用全部已验证程序。
+- **路径2（融合,备选）**：swa_moe const-fold 级联（`attention_swa.py:479` Sub + 后续 Var）→ 改 pypto EP-lowering pass 源码 const-fold + 重编。model 侧三试全死(int()/module-global/hardcode-cascade)。
+
+**Owner**：team-lead（path-1 init-ring fix 验证中）。
+
 ---
 
 ## 0. Phase 20 production backend 未接入
