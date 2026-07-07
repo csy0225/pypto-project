@@ -107,67 +107,111 @@ mindmap
 
 ---
 
-## 🔀 层次结构 · 垂直通道 vs 水平通道
+## 🔀 层次结构 · 垂直通道 vs 水平通道（含数据流动）
 
-抽象机器把执行层摞成一个 **Layer Stack**。层与层、层内实例之间靠两种正交的通道通信——这就是文档说的"分成垂直和水平两个方向"：
+抽象机器把执行层摞成一个 **Layer Stack**。先立住方向约定（跟源文档一致）：
 
-- **垂直通道 `IVerticalChannel`（父 ↔ 子）**：上层把 **Task 往下压**（提交/派发），下层把 **结果/完成往上报**。一降一升，构成主干数据流。
-- **水平通道 `IHorizontalChannel`（兄弟 ↔ 兄弟）**：同一层的实例之间协作，如 all-reduce、Core 间的 TPUSH/TPOP。它不改变层级，只在同层横向流动。
+- **ordinal 0 = Core = 叶子（leaf）**，贴近硬件、离用户最远；
+- **ordinal 越大越往上、越贴近用户**（单机到 Host=3，多机再加 Pod=4，大集群到 Global=7）；
+- **root = 最顶那层**（单机是 Host，多机是 Pod）——它直接接用户提交。
+
+层与层、层内实例之间靠两种正交通道通信，这就是"分成垂直和水平两个方向"：
+
+- **垂直通道 `IVerticalChannel`（父 ↔ 子，跨相邻 ordinal）**：一条主干上有**两个方向**——上层把 **Task 往下压**（提交/派发），叶子算完把 **结果/完成往上报**。载体逐层不同：`DMA Control` → `SharedMemory` → `RegisterBank`。
+- **水平通道 `IHorizontalChannel`（兄弟 ↔ 兄弟，同 ordinal）**：同层实例协作，**不跨级**。典型两处：Core 内 `AIC ↔ AIV` 的 `TPUSH/TPOP`；多机时 Pod 层 `Node ↔ Node` 的 `RDMA` all-reduce。
+
+### 主干：单机 4 层的垂直层次 + 数据流动
+
+编号 ①→⑧ 就是一次调用的流动顺序（下压 Task → 叶子执行 → 结果上报）：
 
 ```mermaid
 flowchart TB
-    subgraph rootL["🔵 L_N 根层 (root)"]
-        RN["Scheduler ─ Workers[ ] ─ MemoryScope"]
+    User["👤 用户 / Python　submit(func, tensors)"]
+
+    subgraph L3["Host 层　·　ordinal 3　·　root（贴近用户）"]
+        H["🗓 HostScheduler<br/>Workers = Device[ ]　｜　Memory = Host DRAM"]
     end
-    subgraph midL["🟢 L_k 中间层 (兄弟实例并列)"]
+    subgraph L2["Device 层　·　ordinal 2"]
+        D["🗓 DeviceOrchestrator<br/>Workers = AICPU 线程[ ]　｜　Memory = HBM"]
+    end
+    subgraph L1["Chip 层　·　ordinal 1"]
+        C["🗓 AicpuScheduler<br/>Workers = AICore[ ]　｜　Memory = SRAM"]
+    end
+    subgraph L0["Core 层　·　ordinal 0　·　leaf（贴近硬件）"]
         direction LR
-        MKa["实例 A<br/>Scheduler ─ Workers[ ] ─ MemoryScope"]
-        MKb["实例 B<br/>Scheduler ─ Workers[ ] ─ MemoryScope"]
-        MKa <-->|"Horizontal↔ 同层协作<br/>(all-reduce / TPUSH-TPOP)"| MKb
-    end
-    subgraph leafL["🔴 L_0 叶子层 (leaf)"]
-        L0N["Dispatcher ─ Workers[ ] ─ MemoryScope"]
+        AIC["AIC · Cube"]
+        AIV["AIV · Vector"]
+        AIC <-->|"Horizontal↔ TPUSH / TPOP"| AIV
     end
 
-    rootL ==>|"Vertical↓ 提交 Task"| midL
-    midL ==>|"Vertical↓ 提交 Task"| leafL
-    leafL -.->|"↑ 完成 / 结果上报"| midL
-    midL -.->|"↑ 完成 / 结果上报"| rootL
+    User ==>|"① submit"| L3
+    L3 ==>|"② Vertical↓ 派发 Task (DMA Control)"| L2
+    L2 ==>|"③ Vertical↓ 提交子 Task (SharedMemory)"| L1
+    L1 ==>|"④ Vertical↓ 派发计算 (RegisterBank ACK/FIN)"| L0
+    L0 -.->|"⑤ ↑ FIN 完成"| L1
+    L1 -.->|"⑥ ↑ 结果上报"| L2
+    L2 -.->|"⑦ ↑ 结果上报"| L3
+    L3 -.->|"⑧ ↑ task.result()"| User
 
+    classDef userc fill:#495057,stroke:#212529,color:#fff;
     classDef root fill:#4C6EF5,stroke:#1E3A8A,color:#fff;
     classDef mid fill:#12B886,stroke:#0B7285,color:#fff;
     classDef leaf fill:#FA5252,stroke:#A61E1E,color:#fff;
-    class rootL,RN root;
-    class midL,MKa,MKb mid;
-    class leafL,L0N leaf;
+    class User userc;
+    class L3,H root;
+    class L2,D mid;
+    class L1,C mid;
+    class L0,AIC,AIV leaf;
 ```
 
-> 读法：**实线粗箭头 = 垂直向下派发 Task，虚线箭头 = 垂直向上回报结果，双向箭头 = 水平同层协作**。每层内部都是同一个 `(Scheduler, Workers[], MemoryScope)` 三元组——这就是"递归"：换一层，只是三元组里"Worker/Memory 是什么"变了。
+> 读图：**实线粗箭头 = 垂直向下派发 Task，虚线箭头 = 垂直向上回报结果，双向箭头 = 水平同层协作**。最顶 Host(ordinal 3)=root 贴用户，最底 Core(ordinal 0)=leaf 贴硬件。每层内部都是同一个 `(Scheduler, Workers[], MemoryScope)` 三元组——这就是"递归"：换一层，只是三元组里"Worker/Memory 是什么"变了（Host 的 Worker 是 Device，Chip 的 Worker 是 AICore）。
 
-### 一次任务的"流动"（从 Python 到 AICore 再回来）
+### 多机扩展：root 上移到 Pod，出现第二处水平通道
 
-垂直通道上的一降一升，串起来就是一次完整调用的生命流。下图自上而下按时间读，就是那种"流动的感觉"：
+多机时在 Host 之上再加一层 **Pod（ordinal 4，此时 root 上移到 Pod）**。Pod 层的 Node ↔ Node 走**水平 RDMA**（如跨卡 all-reduce），纵向仍靠 `REMOTE_SUBMIT` 把分区下发给各 Node：
+
+```mermaid
+flowchart TB
+    subgraph Pod["Pod 层　·　ordinal 4　·　root（多机）"]
+        direction LR
+        N0["Node 0"]
+        N1["Node 1"]
+        N0 <-->|"Horizontal↔ RDMA (all-reduce)"| N1
+    end
+    Below["每个 Node 内部：Host(3) → Device(2) → Chip(1) → Core(0)　（同上主干）"]
+    Pod ==>|"Vertical↓ REMOTE_SUBMIT 分区下发"| Below
+    Below -.->|"↑ REMOTE_COMPLETE 汇总"| Pod
+
+    classDef root fill:#4C6EF5,stroke:#1E3A8A,color:#fff;
+    classDef mid fill:#12B886,stroke:#0B7285,color:#fff;
+    class Pod,N0,N1 root;
+    class Below mid;
+```
+
+### 时间轴视角：同一次流动按"发生先后"读
+
+上面的层次图是**空间结构**，下面的时序图是**同一条流动的时间轴**——自上而下就是"流动的感觉"：
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Py as Python (用户)
-    participant H as Host 层
-    participant D as Device 层
-    participant C as Chip 层
-    participant Core as Core 层 (叶子)
+    participant Py as 👤 Python (用户)
+    participant H as Host (ord 3, root)
+    participant D as Device (ord 2)
+    participant C as Chip (ord 1)
+    participant Core as Core (ord 0, leaf)
     Py->>H: submit(func, tensors)
     H->>D: Vertical↓ 派发 Task (DMA)
     D->>C: Vertical↓ 提交子 Task (SharedMem)
     C->>Core: Vertical↓ 派发计算 (RegisterBank)
-    Note over Core: AICore 执行 kernel
+    Note over Core: AICore 执行 kernel<br/>AIC↔AIV 走水平 TPUSH/TPOP
     Core-->>C: ↑ FIN 完成信号
     C-->>D: ↑ 子任务全部完成
-    D-->>H: ↑ 完成上报
+    D-->>H: ↑ 结果上报
     H-->>Py: task.result() 返回
 ```
 
-> 下压走垂直通道的具体载体逐层不同（DMA → SharedMem → RegisterBank），但**契约统一**：每层都是 `ISchedulerLayer`。这正是"同一套代码适配不同硬件"的体现——详见 [过程视图 §4.2](04-process-view.md)。
+> 下压走垂直通道的载体逐层不同（DMA → SharedMem → RegisterBank），但**契约统一**：每层都实现同一个 `ISchedulerLayer`。这正是"同一套代码适配不同硬件"的根——具体的并发/事件循环见 [过程视图 §4.1–§4.2](04-process-view.md)，物理部署见 [物理视图](05-physical-view.md)。
 
 ---
 
