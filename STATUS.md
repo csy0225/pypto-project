@@ -3,7 +3,22 @@
 pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状态
 变化都更新这里**。历史细节查 [`archive/`](archive/)。
 
-**最后更新**：2026-07-06
+**最后更新**：2026-07-07
+
+> **2026-07-07 stepfun/develop 全仓回归 PASS + 整网集成三大 de-risk（team `vllm-pypto-e2e`）**：
+> 五仓均在 stepfun/develop 线（pypto `be90f992` / pypto-lib `1a6c6342` / pto-isa `e25732f0` /
+> PTOAS `da011a3d` / runtime `1aa6efb4`；fork 远端 stepfun/develop 已是 `1a6c6342`）。
+> ① **MoE-block 8 卡 device 精度回归全 PASS**（`_stage_moe_block_precision --target ffn_out` on-device
+> gate vs vLLM ffn_out，atol=0.04）：L3/L4/L43/L44 覆盖全部 4 个 program-class 变体；红队确认 5 个 MoE
+> 修复无 CRITICAL/HIGH（routed INT8 仅 gate routed、shared BF16；无 silu 回归；无 [N,1]/跨 rank 列读）。
+> ② **整网 45/45 层 COMPILE PASS（Option C 解耦）**：融合 swa_moe 在 L3 编译失败（`attention_swa.py:479`
+> 常量折叠 `pl.full([32−12,HEAD_DIM])`），改用「TP-attention 程序 + `select_moe_block`」解耦，全网编译通过
+> （`/tmp/wholenet_optc_compile.py`）。③ **47.46GiB 单 key IPC = WORKS**（`/tmp/ipc47_probe.py`）：一个
+> `aclrtIpcMemGetExportKey` 覆盖 48GiB、`ImportByKey` 返回同一 VA，零拷贝——解除 live 权重驻留最硬 gate。
+> ④ 整网 dense 前缀 TP=8 **device 运行通过**（L0 full_dense / L1,L2 swa_dense 8 卡 DEVICE PASS，rc=0）。
+> 上游发现：§10 nesting 已解（`pl.submit`/multi-program DistributedWorker #1706，已在 HEAD）；建议 ptoas
+> v0.45→v0.48。**整网 live 端到端对齐仍是多周工程**（离线串联受 dump 缺 KV 限制，真整网精度须 live
+> single-handoff A/B）。详见 memory `project_whole_model_pypto_design.md` 2026-07-07 段。
 
 > **2026-07-06 MoE 单块 8 卡 bring-up**：standalone `EpTpMoE` 8 卡真实 W8A8。
 > ✅ **gate_topk 8 卡死锁（507018/sched=100）真解决** —— 对照 DeepSeek 定位到错误的
