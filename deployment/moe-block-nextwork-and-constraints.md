@@ -32,20 +32,45 @@
 
 ---
 
-## 1. 当前状态（2026-07-06）
+## 1. 当前状态（2026-07-07 更新）
 
 | 项 | 状态 |
 |---|---|
 | gate_topk 8 卡死锁（507018/sched=100） | ✅ 真解决（DeepSeek 式 format1 mrgsort 链） |
 | shared expert 路径数值正确 | ✅ 对 0.12% torch 参考 PASS（含 barrier-mesh tp_all_reduce） |
-| routed 路径精度 | ⏸ **未过，41.8% 符号翻转**，隔离到 `_expert_routed` grouped-GEMM |
-| 全 moe_out vs ffn_out | ⏸ ~41%（由 routed 拖累） |
-| 端到端（whole-decode 串联 / live A/B） | ⏸ 待 routed 精度过后 |
+| routed 路径精度 | ✅ **已解决**（根因=a2a 数据可用性；symmetric fixed-slot 布局修复；device local_routed_x/y/routed_y_buf 全 0.00%） |
+| 全 moe_out vs ffn_out（silu 层 L3/L4） | ✅ **PASS**（on-device gate + shared+routed vs vLLM ffn_out，ratio_allclose atol=0.04；L3 swa_moe / L4 full_moe device PASS） |
+| swiglu 层 L43 (swiglu7_silu) 精度 | ✅ **PASS**（routed per-token INT8 量化 interm+input；device moe_out vs vLLM ffn_out ratio_allclose atol=0.04；commit `3b236e6`；见 §6） |
+| swiglu 层 L44 (swiglu7_swiglu16) 精度 | ✅ **PASS**（两个叠加 bug 均已修：① shared swiglu16 clamp 在整宽 `[16,160]` Vec tile 上被误编译→拆 5 个窄 `[16,32]` chunk，commit `ca5e0b8`；② **gate router_bias FP32-vs-BF16 dtype**——vLLM 用 BF16 跑 router_bias，loader 给 FP32，bias~4.79 主导分数、其 ~0.015 BF16 舍入决定 top-8 尾部→在 gate 内 BF16 round，commit `5b85b34`。device full ffn_out on-device gate PASS 19.22s；CPU topk(sigmoid+BF16(bias))==vLLM 0/16。**非 kernel/sort/precision bug**——vbitsort 是 FP32-exact，gate_w/logits/recovery 全对） |
+| gate on-device 精度（全 MoE 层）| ✅ **PASS**（router_bias BF16 修复后：L44 swiglu16 PASS、L43 swiglu7 PASS(21.10s，之前 15%)；silu 层回归验证中）。教训：所有 kernel 侧改动 byte-identical 时，应怀疑**错误的输入**（dtype/加载），而非 kernel。 |
+| 端到端（whole-decode 串联 / live A/B） | ⏸ 剩余多周工程（live KV-IPC + 权重驻留 + single-handoff backend），且依赖两条分叉分支的合并决策 |
 
-代码：`csy0225/pypto-lib` 分支 `wip/moe-gate-fix-20260706`（commit 956aede）。
-harness：`pypto-lib/_stage_moe_block_precision.py`（`--bypass-gate`/`--torch-golden`/
-`--zero-routed`/`--zero-shared`/`--target moe_parts_shared|moe_parts_routed`）。
-可信参考：torch BF16（对 vLLM `ffn_out` 差 0.12%）。
+### ⭐ 2026-07-07 routed 精度根因 + 修复（device 验证）
+- **根因（device INT32 offset dump 确认，非之前猜测的 if-predicate）**：`pub_counts` 只把
+  count-to-dst 通过 `notify(Set)` publish 到目标 rank dst 的 window → 每个 rank 本地只有
+  column-my_rank 有效；`ep_all_to_all` 的 `read_offsets = Σ_{d<my_rank} pub_counts[peer*N+d]`
+  累加了 column d<my_rank（在 rank≠0 上全为 0）→ 接收方从 peer 的 send_buf row 0 读取 →
+  rank≠0 拿到错误 token。rank0 因空和恰好正确，掩盖 bug 多个会话（历次验证都只看 rank0）。
+- **附带确认的两个 pypto/Ascend 行为**：bare-index `pl.read(arr,[my_rank])` 正常工作；
+  `pl.cast(<bool 比较>, INT32)` 在 Ascend 上 TRUE = **−1**（不是 +1，全 1 符号扩展）。
+- **修复**：symmetric fixed-slot a2a 布局（send dst-block @ `dst*MAX`，recv src-block @ `src*MAX`，
+  pull 读 peer @ `my_rank*MAX`，`MAX=T*TOPK=128`，`LOCAL_RECV_MAX=8*128` 精确）。`read_off` 为
+  compound-scalar，**不依赖任何 cross-rank column 数据**。全部索引为 loop-var 或 compound-scalar。
+  含此前 expert-GEMM fillpad+full-tile 修复。
+- **验证（gpu-a910x-0162，8 卡 real W8A8）**：L3(swa_moe) / L4(full_moe) `moe_out` vs vLLM `ffn_out`
+  DEVICE PASS（on-device gate mrgsort，非 bypass）。
+- **提交**：`moe.py` commit `e82958c`（base 956aede），推送至 `csy0225/pypto-lib` 分支
+  **`wip/moe-symmetric-a2a-fix-20260707`**（bundle→本地→PAT/HTTPS）。
+- **⚠ 分支分叉（需决策）**：fork `stepfun/develop`（`63dee39`）走的是 co-resident per-rank worker 路线
+  （8 commits，含 pypto_moe_backend / pypto_mlp_worker routed op / MoE routed backend hook，
+  merge-base `2df96138`）；0162 这条（956aede: gate mrgsort + expert kernel + a2a 修复）是 EpTpMoE
+  MoE-block / Option-C 路线。两者互非祖先，**未 force-push**（推到新分支避免覆盖）。live 集成所需
+  backend/worker infra 在 fork 那条线上 → **live 整网集成前需先合并两条线（用户决策）**。
+
+代码：`csy0225/pypto-lib` 分支 **`stepfun/develop` = `bb9e683`**（2026-07-07 推送）——已把验证过的 swiglu L43 修复（commit `3b236e6`：routed input+intermediate per-token INT8 动态量化）**合并**到 backend/worker 线（`9336133` = 含 `pypto_moe_backend`/`pypto_mlp_worker` live 集成 infra 的 `63dee39` merge）之上。**两条线已合并、无丢失**（文件不相交：`moe.py` vs `tools/step3p5/*`，merge-base=`e82958c` a2a 修复，clean FF 推送非 force）。分支分叉决策已由用户拍板解决。
+harness：`pypto-lib/_stage_moe_block_precision.py`（`--target ffn_out` on-device gate 全量验收；
+`--bypass-gate`/`--torch-golden`/`--zero-routed`/`--zero-shared`/`--dump-stages` 诊断）。
+可信参考：vLLM `ffn_out` dump（device 全量验收）+ torch BF16（对 ffn_out 差 0.12%）。
 
 ---
 
@@ -100,3 +125,80 @@ token 级对齐（temp=0 多 prompt）。
 本会话 gate_topk 死锁真解决、shared 验证正确并入库；**routed 精度（41.8%）未通过**，
 是已隔离的 open item（不是伪造通过）。端到端与整网 live A/B 依赖 routed 精度先过。
 下一步（逐级 dump）确定、无重复工作、符合全部用户约束。
+
+---
+
+## ⭐ 5. 2026-07-07 会话 — 根因确认 + 下次 SESSION 直接从这里开始
+
+**用系统性「逐 rank × 逐 stage 设备 dump」把多会话遗留的 MoE routed ~41% bug 确定性定位到单一阶段。**
+
+### 已确定修复 ✅（rank0 设备验证，production-ready）
+**专家 grouped-GEMM**：根因 = `_expert_routed` gate_up matmul 在 partial tile（tile_valid<RECV_TILE=32）上用**动态 `valid_shape`** → Ascend cube 16×16 fractal 把无效行混进有效行。
+- **修法（DeepSeek 对齐，纯 model 侧）**：去掉 4 个 matmul 输入 slice 的 `valid_shape=[tile_valid,...]`（读满 32 行）+ gate_up 加 `gated_m = pl.fillpad(gated_v, zero)`（新变量，不能重赋 gated_v）。
+- 结果：rank0 `local_routed_y` **0.00%**，`moe_out` 41%→26%。stage 在 `0162:/tmp/apply_expert_fix.py`（应用到 clean baseline）。
+
+### 🎯 真正根因（唯一剩余 blocker）
+**`ep_all_to_all`（moe.py:305-382 的 a2a pull）对「非 0 号接收卡」投递错 token**（rank0 对，rank≠0 错）。
+证据（layer3, --bypass-gate, --zero-shared --torch-golden, cards 8-15）：
+
+| stage | rank0 | rank1 |
+|---|---|---|
+| `recv_x`（a2a 输出，re-pack 前） | **0.00% 对**（验证了 ref 布局） | **68% 错** ← 根因 |
+| `local_routed_x`（re-pack 后） | 0.00% 对 | 68% 错（传播） |
+| `local_routed_y`（专家） | 0.00% 对 | 19% 错（传播） |
+| `routed_y_buf`（combine push） | self 0/20 对 | cross 90/108 错（传播） |
+
+**逐一排除**（全设备验证 no-op）：re-pack、专家 compute、combine（CORE_GROUP fence / put-vs-remote_store / zero-race / gather）、cross-store、src_route_table 3D→2D、DeepSeek combine 重写、上游 combine。就是 **rank≠0 的 a2a pull**。`ep_all_to_all` 的偏移公式（recv_offsets prefix-sum / read_offsets=Σ_{d<my_rank} peer→d / self-copy）逐行看都是 my_rank-无关正确 → 很微妙的 `my_rank≠0` codegen/runtime bug（同「看起来对、设备错」类）。
+
+### 下次 SESSION 直接从这里开始（低上下文最稳妥）
+1. **环境**：`ssh infra@gpu-a910x-0162...`；`cd $WS/pypto-lib`（WS=/data/chensiyu/hw_project/pypto/workspace）；`source /usr/local/Ascend/cann/set_env.sh && source $WS/activate.sh && export PTO_ISA_ROOT=$WS/pto-isa && export PYTHONPATH=$WS/pypto/python:$WS/pypto-lib`。cards 8-15 空闲，0-7 是 8000 oracle。**每次 device run 前 frontend-smoke `select_moe_block(3)`**（免卡，省 5 分钟权重加载）。
+2. **决定性下一步**：把 rank1 的 `recv_counts / recv_offsets / read_offsets / send_offsets_rank` 作为 **INT32 dump 输出**（仿 harness 现有 per-rank dump 模式），对比手算期望 → 看运行时**确切的错误偏移值**。
+   - 偏移值错 → 修 `dispatch_step`(moe.py 857-930)/`ep_all_to_all`(305-382) 的计算。
+   - 偏移值对但 recv_x 仍错 → `pld.tile.remote_load` 对 rank≠0 mis-deliver = **上游 pypto/simpler bug**，提 issue（最小复现 = 这个 harness）。
+3. 修好 a2a → 所有 rank `local_routed_x` 正确 → `local_routed_y` 正确（专家修复已验证）→ `moe_out` 通过 → **MoE 块精度闭环** → 推进整网集成（whole-decode 串联 + vLLM single-handoff）。
+
+### 关键工件（都在 0162）
+- **harness**：`_stage_moe_block_precision.py` 已插桩 `--dump-stages`：per-rank dump `recv_x`/`local_routed_x`/`local_routed_y`/`routed_y_buf` + `_mk_cmp(rank=, permcheck=)` best-match + BAD-ROW-SPLIT(self/cross)。参考布局都已在 rank0 验证（recv_x/local_routed_x rank0 = 0%）。
+- **moe.py**：expert-fix + 4 个 dbg 输出（dbg_routed_x/y/ybuf/recv_x）。backups：`/tmp/moe.py.bak_prezerorm`（clean expert-fix，无 dbg）、`.bak_spillfix`（干净基线）、`.bak_prerecvx` 等。
+- **完整证据 + 复现 + 每一步 dump 结果**：memory `moe_routed_bug_expert_partial_tile.md`（含 START HERE 段）+ backlog `task #4`。
+- **agent team** `vllm-pypto-e2e`（reverse-review / hw-analyst / sw-analyst / upstream-scout）本会话产出：hw-analyst 的 cube fractal 机制（解开专家 bug）、sw-analyst 的 vllm_routed_experts + a2a 对称性分析、reverse-review 的 combine 审计、upstream-scout 的 pypto #1588。team session-scoped，下次重开。
+
+### 诚实边界
+MoE 块精度**未闭环**（a2a rank≠0 bug 待修），整网集成**未开始**（依赖此）。专家修复已确定。根因已确定性定位到单一阶段（ep_all_to_all a2a-pull for rank≠0），下一步明确（INT32 offset dump）。
+
+---
+
+## ⭐ 6. 2026-07-07（下半会话）— swiglu 层 L43/L44 精度 = routed 专家漏 per-token INT8 动态量化
+
+> a2a routed bug 解决后，遗留 swiglu 变体层精度不对齐 vLLM。本节记录根因 + 修复 + device 证据。
+
+### 根因（device 确认，非 clamp kernel bug）
+- **不是 clamp bug**：device clamp == BF16-clamped-torch（L43 `--torch-golden --zero-shared --bypass-gate` `moe_out` PASS）。公式 `silu(gate).clamp(max=7)*up.clamp(±7)` 在 pypto device / torch / vLLM-ascend `SwigluStepAndMul` 三处逐字一致。
+- **真因**：pypto routed 专家**漏了 vLLM W8A8 oracle 的 per-token INT8 动态量化**。oracle（`quant_apply_mlp` else 分支，`w1_offset` 未 thread → 非 antiquant）对 **输入 x 和 clamp 后的中间激活都做 `npu_dynamic_quant`**（per-token amax/127, round, ±127, dequant），再走 INT8 gmm。pypto 只做 FP32 silu/clamp → BF16 → BF16 matmul，两处量化都缺。
+- **为何 silu 层过、swiglu 挂**：silu（40/42 层）中间激活分布平滑，INT8≈BF16，量化无损；swiglu 被 clamp 到 ±7 后是双峰分布（少数 ~±49、大量小值），per-token scale≈0.386 把小值量化成 0 → 27%+ 偏差，在 output ch4094 汇聚成尖峰（max\|diff\|=162）。
+- **铁证**：pypto 自己的 `_moe_ref_dynamic(routed_w8a8_dynamic=True)`（量化 input+interm）对齐 vLLM ffn_out 到 **0.9995**（全 45 层含 L43/L44）。
+
+### ⚠ 只量化 routed，**shared 专家不量化**（ckpt 验证 + 用户确认）
+W8A8 index.json：`layers.{43,44}.share_expert.{gate,up,down}_proj.weight` = 3 keys、**0 个 scale/offset → 纯 BF16 无量化**；routed 专家 1728 个 scale/offset → W8A8。所以 shared（Step3p5MLP，独立于 FusedMoEBlock）**不做动态量化**，保持 clamp(swiglu16)+BF16（现状正确）。**不要给 shared 加量化**。
+
+### swiglu 位置 + 中间 dtype（对齐 vLLM）
+swiglu 夹在 gate_up（up）与 down 之间：`x → gate_up → swiglu → h → down`。vLLM：swiglu 本身 **BF16** 算，输出 h 再**量化成 INT8** 喂 down（INT8 gmm）。pypto：silu/clamp 用 FP32→BF16(h_bf16)，再 per-token 量化到 INT8 精度→反量化回 BF16→BF16 down（权重两边都反量化，等价；对齐 `_moe_ref_dynamic` 已验证 0.9995）。
+
+### 修复（`moe.py` `_expert_routed`，DeepSeek `expert_routed.py:132-151` 模式）
+- **interm-quant**（clamp 后中间激活）：`pl.spmd` **over tokens**（不能用 CORE_GROUP 读 vec bridge → 94.5% 乱码）；per-token amax over 全 INTER=1280；`pl.cast(x*127/amax, INT32, mode="rint")`（不能用 cast-to-INT8-round）；dequant→BF16。gated by 编译期 `_routed_swiglu_step`。
+- **input-quant**（gate_up 前）：预算 per-token scale `[RECV_TILE,1]`（amax over HIDDEN，token-spmd），gate_up K-loop 内 on-the-fly 量化 x（materialize x_q[32,4096]=256KB 会爆 UB 188KB）。scale create_tensor 必须在 tile 级（同 h_bf16），否则 SSA "used outside defining scope"。
+- 关键坑：`[N,1]` scale 用 reduction 产出（`row_max`+reshape）+ `row_expand_mul` 广播（RMSNorm/FA 已验证安全），不用 slice 出 `[N,1]`（撞 32B 对齐 fault）。
+
+### device 证据（L43 `--target ffn_out --bypass-gate`，cards 8-15）
+| 版本 | bad ratio | max\|diff\| |
+|---|---|---|
+| 基线（无量化） | 27.6% | 162 @ch4094 |
+| v1/v2（CORE_GROUP + cast-INT8-round，两个 bug） | 94.5% | 乱码 |
+| v3（interm-quant，spmd-over-tokens + INT32-rint） | **15.86%** | **2** ← 尖峰消除 |
+| 隔离（device interm-q vs torch interm-q，routed） | **PASS** | — device 量化逻辑正确 |
+| + input-quant（完整修复） | device 验证中 | — |
+
+### 下一步
+- L43 完整修复过 → L44（同 routed 修复 + shared 不量化，无需改代码）→ 整网串联 + vLLM handoff。
+- 卡免 codegen 探针（省 5 分钟权重加载）：`ir.compile(select_moe_block(43), backend_type=_backend_for_platform("a2a3"), platform="a2a3")`。
+- backups：`/tmp/moe.py.bak_predynquant`（clean 基线）、`.bak_preinputquant`（仅 interm-quant）。memory `moe_swiglu_missing_int8_requant.md`。
