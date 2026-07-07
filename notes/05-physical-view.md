@@ -90,11 +90,6 @@ mindmap
         组装Layer Stack
         peer发现:配置文件/gossip
         多租户Logical System隔离
-
-classDef topo fill:#4C6EF5,stroke:#1E3A8A,color:#fff,font-weight:bold;
-classDef net fill:#12B886,stroke:#0B7285,color:#fff,font-weight:bold;
-classDef scale fill:#FA5252,stroke:#A61E1E,color:#fff,font-weight:bold;
-classDef avail fill:#BE4BDB,stroke:#6B2178,color:#fff,font-weight:bold;
 ```
 
 ---

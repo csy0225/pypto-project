@@ -100,15 +100,74 @@ mindmap
         producer_index生命周期
         非别名不变量
         v1仅RAW
-
-classDef foundation fill:#4C6EF5,stroke:#1E3A8A,color:#fff,font-weight:bold;
-classDef contract fill:#12B886,stroke:#0B7285,color:#fff,font-weight:bold;
-classDef assembler fill:#FA5252,stroke:#A61E1E,color:#fff,font-weight:bold;
-classDef spec fill:#BE4BDB,stroke:#6B2178,color:#fff,font-weight:bold;
 ```
 
 > 颜色约定（贯穿全笔记）：🔵 **地基层** ｜ 🟢 **契约层/扩展点** ｜ 🔴 **装配层** ｜ 🟣 **规格层**。
-> 若你的 markdown 渲染器不支持 `::icon`（需要 Font Awesome），图标会被忽略但结构与配色不受影响。
+> 若你的 markdown 渲染器不支持 `::icon`（需要 Font Awesome），图标会被忽略但结构与配色不受影响；mindmap 会自动给各分支上色。
+
+---
+
+## 🔀 层次结构 · 垂直通道 vs 水平通道
+
+抽象机器把执行层摞成一个 **Layer Stack**。层与层、层内实例之间靠两种正交的通道通信——这就是文档说的"分成垂直和水平两个方向"：
+
+- **垂直通道 `IVerticalChannel`（父 ↔ 子）**：上层把 **Task 往下压**（提交/派发），下层把 **结果/完成往上报**。一降一升，构成主干数据流。
+- **水平通道 `IHorizontalChannel`（兄弟 ↔ 兄弟）**：同一层的实例之间协作，如 all-reduce、Core 间的 TPUSH/TPOP。它不改变层级，只在同层横向流动。
+
+```mermaid
+flowchart TB
+    subgraph rootL["🔵 L_N 根层 (root)"]
+        RN["Scheduler ─ Workers[ ] ─ MemoryScope"]
+    end
+    subgraph midL["🟢 L_k 中间层 (兄弟实例并列)"]
+        direction LR
+        MKa["实例 A<br/>Scheduler ─ Workers[ ] ─ MemoryScope"]
+        MKb["实例 B<br/>Scheduler ─ Workers[ ] ─ MemoryScope"]
+        MKa <-->|"Horizontal↔ 同层协作<br/>(all-reduce / TPUSH-TPOP)"| MKb
+    end
+    subgraph leafL["🔴 L_0 叶子层 (leaf)"]
+        L0N["Dispatcher ─ Workers[ ] ─ MemoryScope"]
+    end
+
+    rootL ==>|"Vertical↓ 提交 Task"| midL
+    midL ==>|"Vertical↓ 提交 Task"| leafL
+    leafL -.->|"↑ 完成 / 结果上报"| midL
+    midL -.->|"↑ 完成 / 结果上报"| rootL
+
+    classDef root fill:#4C6EF5,stroke:#1E3A8A,color:#fff;
+    classDef mid fill:#12B886,stroke:#0B7285,color:#fff;
+    classDef leaf fill:#FA5252,stroke:#A61E1E,color:#fff;
+    class rootL,RN root;
+    class midL,MKa,MKb mid;
+    class leafL,L0N leaf;
+```
+
+> 读法：**实线粗箭头 = 垂直向下派发 Task，虚线箭头 = 垂直向上回报结果，双向箭头 = 水平同层协作**。每层内部都是同一个 `(Scheduler, Workers[], MemoryScope)` 三元组——这就是"递归"：换一层，只是三元组里"Worker/Memory 是什么"变了。
+
+### 一次任务的"流动"（从 Python 到 AICore 再回来）
+
+垂直通道上的一降一升，串起来就是一次完整调用的生命流。下图自上而下按时间读，就是那种"流动的感觉"：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Py as Python (用户)
+    participant H as Host 层
+    participant D as Device 层
+    participant C as Chip 层
+    participant Core as Core 层 (叶子)
+    Py->>H: submit(func, tensors)
+    H->>D: Vertical↓ 派发 Task (DMA)
+    D->>C: Vertical↓ 提交子 Task (SharedMem)
+    C->>Core: Vertical↓ 派发计算 (RegisterBank)
+    Note over Core: AICore 执行 kernel
+    Core-->>C: ↑ FIN 完成信号
+    C-->>D: ↑ 子任务全部完成
+    D-->>H: ↑ 完成上报
+    H-->>Py: task.result() 返回
+```
+
+> 下压走垂直通道的具体载体逐层不同（DMA → SharedMem → RegisterBank），但**契约统一**：每层都是 `ISchedulerLayer`。这正是"同一套代码适配不同硬件"的体现——详见 [过程视图 §4.2](04-process-view.md)。
 
 ---
 

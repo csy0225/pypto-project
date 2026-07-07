@@ -103,11 +103,6 @@ mindmap
         CREATED→CONFIGURED
         INITIALIZED→RUNNING
         DRAINING→FINALIZED→DESTROYED
-
-classDef concurrency fill:#4C6EF5,stroke:#1E3A8A,color:#fff,font-weight:bold;
-classDef fsm fill:#12B886,stroke:#0B7285,color:#fff,font-weight:bold;
-classDef dist fill:#FA5252,stroke:#A61E1E,color:#fff,font-weight:bold;
-classDef budget fill:#BE4BDB,stroke:#6B2178,color:#fff,font-weight:bold;
 ```
 
 ---

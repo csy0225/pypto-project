@@ -83,11 +83,6 @@ mindmap
         trace事件模型
         分布式trace关联
         仅依赖hal/
-
-classDef foundation fill:#4C6EF5,stroke:#1E3A8A,color:#fff,font-weight:bold;
-classDef mid fill:#12B886,stroke:#0B7285,color:#fff,font-weight:bold;
-classDef top fill:#FA5252,stroke:#A61E1E,color:#fff,font-weight:bold;
-classDef cross fill:#BE4BDB,stroke:#6B2178,color:#fff,font-weight:bold;
 ```
 
 ---
