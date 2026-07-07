@@ -144,14 +144,10 @@ flowchart TB
         AIC <-->|"Horizontal↔ TPUSH / TPOP"| AIV
     end
 
-    User ==>|"① submit"| L3
-    L3 ==>|"② Vertical↓ 派发 Task (DMA Control)"| L2
-    L2 ==>|"③ Vertical↓ 提交子 Task (SharedMemory)"| L1
-    L1 ==>|"④ Vertical↓ 派发计算 (RegisterBank ACK/FIN)"| L0
-    L0 -.->|"⑤ ↑ FIN 完成"| L1
-    L1 -.->|"⑥ ↑ 结果上报"| L2
-    L2 -.->|"⑦ ↑ 结果上报"| L3
-    L3 -.->|"⑧ ↑ task.result()"| User
+    User ==>|"① submit　▽下压　／　⑧ △ task.result()"| L3
+    L3 ==>|"② ▽ 派发 Task (DMA)　／　⑦ △ 上报结果"| L2
+    L2 ==>|"③ ▽ 提交子 Task (SharedMem)　／　⑥ △ 上报结果"| L1
+    L1 ==>|"④ ▽ 派发计算 (RegisterBank)　／　⑤ △ FIN 完成"| L0
 
     classDef userc fill:#495057,stroke:#212529,color:#fff;
     classDef root fill:#4C6EF5,stroke:#1E3A8A,color:#fff;
@@ -162,9 +158,10 @@ flowchart TB
     class L2,D mid;
     class L1,C mid;
     class L0,AIC,AIV leaf;
+    linkStyle default stroke:#868E96,stroke-width:2px,color:#111111,font-weight:bold;
 ```
 
-> 读图：**实线粗箭头 = 垂直向下派发 Task，虚线箭头 = 垂直向上回报结果，双向箭头 = 水平同层协作**。最顶 Host(ordinal 3)=root 贴用户，最底 Core(ordinal 0)=leaf 贴硬件。每层内部都是同一个 `(Scheduler, Workers[], MemoryScope)` 三元组——这就是"递归"：换一层，只是三元组里"Worker/Memory 是什么"变了（Host 的 Worker 是 Device，Chip 的 Worker 是 AICore）。
+> 读图：图**从上到下 = 从用户到硬件**，最顶 Host(ordinal 3)=root 贴用户，**最底 Core(ordinal 0)=leaf 贴硬件**。每条垂直主干边同时承载两个方向——**▽ = 向下压 Task（提交/派发），△ = 向上报结果/完成**；编号 ①→⑧ 是完整流动顺序（下行 ①→④，上行 ⑤→⑧）。Core 内 `AIC ↔ AIV` 的双向箭头 = 水平同层协作。每层内部都是同一个 `(Scheduler, Workers[], MemoryScope)` 三元组——这就是"递归"：换一层，只是三元组里"Worker/Memory 是什么"变了（Host 的 Worker 是 Device，Chip 的 Worker 是 AICore）。
 
 ### 多机扩展：root 上移到 Pod，出现第二处水平通道
 
@@ -179,13 +176,13 @@ flowchart TB
         N0 <-->|"Horizontal↔ RDMA (all-reduce)"| N1
     end
     Below["每个 Node 内部：Host(3) → Device(2) → Chip(1) → Core(0)　（同上主干）"]
-    Pod ==>|"Vertical↓ REMOTE_SUBMIT 分区下发"| Below
-    Below -.->|"↑ REMOTE_COMPLETE 汇总"| Pod
+    Pod ==>|"▽ REMOTE_SUBMIT 分区下发　／　△ REMOTE_COMPLETE 汇总"| Below
 
     classDef root fill:#4C6EF5,stroke:#1E3A8A,color:#fff;
     classDef mid fill:#12B886,stroke:#0B7285,color:#fff;
     class Pod,N0,N1 root;
     class Below mid;
+    linkStyle default stroke:#868E96,stroke-width:2px,color:#111111,font-weight:bold;
 ```
 
 ### 时间轴视角：同一次流动按"发生先后"读
