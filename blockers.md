@@ -125,6 +125,23 @@ Blocker 解决时，**删掉本文件里这一节**，到
 
 **下一步**：worker Option-C MoE step 补 post_rms + FP32 residual（C1/C2）→ N≤5 跑 silu 层子集真权重数值对齐 → 补 swiglu 层 → 全 45 层 → vLLM handoff。或先根因 N≥6 墙（sw-analyst 查阈值可调性 + 分批 create/close 可行性）。
 
+### 2026-07-08 续5 — dispatch 阈值实测 + sw-analyst 根因 + 完整 batched 计划
+
+**device 实测（8卡 cards 8-15，131072 ring tier）**：
+- **N=6（6 distinct, 7 steps, L0-4）→ dispatch OK rc=0** ✅
+- **N=8（45 层, 8 distinct, 87 steps）→ PREPARE OK（131072 修好 prepare OOM）但 DISPATCH 首步 507018** ❌
+- → **dispatch 墙在 6~8 之间**（N=6 通，N=8 挂）；ring tier 修好 prepare 但**修不了 dispatch**。
+
+**sw-analyst 根因（`worker.py:1971-2121`）**：N≥threshold dispatch wedge = **co-prepare fork-then-prewarm 协议的结构性 race**（非可调 limit；MAX_REGISTERED_CALLABLE_IDS=64 远够）。首次 `run()` 后 N 个程序的 pre-warm `_CTRL_PREPARE` fan-out 与 dispatch 的 `TASK_READY` race → chip child 没推进 → task 不到 AICPU → `TaskMapSize=0` → 60s timeout → 507018。**根 fix = pre-warm loop 加 per-chip prepare-ack barrier + timeout**（上游 simpler runtime）。
+**batched co-prepare VIABLE（sw-analyst 代码确认）**：`create→prepare≤5→run→close→recreate` 可行（chip child 在 close 时 reaped，per-process statics 随 child 死，无全局阻塞）；坑：批间 `close()+del+gc.collect()` 先 reap 再 fork（memory `feedback_verify_processes_killed_before_launch`）。
+
+**⭐ 完整 whole-decode 计划（全 root-caused，无 research 剩余，纯实现）**：
+1. **dispatch**：batched Option-C，每批 distinct ≤6。真模型 activation 分布：silu 主导（~40 层）+ swiglu7_silu(L43) + swiglu7_swiglu16(L44)。批1 = {full_dense, swa_dense, attn_full, attn_swa, moe_silu}=5 distinct 跑 L0-42；批2 = {attn+moe_swiglu 变体} 跑 L43,L44。host 跨批串 residual（BF16 bit-exact）。
+2. **numerical handoff（reverse-review C1/C2）**：Option-C MoE step 补 post-attention RMSNorm（moe_block 收 normed x，attn 出 un-normed resid1）+ FP32 residual add（`next_hidden=resid1+moe_out`）。清洁做法 = 扩 EpTpMoE 自带 norm+residual（mirror fused DecodeLayerMoE post-attn 段 `decode_layer.py:2726/2844` + `_dense_mlp_body_tp`），不加 distinct program。
+3. 真权重 golden vs vLLM（silu 子集先，再全）。
+4. vLLM single-handoff + live A/B。
+attention 用 original（fused 重写非所需，存 /tmp 备 fused 若未来修 fork-prewarm race）。
+
 ---
 
 ## 0. Phase 20 production backend 未接入
