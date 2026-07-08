@@ -91,6 +91,21 @@ Blocker 解决时，**删掉本文件里这一节**，到
 
 **Owner**：team-lead（决策 fused vs per-layer；sw-analyst 查 swa 重写、hw-analyst 查 arena/HBM budget、upstream-scout 已交付）。
 
+### 2026-07-08 续3 — ⭐ 决定性答案：DeepSeek 不 fuse attention+MoE，用 separate programs（fused 是错的结构）
+
+**用户问「DeepSeek 不是这样实现的么？他们没这个问题？区别是什么」→ agent 深挖纠正了前提**：
+- **DeepSeek V4 根本不 fuse attention+MoE**。`models/deepseek/v4/moe_ep.py:175-234` 的 decode host_orch **只有 MoE**（hc_pre→gate→shared→dispatch→routed→combine→hc_post，无 attention）；attention 是 `@pl.jit.inline` sub-kernel（`decode_attention_swa.py`），**无 host_orch**；V3_2 把 decode 拆成**独立的 `decode_front`(attention) + `decode_back`(MoE) 两个 program**。**DeepSeek 把 attention 和 MoE 当两个独立 program 跑——所以它没这个问题。**
+- **区别**：step3p5 的 fault 来自把 **TP-attention + EP-MoE fuse 进一个 `chip_orch`**（`decode_layer.py:2629-2860`，11 个 TP+EP 混合 comm window），DeepSeek 从不这么做。TP attention 需要 `tp_all_reduce` collective + EP MoE 需要 a2a——两种 collective 协议塞进一个 program 的 host_orch，pass37 comm-domain + inline-attention 交互 → host_orch 产 0 个 chip task → `TaskMapSize=0` / 507018。
+
+**device 证据（8卡 cards 8-15，two-method）**：`full_silu_silu --two-method` **`next_hidden_out` PASS**（ratio_allclose atol=0.04；`h_mid_out FAIL` 是 Phase 25 已记录的 benign readback artifact，非 bug）；`swa_silu_silu --two-method` **507018**（swa-specific dispatch fault，dispatched 8 chip 但 runtime fault）。→ two-method（一个 program 两 method）对 full 通、对 swa 挂；但**真正对的结构是 DeepSeek 的 separate programs**。
+
+**⭐ 修正后的 whole-model 路径（mirror DeepSeek，收敛所有发现）**：
+- **用 Option-C 解耦**（step3p5 已有）：`_build_tp_attention_{swa,full}_program`（独立 TP-attention program）→ resid1 经 GM → `select_moe_block`（独立 moe_block program）。**两个独立 program**，正好 mirror DeepSeek 的 decode_front/decode_back。
+- **两部分都已单独 dispatch 通**：swa_dense/TP-attention 8卡 ✓（本会话证），moe_block 8卡 ✓（memory）。**且用 original attention 即可**——`_build_tp_attention_swa_program` 用 original attention_swa 早就 COMPILE PASS（2026-07-07 Option-C 45/45）；valid_shape EP symbolize 只在 **fused** swa_moe 触发，standalone TP-attention 不触发。**→ 我的 fused-swa-moe 重写不是整网路径所需**（fused 是错结构；重写是探索 fused 时的产物，保留在 /tmp，可留作 fused 若未来需要）。
+- **whole-model 真正 blocker = Option-C 45 层的 co-prepare dispatch = blocker-1**（N=8 co-prepare PREPARE 已解 ring-sizing，DISPATCH 在 N≥6 wedge）。整网集成收敛到**单一 blocker：Option-C 多程序 co-prepare 的 host→AICPU dispatch（blocker-1）**。
+
+**下一步**：(a) 根因 blocker-1 co-prepare N≥6 dispatch（host→AICPU，同 `TaskMapSize=0` family）——或 (b) 分批 co-prepare（≤5/批，host 侧跨批串 residual，作为 validation-first 权宜）跑通 Option-C 45 层整网 → 数值对齐 vs vLLM → 接 single-handoff。attention 用 original（不需 fused 重写）。
+
 ---
 
 ## 0. Phase 20 production backend 未接入
