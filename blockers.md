@@ -106,6 +106,25 @@ Blocker 解决时，**删掉本文件里这一节**，到
 
 **下一步**：(a) 根因 blocker-1 co-prepare N≥6 dispatch（host→AICPU，同 `TaskMapSize=0` family）——或 (b) 分批 co-prepare（≤5/批，host 侧跨批串 residual，作为 validation-first 权宜）跑通 Option-C 45 层整网 → 数值对齐 vs vLLM → 接 single-handoff。attention 用 original（不需 fused 重写）。
 
+### 2026-07-08 续4 — ⭐ 真根因轴 = distinct-program 个数 N（用户调研 + 定位），Option-C dispatch 验证 + 数值 handoff 要求
+
+**用户调研纠正根因轴**：不是"per-layer vs 融合"，而是 **distinct program 个数 N**。两种 multi-program：
+- **A 复用型（DeepSeek）**：只编几个 distinct block-type program（v3.2 front+back=2；v4 attn/moe_ep/lm_head≈4-6），同一 compiled program 按层反复 `rt.run`，**per-layer 权重走 runtime tensor 参数（不 bake 进编译）** → N=block-type 数=2~6，永远 <6 墙。
+- **B 一层一程序（step3p5 初版）**：每层 co-prepare distinct program（45×(attn+moe)≈87）→ N 线性爆 → N≥6 死锁。
+
+**代码确认**：step3p5 activation 是**编译期 baked**（`decode_layer.py:1918-1946` 模块级 `_routed/_shared_swiglu_step` 布尔；注释：inline `pl.if_` 在 @pl.program body 不支持）→ 4 MoE 变体=4 distinct program。dedup 后 N≈7-8（full_dense/swa_dense/attn_full/attn_swa + 3 activation MoE block），仍 >6。
+
+**device 验证（8卡 cards 8-15，`_stage_whole_decode_run --worker`）**：Option-C 链 **N=4（L0,1,3）PREPARE OK + all 4 steps dispatched + rc=0** ✅（synthetic）；N=5 验证中。→ Option-C 多层链在 N<6 时 dispatch 通。
+
+**⭐ reverse-review：Option-C MoE handoff 数值要求（现 worker 缺，synthetic 0.0 没暴露）**：
+- **C1 CRITICAL**：standalone `select_moe_block`(EpTpMoE) 收**已 norm 的 x**，但 standalone attention program 输出**未 norm 的 resid1** → worker 直接喂 resid1 **跳过 post-attention RMSNorm** → router/expert 输入差 RMS 因子。修：worker 在 attn→moe 间加 post_rms（或扩 EpTpMoE 自带 norm，像 `_dense_mlp_body_tp`）。
+- **C2 CRITICAL**：standalone moe_block 返回 `moe_out`（routed+shared）**不含 residual** → worker 须 `next_hidden = resid1 + moe_out`（**FP32** add，对齐 fused 的 FP32 accumulate）。
+- **H2**：standalone moe_block **有 W8A8 routed-input INT8 quant 修复**（commit 3b236e6），fused 版没有 → W8A8 下 Option-C(standalone) 反而更对。dense 层 handoff 正确（自带 norm+residual）；shape/dtype/align 干净；跨批 BF16 residual copy bit-exact。
+
+**完整路径（全 mapped）**：(1) **dispatch**：N<6（Option-C reuse；silu 层 N=5，swiglu 2 层分批或收 activation-runtime）；(2) **numerical**：Option-C MoE handoff 加 post_rms + FP32 residual（C1/C2）；(3) 真权重 golden vs vLLM；(4) vLLM single-handoff。attention 用 original。
+
+**下一步**：worker Option-C MoE step 补 post_rms + FP32 residual（C1/C2）→ N≤5 跑 silu 层子集真权重数值对齐 → 补 swiglu 层 → 全 45 层 → vLLM handoff。或先根因 N≥6 墙（sw-analyst 查阈值可调性 + 分批 create/close 可行性）。
+
 ---
 
 ## 0. Phase 20 production backend 未接入
