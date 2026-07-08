@@ -104,6 +104,30 @@ mindmap
 - **Cluster / SPMD**：`pl.spmd(n)` 把一个 kernel 在 N 个 cluster/block 并行跑，每实例拿 `spmd_idx`/`spmd_size`（前两个参数是 ABI 约定）。
 - **Mixed kernel**：一个 InCore function 同时含数据访问 op 和 compute op（matmul），编译器 `ExpandMixedKernel` pass 按颜色（AIC=RED / AIV=GREEN）拆成两个 kernel + `InCoreFunctionGroup`，跨色边界自动插 TPUSH/TPOP。写 paged attention 这类"访存+matmul+softmax 混合"时用。
 
+### `@pl.program` 是跨 host+device 的编译单元 + 哪个修饰是 device
+
+- **`@pl.program` 不是"host 程序"**：它装饰一个**类**，是整个层/模型的**编译单元**。codegen 分**三路产物、横跨 host 与 device**：host_orch → host 侧 C++；Orchestration → `orchestration/*.cpp`（**AICPU**）；InCore → `.pto` → ptoas → `kernels/aic|aiv/`（**AICore**）。
+- **哪个跑在 device**：`type=Orchestration`(AICPU) 和 `type=InCore`(AICore) **都在 device**；**只有 `level=pl.Level.HOST` 在 host CPU**。其中 **`InCore`（或 `pl.at(level=CORE_GROUP)` 圈出的 tile 计算）才是最狭义的"device 计算 kernel"**——`pl.matmul`/`pl.slice`/`pl.row_sum` 这些 tile op 只出现在这里面。
+
+真实骨架（`models/step3p5/attention_full.py` 的 `TpAttentionFull`，行号为准）：
+
+```python
+@pl.program                                                     # :864  编译单元(跨 host+device)
+class TpAttentionFull:
+    @pl.function(type=pl.FunctionType.InCore)                   # :870  ⚙ device AICore 计算 kernel
+    def _kernel(...):
+        with pl.at(level=pl.Level.CORE_GROUP, name_hint="..."): #       tile 计算(matmul/vector)
+            ...
+    @pl.function(type=pl.FunctionType.Orchestration)            # :922  🎛 device AICPU 片上任务图
+    def chip_orch(...): ...
+    @pl.function(level=pl.Level.HOST, role=pl.Role.Orchestrator)# :968  🖥 host CPU 多卡分发
+    def host_orch(...): ...
+```
+
+`decode_layer.py` 的每层 program 同构，只多一类 `@pl.function(type=pl.FunctionType.Inline)`（EpTpMoE 拍扁进 chip_orch 的方法——因为 pypto 不允许在一个 `@pl.program` body 里实例化另一个 `@pl.program`，见 §九 namespace）。
+
+> 一句话：**program 跨 host+device；`level=HOST`=host CPU，`Orchestration`(AICPU) 与 `InCore`(AICore) 都是 device，其中 InCore 是真正的"device 计算 kernel"。**
+
 ---
 
 ## 三、Tensor vs Tile（+ valid_shape / tile_shape / sharded_tensor）
