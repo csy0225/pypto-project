@@ -118,6 +118,14 @@ token 级对齐（temp=0 多 prompt）。
 - V0 定位：`logging.getLogger("simpler").setLevel(15)`（在 worker.init 前）+
   `ASCEND_PROCESS_LOG_PATH=<预建目录>`；停机快照 kernel id → 该 build 的
   `chip_orch/kernel_config.py` func_id。
+- **⚠ moe_st 单卡 ST 默认 fork card 0（oracle 卡区！）**：`test_decode_layer_moe_st`
+  的 `world_size=1` 路径原本 `compile_cfg={}`（无 DistributedConfig），`run(device_id=
+  args.device)` **不 steer chip fork → 落 card 0**，出错时 `aclrtResetDeviceForce(0)`
+  会 reset 到正在跑 8000 oracle（TP=8 = cards 0-7）的卡上（2026-07-08 踩到，oracle 侥幸
+  恢复）。**修复**：ws=1 也建 `DistributedConfig(device_ids=[MOE_ST_DEV_OFFSET])`（已改，
+  `/tmp/moe_st.py.bak_devtarget` 备份），跑时 `MOE_ST_DEV_OFFSET=8 ... -d 8` → fork card 8。
+  **铁律**：8000 oracle 在 cards 0-7 跑时，任何单卡/多卡 device 验证必须 `MOE_ST_DEV_OFFSET=8`
+  且确认 fork 到 8-15，**先看 log 的 `chip_process dev=N` 确认卡号再放心**。
 
 ---
 
