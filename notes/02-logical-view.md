@@ -245,6 +245,48 @@ sequenceDiagram
 
 > 抽象层面：这些媒介都是 `IVerticalChannel` / `IHorizontalChannel` 的不同**实现**，在 Machine Level Registry 里按层**注册绑定**。上层逻辑只认"通道"接口、不关心底下是 DMA 还是寄存器——这就是"同一套调度代码适配不同硬件"的落点（对应开发视图的 `transport/` 模块、过程视图 §4.1.2 同步机制、物理视图 §5.2 网络拓扑）。
 
+### Device 层 vs Chip 层：都在 AICPU 上，角色为何不同
+
+这俩最容易混，因为**它们其实都跑在 AICPU 上**，区别在"扮演的角色"。一句话：**Device 层是"编排面"（决定要算什么、生成子任务），Chip 层是"派发面"（把每个 kernel 排到具体某个 AICore 上）。**
+
+| 维度 | **Device 层（ordinal 2）** | **Chip 层（ordinal 1）** |
+|------|---------------------------|--------------------------|
+| Scheduler | `DeviceOrchestrator` | `AicpuScheduler` |
+| Workers（谁干活）| **AICPU 线程**（默认 4） | **AICore**（72/108 个） |
+| 跑什么 | 执行 **Orchestration Function**（控制流：定算子顺序、提交子任务） | 把 **计算 kernel 派发到 AICore**，管 ACK/FIN 握手 |
+| Memory scope | **HBM**（设备全局大内存，tensor 住这） | **Shared Memory / SRAM**（片上暂存，放调度元数据/核间数据） |
+| AICPU 线程角色 | 当 **worker**（跑编排代码） | 当 **scheduler**（调度 AICore） |
+| 向下通道 | Device→Chip：**共享内存** | Chip→Core：**Register Bank (MMIO)** |
+| 回答的问题 | "**要算哪些任务**"（产出 compute DAG） | "**每个任务放哪个核**"（细粒度派发） |
+
+**接力流程**（一次调用里它们怎么衔接）：
+
+```
+Host: "跑这一层 forward"
+  │ DMA↓
+Device 层：AICPU worker 线程执行 orchestration
+  │  函数体里 submit(matmul), submit(rmsnorm), ... → 产出一批 compute 子任务
+  │ 共享内存↓
+Chip 层：AicpuScheduler 拿到这批 compute 任务
+  │  把 matmul 派给 AICore#3、rmsnorm 派给 AICore#7 ...（写 RegisterBank）
+  │ RegisterBank↓
+Core 层：AICore 执行 kernel，算完写 FIN
+```
+
+**怎么记（命名视角）**：这些名字不是按"软件角色"起的，而是按**物理封装的嵌套层级、从外到内**起的——软件角色是物理位置的*结果*，不是命名依据。
+
+```
+主机 Host ⊃ 设备 Device ⊃ 芯片 Chip ⊃ 核 Core
+  │           │              │           │
+用户的机器    插在机器上的     卡上那块      硅片上单个
+             一块 NPU 卡      算力硅片      计算流水线
+```
+
+- **Device = 站在主机视角**：host-device 编程模型的通用词（CUDA/CANN 同），指挂在 PCIe 上、能 `setDevice(0)` 寻址、有自己 **HBM** 的那块卡。贴着 host → 负责**接活 + 编排**。
+- **Chip = 站在硅片内部视角**：那块封装了 AICPU + AICore 阵列的计算芯片本体，用**片上 SRAM**。贴着 core → 负责**把 kernel 派到具体的核**。
+
+> **一句话记忆**：**Device 是"对外的卡"，Chip 是"对内的芯"**。卡跨 PCIe、用 HBM、靠近 host 做编排；芯在片内、用 SRAM、靠近 core 做派发。辅助记忆：**内存名对上层名**——Device→device memory(HBM)、Chip→片上 SRAM。所以不用死记 `DeviceOrchestrator` vs `AicpuScheduler`，记住它俩在物理链条上的位置，角色自然推得出来。
+
 ---
 
 ## 🏛️ 五大支柱（Five Pillars）
