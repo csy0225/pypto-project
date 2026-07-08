@@ -11,6 +11,7 @@
 | 04 | [过程视图 Process View](04-process-view.md) | 运行时怎么动：事件循环、状态机、依赖、分布式、延迟预算 | `04-process-view.md` |
 | 05 | [物理视图 Physical View](05-physical-view.md) | 跑在什么硬件、怎么部署、怎么扩、坏了怎么办 | `05-physical-view.md` |
 | 06 | [PyPTO 编程与部署 API](06-pypto-programming-and-deploy-api.md) | 怎么写 PyPTO 程序(L2/L3)、tensor/tile、API↔模式、buffer/融合/namespace 实战坑、编译部署 | 多源汇总 |
+| 07 | [step3p5 + vLLM 集成](07-step3p5-vllm-integration.md) | per-layer / block / 整网融合三轴、program 个数 N≥6 墙、DeepSeek 对照 | 多轮讨论 |
 
 ## 🎨 配色约定（贯穿所有笔记）
 
