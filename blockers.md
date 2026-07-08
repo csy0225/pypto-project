@@ -50,6 +50,28 @@ Blocker 解决时，**删掉本文件里这一节**，到
 
 **Owner**：team-lead（path-1 init-ring fix 验证中）。
 
+### 2026-07-08 续2 — path-1 拆成两阶段：PREPARE ✅ 解决（ring sizing），DISPATCH ❌ 新 blocker（host 侧多程序派发 wedge）
+
+**device 实测（cards 8-15，全 45 层 N=8 co-prepare，synthetic weights）把 blocker 精确拆成两个正交阶段**：
+
+**阶段 1 — PREPARE 死锁 = ring task_window sizing。✅ 已解决。**
+- `task_window=16384`（默认）**太小** → N≥6 `SCOPE_DEADLOCK`（`scope_task_count >= task_window_size`，upstream-scout 定位 `pto_orchestrator.cpp:328-353`）。
+- `task_window=2^20`（init-ring 初版）**太大** → `rtMalloc failed: 207001 (size=68719477759)` ≈ **64 GiB** "pooled static arena" OOM（arena ≈ task_window × ~65536 B/task；2^20×64KB≈64GB 顶爆 64GB 卡）。
+- **`task_window=65536`（2^16，生产推荐值，arena ≈ 4GB）→ `[worker] PREPARE OK`**。N=8 全 45 层 8 个 distinct 程序 co-prepare 成功。
+- 修法：`distributed_runner.py:724` INIT call_config 注入 `RunConfig(ring_task_window=2^16, ring_heap=2^32, ring_dep_pool=2^16)`（env `PTO2_WD_INIT_RING_TASK_WINDOW=65536` 可调）+ harness per-dispatch `_rc` 同步降到 2^16。这是 root-cause sizing（把 ring 配到实际 scope 任务数），非绕过。
+
+**阶段 2 — DISPATCH 派发 fault（NEW blocker）。❌ 未解决。**
+- PREPARE OK 后，**第一个 dispatch step（L0 full_dense，standalone 已验证程序）即 fault**：device AICPU scheduler **空转 28s**（device log `HandleTaskTimeout ... Split kernel TaskMapSize=0`，event id[0..63] 全 value 0），派发的 L0 任务**从未到达 device AICPU** → `taskTimeout=28s` → AICore `507018` / `sched_error_code=100` / `runtime_status=-100` → 8 卡 poison + `aclrtResetDeviceForce`。
+- **不是 kernel bug**（L0 standalone device PASS）、**不是 ring sizing**（PREPARE 已过、arena 已 4GB）、**不是编译**。是 **host 侧多程序 worker 在 N≥6 时派发路由 wedge**：任务没被推到 device。N≤5 dispatch 正常（residual 串接验证过）→ 纯 co-prepare **程序数** 效应。
+- upstream-scout：#1706 无 N-ceiling / 派发修复可 cherry-pick；per-program state 按 `id(program)` keyed（`distributed_runner.py:667`），func_id 上限 1024（8 程序远不到）。→ 疑似 `_run_compiled`/`_dispatch` 在多程序下 per-program stream/state 选择或 orch_fn 路由的微妙 bug（`self._states[id(program)]`）。
+
+**解除条件（更新）**：
+1. **（推荐，user-preferred）融合单程序路径**：绕开整个多程序-worker 类 bug。需 `attention_swa.py` 的 dynamic `valid_shape`→computed-mask 重写（sw-analyst 调查中）让 fused swa_moe 编译过 → 单 @pl.program 45 层 pypto 自调度。
+2. **（per-layer 路径）修 host 侧多程序派发 wedge**：需 V0 stuck-task 深挖 + 大概率上游 simpler runtime `_dispatch`/worker task-submission 在 N≥6 的修复。
+3. **（validation-only 权宜）** per-layer 独立 prepare+run+release（非 co-prepare，`--chain` 已验证 dense 前缀 residual 串接）：但 MoE 层 `select_decode_layer` 返回 fused swa_moe（编译不过）→ 仍需 (1) 的 swa 重写，或用 Option-C 每层独立 prepare 两程序（attn + moe_block）。
+
+**Owner**：team-lead（决策 fused vs per-layer；sw-analyst 查 swa 重写、hw-analyst 查 arena/HBM budget、upstream-scout 已交付）。
+
 ---
 
 ## 0. Phase 20 production backend 未接入
