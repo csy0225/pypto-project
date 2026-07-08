@@ -66,7 +66,13 @@ Blocker 解决时，**删掉本文件里这一节**，到
 - upstream-scout：#1706 无 N-ceiling / 派发修复可 cherry-pick；per-program state 按 `id(program)` keyed（`distributed_runner.py:667`），func_id 上限 1024（8 程序远不到）。→ 疑似 `_run_compiled`/`_dispatch` 在多程序下 per-program stream/state 选择或 orch_fn 路由的微妙 bug（`self._states[id(program)]`）。
 
 **解除条件（更新）**：
-1. **（推荐，user-preferred）融合单程序路径**：绕开整个多程序-worker 类 bug。需 `attention_swa.py` 的 dynamic `valid_shape`→computed-mask 重写（sw-analyst 调查中）让 fused swa_moe 编译过 → 单 @pl.program 45 层 pypto 自调度。
+1. **（user-preferred）融合单程序路径 — 2026-07-08 深挖后确认是架构级 blocker**：需让 fused swa_moe（`select_decode_layer(3)`）在 EP-distributed lowering 下编译过 → 单 @pl.program 45 层 pypto 自调度，绕开多程序-worker 类 bug。**根因（本会话逐点验证）**：
+   - **Step A ✅**：`attention_swa.py:479` 的 config-arith `pl.full([SWA_Q_PAD_ALIGNED - Q_HEAD_BATCH_SWA, HEAD_DIM])` Sub 被 EP lowering symbolize → 改字面量 `[20, HEAD_DIM]`（32−12），保留 pad-assemble 结构，**TP attn_swa standalone 每次都编译过（TP-safe）**。
+   - **Step B ❌ 架构级**：softmax scoring loop 的 dynamic `valid_shape=[Q_HEAD_BATCH_SWA, valid_len]`（`valid_len` 运行时标量）在 EP lowering 下把 `valid_len` symbolize 成 free Var → `tile.create shape element must be ConstInt, got Var`（`memory.cpp:360` at `attention_swa.py:572` row_max）。**四条 model 侧修法全部撞墙**：
+     - `set_validshape(const-slice, SWA_Q_PAD_ALIGNED, valid_len)`（DSV4 `decode_sparse_attn.py:161` 模式）→ Var 仍经 fillpad→row_max 传播到 tile.create（EP 下 valid_shape **metadata** 里的 Var 也 fault；DSV4 只是没被 EP 这样 symbolize）。
+     - computed column-mask（`pl.tile.ci` 索引 + `cmps(GE)` + `sel` + `col_expand` + `add`）→ 撞**根本 impedance**：step3p5 SWA scores 存在 **GM tensor 空间**（`all_raw_scores = pl.create_tensor()` at `:500`，整条 slice/mul/row_max/fillpad 都是 tensor 级），而 mask ops（`tile.ci`/`cmps`/`sel`）是 **UB tile 空间** → `col_expand: cannot mix Tensor and Tile arguments`。tile-space mask 无法 attach 到 tensor-space scores。
+   - **真正解除条件**：(a) 把 SWA scoring 从 GM-tensor 重构成 **UB-tile 空间**（DSV4 式，把 QK matmul 结果留在 tile 上做 softmax）——较大 rewrite；或 (b) 上游 pypto EP-lowering 修复：不要把 tensor slice 的 runtime `valid_shape` symbolize 进 tile.create；或 (c) 上游提供 tensor-space 的 mask ops（ci/cmps/sel 的 tensor 版）。
+   - WIP（Step A + 90% computed-mask，仅差 tensor/tile impedance）存 `0162:/tmp/attention_swa.py.wip_computed_mask_stepAB`；pristine 已 revert（regression 保持干净）。
 2. **（per-layer 路径）修 host 侧多程序派发 wedge**：需 V0 stuck-task 深挖 + 大概率上游 simpler runtime `_dispatch`/worker task-submission 在 N≥6 的修复。
 3. **（validation-only 权宜）** per-layer 独立 prepare+run+release（非 co-prepare，`--chain` 已验证 dense 前缀 residual 串接）：但 MoE 层 `select_decode_layer` 返回 fused swa_moe（编译不过）→ 仍需 (1) 的 swa 重写，或用 Option-C 每层独立 prepare 两程序（attn + moe_block）。
 
