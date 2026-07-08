@@ -10,6 +10,7 @@
 | 03 | [开发视图 Development View](03-development-view.md) | 概念落到源码里的 10 个模块、依赖 DAG、怎么编 | `03-development-view.md` |
 | 04 | [过程视图 Process View](04-process-view.md) | 运行时怎么动：事件循环、状态机、依赖、分布式、延迟预算 | `04-process-view.md` |
 | 05 | [物理视图 Physical View](05-physical-view.md) | 跑在什么硬件、怎么部署、怎么扩、坏了怎么办 | `05-physical-view.md` |
+| 06 | [PyPTO 编程与部署 API](06-pypto-programming-and-deploy-api.md) | 怎么写 PyPTO 程序(L2/L3)、tensor/tile、API↔模式、buffer/融合/namespace 实战坑、编译部署 | 多源汇总 |
 
 ## 🎨 配色约定（贯穿所有笔记）
 
