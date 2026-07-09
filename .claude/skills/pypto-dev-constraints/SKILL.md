@@ -87,9 +87,31 @@ description: >
 - Phase 15 单卡 e2e 三件套：head_gate bypass + `--tp-world-size 1` + `LAYER_INTER_ROWS_DYN/LAYER_QHIDDEN_ROWS_DYN` TP=1 override。`project_p15_singlecard_e2e_unblock`
 
 ### C 编译 / codegen 硬限制
-- **on-chip buffer 上限**：UB(Vec) **192KB**、L1(Mat) **512KB**、L0A/L0B 各 **64KB**、L0C(Acc) **128KB**。超即 `AllocateMemoryAddr` reject。`performance-tuning.md`
-- **32B 行对齐**：Vec/none_box tile 行字节 ≥32B → FP32≥8 列 / BF16≥16 / INT8≥32。`known-pypto-pitfalls §2`
-- **`[N,1]`/`[1,1]` FP32 tile 禁用 `pl.slice` 构造**（运行时 `0x800 UB not aligned` → 507018）；用 `pl.row_sum`/`pl.row_max`/`pl.reshape` 或 `row_expand_mul` 广播。`§1`
+
+**buffer 容量上限（910C，超即 `AllocateMemoryAddr` reject）** — 层级：L2=一颗 chip / L1=die·L2cache / L0=单 core（`performance-tuning.md:10,169-170`）：
+
+| buffer | 别名 | 物理容量 | 编译报错阈值(有效预算) | 用途 |
+|--------|------|---------|----------------------|------|
+| **UB** | Vec | **192 KB** | **188416 B (=184 KB)** ⚠ | 向量运算工作集 |
+| **L1** | Mat | **512 KB** | 512 KB | cube 左/右操作数 staging |
+| **L0A** | Left | **64 KB** | 64 KB | cube 左操作数 |
+| **L0B** | Right | **64 KB** | 64 KB | cube 右操作数 |
+| **L0C** | Acc | **128 KB** | 128 KB | cube 累加器 |
+
+（UB 物理 192KB 但编译器按 **188416 B(184KB)** 卡，`known-pypto-pitfalls §7:351`）
+
+**对齐规则（4 条，别混——作用对象/数值/硬件/性质各不同）**：
+
+| # | 规则 | 作用对象 | 具体数值 | 硬件 | 性质 / 失败 |
+|---|------|---------|---------|------|-----------|
+| 1 | **行 32-B 对齐** | intra-UB **Vec / none_box tile 的每一行** | `cols × sizeof(dtype)` 必须 **%32==0**：FP32 cols%8==0(≥8) / BF16 %16(≥16) / INT8 %32(≥32) | UB（AIV 每 micro-op 取 32B=256bit） | `pto.alloc_tile` 静态 reject；**intra-UB VEC tile 静态漏检 → 运行时 `errcode 0x800 subErrType:4` → 507018** |
+| 2 | **GM↔UB tile 512-B 对齐** | TLOAD/TSTORE 的 tile（GM↔UB load） | tile 512B 对齐；`tile_shape==valid_shape` 时跳过检查 | GM↔UB DMA | 静态检查 |
+| 3 | **tensor 存储 `shape` 512-B 对齐** | tensor 的 **`shape`（存储布局，≠ valid_shape）** | `prod(shape) × sizeof(dtype) % 512 == 0` | GM/DDR DMA 512B 块 | **设计不变量**（P2.2） |
+| 4 | **L2 cache line 512-B（性能，非 correctness）** | tensor 的 **trailing（最内）维** | multiple of 512B → **BF16 256 elem / FP32 128 / INT8 512** | L2 | 慢 MTE 路径；`perf_hints.log PH001` 告警 |
+
+> 出处：#1 `known-pypto-pitfalls §1(:54-64)/§2(:97-128)`；#2 `§1:62-69`；#3 `tensor_valid_shape.md`（= 设计宪法 P2.2）；#4 `performance-tuning.md:272-319`。**记忆钩子：32B 只管 UB 里 Vec tile 的行宽；512B 管三处（GM↔UB tile、tensor 存储 shape、L2 cache line 性能）。**
+
+- **`[N,1]`/`[1,1]` FP32 tile 禁用 `pl.slice` 构造**（行字节=4B 违反规则#1，静态漏检→运行时 507018）；用 `pl.row_sum`/`pl.row_max`/`pl.reshape` 或 `row_expand_mul` 广播。`§1`
 - kernel 体内 **禁裸 `for`**；用 `pl.range/parallel/pipeline/spmd/unroll/while_`。`§6`
 - **`pl.range(常量)` 全 unroll 不复用 SSA buffer → UB overflow**；用 `pld.nranks(ctx)` runtime bound 或 acc 写回 `local`。`§7`
 - **barrier `tp_all_reduce` 禁 `tp_chunk=HIDDEN//tp_size`**（TP=1 爆 UB）；用固定 `ar_chunk=HIDDEN//8`。`§7a`
