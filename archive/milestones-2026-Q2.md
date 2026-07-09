@@ -6,6 +6,17 @@
 
 
 
+## 2026-07-09 (晚, goal session) —— gap-5 根因纠正 (IR 实证) + DeepSeek 对齐 materialization: 84%→24.31% ✅⏳
+
+**团队 `vllm-pypto-e2e`（team-lead + reverse-review / hw-analyst / sw-analyst / upstream-scout）。** 目标：w8a8 精度根因 + 整网跑通，对齐 DeepSeek。
+
+- **gap-5 根因纠正（IR dump 实证，推翻历史 matmul_mx 定位）**：dump FAIL 探针 `_probe_fixb_onthefly.py --smoke` 的 passes_dump → 只有 registered `tile.matmul`（99×）+ `matmul_acc`（99×），**0 个 `tile.matmul_mx`**（该 op 从不 emit，且 A5-only、910B 无 codegen）。真因 = in-kernel `cast(→INT8)` 结果喂 cube Left 操作数时，pypto 给它默认 `fractal=512`（`GetImplicitTileView` 只对 Acc 推 fractal，`ComputeRewrittenType:439` 复制该错值）→ INT8 cube 读错行。经 materialized tensor 的 `tile.load` 会被 DMA 正确 fractalize，故 GM/staged INT8 对、in-kernel cast 错。
+- **用户决策**：完全对齐 DeepSeek（我们的 on-the-fly 分歧在正确性+性能上都更差：多一次每-expert 重量化 + BF16 a2a 翻倍）。不改 compiler（走 model-side staging）。
+- **device 里程碑（cards 8-15，restored INT8-native moe.py，`--layer 3 --w8a8-native --target out --bypass-gate` vs vLLM out.pt）**：**next_hidden_out 24.31%（127458/524288，was 84%），干净 10s 无 507018**。恢复出的 stash moe.py 已是完整 DeepSeek 结构（gate_up 读 GM-INT8 local_routed_x；down 重量化经 materialized h_i8 再 re-read；无裸 cast→cube）→ **materialization 已解 cast→cube codegen bug（84%→24%）**。
+- **剩余 24% = device 侧 INT8 精度残差（非 codegen garbage）**：误差 ~0.05 刚过 atol=0.04；rounding 正确（INT32-rint→INT8-trunc）；CPU 复算同方案 0.9998 cos。嫌疑 = down-leg `[RECV_TILE,1]` h_scale_tile 重量化 bridge / dequant fp32-vs-bf16 / partial-tile。下一步 `--dump-stages` 定位 dispatch vs expert-compute（Phase-21 式精度对齐）。
+- **上游 issue 已起草**（hw-analyst）：`GetImplicitTileView` 对 Left/Mat 不推 cube fractal（只 Acc 推）+ P2(PASS)/FIXB(FAIL) 最小复现 + v0.49 仍 FAIL 证据，待提 hw-native-sys/pypto。
+- **边界**：0162 pypto-lib 工作树现为 stash INT8-native moe.py（干净 94aa015c 备份 `.clean_bak_20260709_225749`）。整网（问题2）不依赖 gap-5，可走 BF16-dequant（0.9995），真正 gate 是 co-tenancy 507018。
+
 ## 2026-07-09 —— 全栈升级到最新 + SplitIncoreOrch 移植修复 + gap-5 上游定位 ⏳
 
 **团队 `vllm-pypto-e2e`（reverse-review / sw-analyst / upstream-scout；hw-analyst 未启，reverse-review 与 upstream-scout 各有一次 429 限流）。**
