@@ -128,6 +128,62 @@ class TpAttentionFull:
 
 > 一句话：**program 跨 host+device；`level=HOST`=host CPU，`Orchestration`(AICPU) 与 `InCore`(AICore) 都是 device，其中 InCore 是真正的"device 计算 kernel"。**
 
+### 从最外层到最内层：构造层级对照（`pl.spmd` 等修饰在哪一层）
+
+代码里 `@pl.program` / `@pl.function` / `pl.at` / `pl.spmd` / `pl.range` / `pl.matmul` 这些修饰是**层层嵌套**的，从外（host 编译单元）到内（tile 指令）：
+
+```mermaid
+flowchart TB
+    P["@pl.program　—　编译单元(跨 host+device)"]
+    subgraph HOST["🖥 Host CPU (L3)"]
+        HO["@pl.function(level=HOST, role=Orchestrator) = host_orch<br/>多卡分发 / 建 host DAG"]
+    end
+    subgraph AICPU["🎛 device AICPU (Chip/Device L2)"]
+        CO["@pl.function(type=Orchestration) = chip_orch<br/>片上任务图: 建 tensor / submit task / pl.scope / tp_all_reduce"]
+    end
+    subgraph AICORE["⚙ device AICore (Core L0)"]
+        IC["@pl.function(type=InCore) 或 with pl.at(level=CORE_GROUP)<br/>= 一个计算 kernel"]
+        subgraph LOOP["kernel 体内: 并行 / 循环原语"]
+            SPMD["pl.spmd(n) 多 block 分派(spmd_idx)"]
+            RNG["pl.range / pl.parallel / pl.pipeline / pl.unroll / pl.while_"]
+        end
+        TILE["tile op: pl.slice / pl.load / pl.matmul / pl.matmul_acc / pl.row_sum ..."]
+    end
+    P --> HO
+    HO -->|"Vertical↓ 派发"| CO
+    CO -->|"Vertical↓ 派发 kernel"| IC
+    IC --> LOOP
+    LOOP --> TILE
+
+    classDef prog fill:#495057,stroke:#212529,color:#fff;
+    classDef host fill:#4C6EF5,stroke:#1E3A8A,color:#fff;
+    classDef aicpu fill:#12B886,stroke:#0B7285,color:#fff;
+    classDef core fill:#FA5252,stroke:#A61E1E,color:#fff;
+    class P prog;
+    class HOST,HO host;
+    class AICPU,CO aicpu;
+    class AICORE,IC,LOOP,SPMD,RNG,TILE core;
+```
+
+**对照表（外 → 内）：**
+
+| 层次 | 构造 / 修饰 | 运行硬件 | pl.Level | 作用 | 里面能放 |
+|------|-----------|---------|----------|------|---------|
+| ⓪ 编译单元 | `@pl.program`（类） | 跨 host+device | — | 整个层/模型的编译单元 | 三类 `@pl.function` |
+| ① host 编排 | `@pl.function(level=HOST, role=Orchestrator)` host_orch | Host CPU | `HOST` | 多卡分发、建 host DAG | 调 chip_orch |
+| ② 片上编排 | `@pl.function(type=Orchestration)` chip_orch | device AICPU | `CHIP` | 建 tensor / submit task / `pl.scope` / collective | `pl.at`、`pl.spmd`、InCore 调用、`tp_all_reduce` |
+| ②.5 组合 | `@pl.function(type=Inline)` / `@pl.jit.inline` | 拍扁进调用方 | — | body 复用（见 §九 namespace） | — |
+| ③ 计算 kernel | `@pl.function(type=InCore)` / `with pl.at(level=CORE_GROUP)` | device AICore | `CORE_GROUP`(1AIC+2AIV) | 一个 tile 级计算核 | 循环原语 + tile op |
+| ④ 并行/循环 | `pl.spmd(n)` / `pl.range` / `pl.parallel` / `pl.pipeline` / `pl.unroll` / `pl.while_` | AICore | — | 核内组织并行/循环/流水（放置见 §五） | tile op |
+| ⑤ tile op | `pl.slice`/`pl.load`/`pl.full`/`pl.matmul`/`pl.matmul_acc`/`pl.row_sum`/`pl.row_max` | AICore + 片上 SRAM | — | 最内层 tile 级指令 | — |
+
+**`pl.spmd` 专述**（你问的那类修饰）：`pl.spmd(n)` = 把一段计算**在 N 个 block/core 上并行跑**（SPMD，每实例拿 `spmd_idx`/`spmd_size`，前两参数是 ABI 约定）。三种形式：
+- `with pl.spmd(n):` —— 单 kernel 调用；
+- `for i in pl.spmd(n):` —— loop-form，body 自动 outline 成 InCore（step3p5 用它分派 QKV/MLP 的 matmul tile）；
+- `with pl.spmd(n, deps=[...]) as tid:` —— 捕获 TaskId。
+
+它处在 **"② orchestration 分派 ↔ ③ InCore body" 的接缝**：**分派动作在编排侧发起，body 跑在 core 上**。和其它循环原语（`pl.range`/`pl.parallel`/`pl.pipeline`/`pl.unroll`）的放置区别见 [§五 循环原语放置表](#五循环原语放置表写-kernel-必查)。
+
 ---
 
 ## 三、Tensor vs Tile（+ valid_shape / tile_shape / sharded_tensor）

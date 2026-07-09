@@ -139,6 +139,53 @@ N≈87   每层一个 program (3p5 初版)    → 撞【运行时墙】(N≥6 si
 
 ---
 
+## 八、一个 vs 多个 program：性能差异 + 减少了哪个开销
+
+**不只是省 dispatch 时间**——逐项标出融合(N=1)相对多程序**减少/影响的是哪类开销**：
+
+| # | 差异项 | 融合(N=1)减少的开销 | 影响量级 |
+|---|--------|---------------------|---------|
+| ① | host 侧 per-program dispatch | **host CPU 逐 program `rt.run` 派发开销**（~45~87 次/token → 1 次） | 小~中 |
+| ② | 层间 host 串行 barrier | **每层一次 host↔device 同步等待**（`rt.run` 阻塞）；融合走 program 内部依赖，无此墙 | ★ 中~大 |
+| ③ | 跨层 overlap / 预取丢失 | **通信/计算跨层重叠 + 权重/KV 跨层 double-buffer 预取**（多程序硬边界拿不到） | ★ 大(decode) |
+| ④ | 通信域 N 套 → 1 套 | **重复 collective signal-window/GM setup + 资源压力**（也是 N≥6 死锁根） | 中 |
+| ⑤ | 全局调度气泡 | **AICPU 看全 DAG 填气泡**；多程序只局部调度、边界更多 idle bubble | 中 |
+| ⑥ | 固定 per-program 开销 | **TensorMap 建立 / ring 同步 / arg marshaling** 每 `rt.run` 一次 → 摊成一次 | 小 |
+
+**⚠ pypto 关键澄清（别误会减少了什么）**：N=1 减少的是 **host 侧 + 层间**开销（①②⑥），**不减少 AICPU 逐 InCore kernel 的片上 dispatch**——InCore kernel 数量和其片上派发开销**不变**。要连片上逐 kernel dispatch 也省，得走 megakernel 的 tile 调度（§九档 4）。
+
+**多个 vs 一个的本质区别**：多个 = 层循环在 **host（Python driver）**，每层一道 host 同步墙；一个 = 层循环在 **device（AICPU 编排）**，层间零 host 往返。所以核心差异不是"少几次 dispatch"，而是 **"层循环搬到 device + 层间墙拆掉 + 跨层能 overlap"**。
+
+### 怎么写程序会更高效（实操，按收益/代价排序）
+
+1. **能融就融进一个 `@pl.program`**：整层/多层放一个 program，AICPU 在 device 上串 → 去掉 host 层间墙(②) + 拿跨层 overlap(③)。收益最大。
+2. **融不动就按 block 类型复用 program**（不是每层编一个）：权重走 **runtime 参数**，同一 compiled program 反复 `rt.run` → 省编译、压 N 避 N≥6 墙(④)；但**层间 host barrier 仍在**（不如融合）。
+3. **kernel 内 mixed cube+vec 融进同一个 `pl.at`**：matmul + norm/cast 同 scope，编译器 ping-pong，省一次 AICPU hand-off。
+4. **用 `pl.spmd` 分派 tile、`pl.pipeline` 做软件流水**：把并行/流水显式表达出来，让编译器排满 AIC/AIV。
+5. **collective 按 tile 分块**（`ar_chunk` 用固定常量）：让 all_reduce 和前后计算 overlap（tile 粒度 overlap，见前文）。
+6. **暂不融合就用 `BatchedExecutionPolicy`**（Chip 级攒批 dispatch）降低逐 kernel 派发，近似 CUDA Graph 效果。
+7. **先 profiling 再优化**：`enable_l2_swimlane`/PMU 量出 ①~⑥ 各自占比——decode 常是 ②③ 大，compute-bound 常是算子本身大，别凭感觉。
+
+---
+
+## 九、消除 host 派发开销的四档谱系（CUDA Graph / aclGraph / pypto-fused / megakernel）
+
+同一个敌人（host 派发开销 + op 间气泡），四种狠度递增的打法：
+
+| 档 | 方案 | 减少的开销 | 保留什么 | kernel 数 |
+|----|------|-----------|---------|-----------|
+| 1 | **CUDA Graph / aclGraph**（capture-replay） | host 逐 kernel launch 的 **CPU driver 开销 + kernel 间气泡** | N 个 kernel 全保留，只是 CPU 一次派发全图 | N（设备上不变） |
+| 2 | **pypto per-block 复用**（N 小） | 编译开销 + 部分 host dispatch | 层间 host barrier 仍在 | N≈block 类型数 |
+| 3 | **pypto 整网融合 (N=1)** | **host 层间 barrier + 跨层 overlap + 通信域** | AICPU 逐 InCore kernel dispatch 仍在 | 1 program（内部多 kernel） |
+| 4 | **megakernel**（持久核 + 片上 tile 调度） | **连 per-kernel launch 都没有** + 跨 op tile fusion/overlap | —（最激进） | 1 持久 kernel |
+
+- **档 1 最轻**：只杀 host launch 开销，**不融合、不动计算、设备上仍 N 个 kernel**（CUDA Graph/aclGraph 的本质）。
+- **档 3 pypto-fused 中间**：层循环搬 device、拆层间墙，但**片上逐 kernel dispatch 还在**。
+- **档 4 megakernel 最重**：一个持久核 + 片上 tile 调度，连片上 per-kernel launch 都省，还能跨 op tile 融合/overlap。
+- **pypto 的位置**：AICPU 本就是片上调度器 + simpler comm 是 device-initiated → pypto **天然在档 3、且具备档 4 的底子**（字面 megakernel 在 pypto 上 ROI 低、逆架构，等价物就是把整网融合做扎实）。
+
+---
+
 ## 💡 心得速查
 
 1. **三轴别混**：一个 program 装几层(轴1) / 装一层几块(轴2 layer-vs-block) / 复不复用(轴3)。step3p5 撞墙撞在轴3。
