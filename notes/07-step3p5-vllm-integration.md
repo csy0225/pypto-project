@@ -225,6 +225,46 @@ sequenceDiagram
 
 ---
 
+## 十、当前 step3p5 整网组织（源码核实 2026-07-09）
+
+**结论：不是单一融合大程序，而是"按层的多个 `@pl.program` + 外部 dispatcher 串联"（per-layer，轴1）。**
+
+### 层表 + 8 个预建 program 类 + 分发器
+
+`select_decode_layer(layer_idx)`（`decode_layer.py:3073`）按 48 层表（45 主层 + 3 MTP）返回 `(program_class, kind)`，分发到 **8 个预建 `@pl.program` 类**：
+
+| 层 | kind | program 类 |
+|----|------|-----------|
+| L0 | full_dense | `DecodeLayerDenseFull`（`decode_layer.py:490`） |
+| L1/L2 | swa_dense | `DecodeLayerDenseSwa`（`:703`） |
+| L3–L44 | 6 种 MoE：`{full,swa}×{silu_silu, swiglu7_silu, swiglu7_swiglu16}` | `DecodeLayerMoE`（`:1345`，按 `SWIGLU_LIMITS[li]`/`SWIGLU_LIMITS_SHARED[li]` 选变体） |
+| MTP 45–47 | dense | 走 `mtp.py` |
+
+kind 由 `is_full_attention(li)` + `is_moe_layer(li)` + `SWIGLU_LIMITS` 决定。
+
+### 每个 layer program 的内部结构
+
+标准三件套：`@pl.function(level=HOST)` **host_orch** + `@pl.function(Orchestration)` **chip_orch** + `@pl.function(InCore)` **计算 kernel**（对照 notes/06 §二）。
+
+**关键**：`DecodeLayerMoE` 把整套 `EpTpMoE`（gate / dispatch / routed expert / shared expert / combine）**从 `moe.py` 逐字 inline 进类里**（Phase X.8，`decode_layer.py:1272-1274`）——因为 pypto frontend **不允许在一个 `@pl.program` body 里实例化另一个 `@pl.program`**（§10 no-nested-program 铁律）。所以不是"MoE 作为独立子程序被调用"，而是"MoE 每个 `@pl.function` 方法 + `chip_orch` body 全被复制进 `DecodeLayerMoE`"。
+
+### 整网怎么串（不是 in-program 链）
+
+- **`decode_fwd.host_orch` 是 TAIL-ONLY**（只跑最后 RMSNorm + LM-head）；**45 层逐层 dispatch 在 `@pl.program` 之外**。
+- 形态 = **外部 Python driver 循环 `select_decode_layer(li)`、逐层 `rt.run`**，多 program `DistributedWorker`（pypto #1706）一次 prepare 多个 program，**residual/KV 用常驻 `DeviceTensor` 跨 dispatch 零拷贝串**（见 §八 时序图）。**这是 per-layer 组织，不是融合 N=1。**
+
+### MoE 层的 Option-C decompose
+
+融合整层 **`swa_moe` 编不过**（`attention_swa` inline 进 EP 上下文触发 const-fold cascade，§四），故 MoE 层拆两 program 串：`_build_tp_attention_{swa,full}_program`（`attention_swa.py:792` / `attention_full.py:849`）→ `resid1` → `select_moe_block(li)`（独立 `EpTpMoE`，`decode_layer.py:152` 导入）→ `moe_out`。dense 层保持整层融合（`DecodeLayerDenseFull/Swa`，能编）。
+
+### 一句话
+
+> **当前 = `select_decode_layer` 分发到 8 个按层预建 `@pl.program`（dense 整层融合 / MoE 层 Option-C 拆 attn+moe_block，MoE 把 EpTpMoE 逐字 inline），45 层由外部 Python driver + 多 program worker 逐层 `rt.run` 串联，`decode_fwd.host_orch` 只做 tail。融合成单一 program（N=1）是目标（PATH-2），卡在 swa_moe const-fold 编译墙，未落地。**
+
+> **诚实边界**：本地 `workspace/pypto-lib` checkout 比目标机（0162）落后——本地能核实 `select_decode_layer` + 8 个 program 类 + attention program + tail，但 driver/集成层（`_stage_whole_decode_run.py`、`pypto_mlp_worker.py`、`vllm_monkey_patch.py`）在目标机分支上；本地 `tools/step3p5/` 只有 `pypto_all_layers_detail_compare.py`。driver 细节（§八/本节第 3 点）来自 memory/STATUS，逐行核实需看目标机。
+
+---
+
 ## 💡 心得速查
 
 1. **三轴别混**：一个 program 装几层(轴1) / 装一层几块(轴2 layer-vs-block) / 复不复用(轴3)。step3p5 撞墙撞在轴3。
