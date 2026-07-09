@@ -6,6 +6,29 @@
 
 
 
+## 2026-07-10 (goal session cont.) —— tmov 阻塞解除 + 整网 43/45 层 COMPILE；余 L43/L44 SplitIncoreOrch
+
+目标：完成 e2e 集成 + 精度验证。承接用户提供的 tmov fix 文档
+（`deployment/troubleshooting-mat-mat-tmov-vec-lhs-matmul.md`）。
+
+- **tmov 阻塞解除（应用文档模型侧修复）**：`OUT_PROJ_N_CHUNK` 256→64 + `fp32_chunk`
+  两处 rename（attention_full→oproj_fp32_chunk / decode_layer→dense_fp32_chunk）→ out_proj
+  矩阵乘 L0-sized → 不触发 #1601 Vec-LHS staging → 无 Mat→Mat tmov。clean pypto 5e619dc7
+  重编（去掉此前实验性 arch-guard）。**dense L0/L1/L2 COMPILE PASS**。
+- **整网 Option-C 编译 sweep（clean pypto + tmov fix + ptoas v0.45）：43/45 层 COMPILE OK**
+  （dense fused + L3–L42 silu MoE via Option-C[TP-attn + select_moe_block]）。
+- **余 L43/L44（仅有的 2 个 swiglu 变体 MoE）FAIL：SplitIncoreOrch**（`_quant_moe_input`
+  的 pl.spmd 在 swiglu chip_orch 未被 outline，moe.py:1813）——升级栈第 3 个 codegen 回归
+  （tmov #1601 已修；silu-SplitIncoreOrch b511da0e 已修；swiglu 未覆盖）。文档：
+  `deployment/troubleshooting-splitincoreorch-swiglu-moe-L43-L44.md`。committed 94aa015c 与
+  gap5-wip stash 两版 moe.py 同样 43/45。
+- **gap-5 收尾**：84%→24.37%（materialization 解 cast→cube codegen），残 24% = INT8 1-LSB≈atol
+  的度量问题（INT8-accurate，非 bug），验收走 live token-exact A/B。gap-5 INT8-native 为 model-side，
+  已 git stash 保留；整网 e2e 走 committed BF16-dequant moe.py。
+- **下一步**：L43/L44 SplitIncoreOrch 修复（outline pass 或 swiglu chip_orch 重构，mirror tmov 思路）
+  → 整网 45/45 编译 → device chain（逐层 vs vLLM dump）→ `_pypto_full_forward` live single-handoff
+  → 8001 A/B token-exact。
+
 ## 2026-07-09 (晚, goal session) —— gap-5 根因纠正 (IR 实证) + DeepSeek 对齐 materialization: 84%→24.31% ✅⏳
 
 **团队 `vllm-pypto-e2e`（team-lead + reverse-review / hw-analyst / sw-analyst / upstream-scout）。** 目标：w8a8 精度根因 + 整网跑通，对齐 DeepSeek。
