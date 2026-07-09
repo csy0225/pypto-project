@@ -3,7 +3,18 @@
 pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状态
 变化都更新这里**。历史细节查 [`archive/`](archive/)。
 
-**最后更新**：2026-07-07
+**最后更新**：2026-07-09
+
+> **2026-07-09 全栈升级到最新（parity 通过，pypto-lib 已推）+ gap-5 上游定位**：pypto
+> `5e619dc7`(rebased origin/main) / pto-isa `ecb6c303` / PTOAS-src `72ada0a1`(v0.49) /
+> **ptoas-bin v0.45→v0.49** / simpler `71e39623`；**pypto-lib `1a6c6342→b511da0e`（SplitIncoreOrch
+> 移植修复，已 push fork stepfun/develop）**。升级引入的 `#1828 SplitIncoreOrch` MoE 编译回归已修
+> （unwrap `_zero_routed_y_buf`/`_serialize_after_shared` 冗余 `pl.at`）；moe_block ffn_out 8 卡
+> device PASS + w8a8 e2e 6 passed + decode_acceptance PASS = 与旧版 parity。gap-5 `cast→int8→cube`
+> 仍未修（**无上游 commit**，根因 `infer_tile_memory_space_pass.cpp:55-56`；INT8-native gated OFF）。
+> 详见 [`archive/milestones-2026-Q2.md` 2026-07-09](archive/milestones-2026-Q2.md) +
+> `pypto-lib/docs/upstream-issues/gap5-cast-int8-cube-codegen.md`。**待推**：pypto/simpler/pto-isa/PTOAS
+> rebased HEAD（force-with-lease）。下 session：整网 device chain + gap-5 上游修。
 
 > **2026-07-07 stepfun/develop 全仓回归 PASS + 整网集成三大 de-risk（team `vllm-pypto-e2e`）**：
 > 五仓均在 stepfun/develop 线（pypto `be90f992` / pypto-lib `1a6c6342` / pto-isa `e25732f0` /

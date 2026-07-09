@@ -6,6 +6,30 @@
 
 
 
+## 2026-07-09 —— 全栈升级到最新 + SplitIncoreOrch 移植修复 + gap-5 上游定位 ⏳
+
+**团队 `vllm-pypto-e2e`（reverse-review / sw-analyst / upstream-scout；hw-analyst 未启，reverse-review 与 upstream-scout 各有一次 429 限流）。**
+
+- **决策（用户拍板）**：升级到最新 commit 作 go-forward base；升级版与旧版**状态对上（parity）即推 `stepfun/develop`**（不搞 0709 分支）；整网串联 + gap-5 精度下 session 做。
+- **升级组件 HEAD**：pypto `5e619dc7`（rebased origin/main + 4 commit：DeviceTensor glue 等）、pto-isa `ecb6c303`、PTOAS-src `72ada0a1`(v0.49)、**ptoas-bin v0.45→v0.49**（LLVM21，GitHub release 下载）、simpler `71e39623`（origin/main + PID-whitelist patch）；pypto-lib `1a6c6342 → b511da0e`（+SplitIncoreOrch 修复，**已 push fork stepfun/develop，ff**）。
+- **升级引入的新回归 + 修复 ✅**：rebased pypto 的 `#1828`（`49f03c3e` "precondition safety net"）新增 `SplitIncoreOrch` 硬校验，硬失败 step3p5 MoE `chip_orch` 编译（`InCore ScopeStmt not outlined`）。**根因**=`moe.py` `_zero_routed_y_buf`/`_serialize_after_shared` 整个函数体被冗余的单层 `with pl.at(CORE_GROUP)` 包着（对照能过的 `_publish_src_route_table`/`dispatch_step` 无此 wrapper）。**修复**=unwrap 冗余 `pl.at`（commit `b511da0e`），语义不变（InCore 函数体本就跑在 core 级）。**验证**：moe_block `ffn_out` 8 卡 device PASS（`moe_out` ratio_allclose atol=0.04，19.64s）。
+- **parity 回归（升级栈 v0.49，card 8-15）**：moe_block ffn_out device **PASS**、`test_step3p5_w8a8_e2e_st`+`test_weight_loader_w8a8` **6 passed**、`test_decode_acceptance` **PASS** —— 与旧版对上。dense/swa ST 失败 = `moe.py:208` `SH_INTER_LOCAL==SHARED_SWIGLU_N_CHUNK*5` 断言在 `apply_tp1_patch` TP=1 reload 时 import 阶段触发（纯 Python assert，与 pypto 版本无关；违反单卡 ST/UT 铁律，旧版同样失败 → parity 非回归）。all-layers detail(CPU) 在**默认严格 tol(5e-3)** 下 pass_rate≈0.989（历史 PASS 用 atol=0.1）——CPU torch-ref、版本无关，parity-neutral。
+- **gap-5（issue #1）无上游修复 + 根因锁定**：五组件全升级（含 v0.49）**仍未修复** `cast→int8→cube` 误编译（FIXB 98.47% / P2 int8-copy 控制组 PASS）。upstream-scout：**无上游 commit** 修此 bug；根因 `pypto/src/ir/transforms/infer_tile_memory_space_pass.cpp:55-56`（`tile.matmul_mx*` 在 `kUnregisteredCubeOps` → INT8 cube A-operand fractal=32 layout 未推导；`tcvt` 输出保持 plain Vec layout → cube 读 garbage rows；GM-copy int8 已预 fractal 化故 OK）。file-ready 报告 `pypto-lib/docs/upstream-issues/gap5-cast-int8-cube-codegen.md`。INT8-native gated OFF（`select_moe_block(w8a8_native=False)`），BF16-dequant 是工作路径。gap-5 WIP（two-class + INT8-native + resid1 harness）已 `git stash`（`gap5-wip+splitincore-20260709`），不进 clean base。
+- **下个 session**：(1) 整网 device-output chain（`_stage_whole_decode_run.py:311` TODO#11，resident DeviceTensor 层间串联）；(2) gap-5 精度（提上游 issue + 等修 / 或本地 fix `infer_tile_memory_space_pass`）。
+
+
+
+## 2026-07-08 —— blocker-1 (整网 co-prepare 死锁) 定位收敛 + Option-C 数值 handoff 落地 + L3 device 精度 PASS ✅
+
+**团队 `vllm-pypto-e2e`（reverse-review / hw-analyst / sw-analyst / upstream-scout + moe-implementer）。**
+
+- **blocker-1 定位收敛**：N≥6 co-prepare dispatch wedge 主因是 **distinct 程序数 over-counting**——`select_moe_block` 对 silu 层 swa/full 返回同一 program，真实整网 = **7** 个 distinct 程序（非文档记的 8；harness `moeblk_cache` 按 kind 多编译一遍 silu）。**N=7 device 验证跑通**（探针 + 完整 7 程序链 11 步全派发 rc=0，无 507018）→ 整网单 worker live-serving 结构可行，无需分批/改 runtime。4-agent file:line 否定了 comm-window O(N) 池 / tensormap 分区 / fork-prewarm race / state-select 假设（用户的 signal-window/GM 假设被代码否定——comm window 同名 comm_d0 per-dispatch 分配即释放）。「为什么 N=8 挂」的确切设备天花板（IPC-handle vs AICPU-identity 表）未 micro-pin，只在将来 ≥8 co-prepare 才要紧。详见 `blockers.md 续6` + memory `blocker1_coprepare_wall_overcounting_N7.md`。
+- **Option-C 数值 handoff 落地（task #4）**：扩展 `EpTpMoE.chip_orch`（moe.py）自带 post-attn 零中心 RMSNorm 前导（`(resid1_fp32*inv_rms)*(gamma+1.0)`，+1.0 load-bearing，EPS=1e-5，post_rms_weight[layer_idx]）+ FP32 残差后导（`next_hidden=resid1_fp32+moe_out`），bit-for-bit 对齐 fused decode_layer.py:3371-3512。frontend smoke COMPILE OK L3/L43/L44；reverse-review 5 点 GO。
+- **L3+L44 device 精度 PASS（task #5，两个变体类都过）**：`_stage_moe_block_precision.py --target out`（我方修正版：喂 `post_attn_residual.hidden_states` 作 un-normed resid1 + FULL 45-row post_rms stack + layer_idx=args.layer）→ `next_hidden_out` vs vLLM `out.pt` `ratio_allclose(atol=0.04)`：**L3 swa_moe silu PASS 18.11s + L44 full_moe swiglu16 PASS 19.23s**，both rc=0，真 W8A8，cards 8-15，无 507018。证明扩展 moe_block 的 norm+residual 胶水在真机对 silu 和 swiglu 变体都 bit-correct。结合此前 per-layer moe_out-vs-ffn_out PASS → MoE 层 whole-decode 数值闭环（un-normed resid1 → 正确层输出 out.pt）。
+- **发现并修复的 shape/index bug（用户重点关注的类）**：harness 初版 `post_rms0 = b[KEY_POST_ATTN_RMS][pos]`（pos=layer-3）对 45-row all-layers norm stack 取错层（L3→layer-0 gamma）；MoE 专家权重是 42-row `[pos]=layer-3` 才对。修法=传 FULL 45-row stack + layer_idx。落 memory `feedback_step3p5_weight_stack_index_class.md`。
+- **诚实边界**：整网端到端精度对齐的真正达成 = **live single-handoff A/B（8001 vs 8000）**（offline chained 对 attention-core 受 vLLM dump 缺 KV 限制）。`_pypto_full_forward` 仍是 fail-closed placeholder，wire live runner + KV-IPC + A/B 是多周工程（task #6）。本 session 达成：blocker-1 解除 + 数值 handoff 落地 + L3 device 精度 PASS。
+
+
 ## 2026-07-05 (later-8) —— 穷尽调参矩阵：507018 co-tenancy 不可调，socket-worker 路径判定不可行 ⏸
 
 - **穷尽 (worker-env × vLLM-gpu-mem) 网格**：(default,0.80)→routed 507018；(RING_HEAP=4GB,0.80)→
