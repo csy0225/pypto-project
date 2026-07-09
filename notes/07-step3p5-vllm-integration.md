@@ -141,6 +141,45 @@ N≈87   每层一个 program (3p5 初版)    → 撞【运行时墙】(N≥6 si
 
 ## 八、一个 vs 多个 program：性能差异 + 减少了哪个开销
 
+### 多个 program 是怎么调度的（以 step3p5 当前实现为例）
+
+step3p5 的 whole-decode driver（`_stage_whole_decode_run.py --worker`）就是这个模式：**层循环在 host（Python driver），一个常驻 Worker 持有全部已编译 program、逐层 `rt.run` 派发；层间数据（residual/KV）留在 device 的常驻 tensor 里零拷贝串接**：
+
+- **prepare 一次**：一个 L3 `DistributedWorker`（`device_ids=[8..15]`、fork 8 chip 子进程、常驻）把 N 个 compiled program 全注册好（pre-fork COW），并 `rt.alloc_tensor([TP,BATCH,HIDDEN], bf16)` 出**常驻 residual + KV DeviceTensor**。
+- **逐层 dispatch**：driver 循环 `for li in 0..44: rt.run(prog[li], resid, w_li, kv, seqlen)`——
+  - **dense 层（L0/L1/L2）** = `select_decode_layer(li)` 返回的整层 program，1 次 `rt.run`；
+  - **MoE 层（L3–L44）** = **2 次 `rt.run`**（Option-C）：`_build_tp_attention_{swa,full}_program` → `resid1`，再 `select_moe_block(li)` → `moe_out`（中间需 post-attn RMSNorm）。
+- **层间交互 = 常驻 tensor 串 residual**：每层把 `next_hidden_out` 原地写回常驻 residual，下一层直接拿它当输入（**device 上零拷贝，不回 host**）；回 host 的只有控制流 + 一次同步。
+- **每层一道 host barrier**：`rt.run` 阻塞，driver 等这层完成才 launch 下一层（就是下表 ②）。
+
+> HW 已验证（cards 8-15）：dense L0/L1/L2 逐层 dispatch，residual 累积 **30.4→53.5→64.0**（与 `golden.run --chain` 逐层一致）；L3 attn `resid1=70.5`、moe_block `moe_out=0.0`（synthetic 置零 expert）；一个 worker 上同时 prepare 了 5 个 program（L0/L1/L2 + attn_swa + moe_block）跑通，rc=0。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Dr as 🖥 Host driver (_stage_whole_decode_run --worker)
+    participant W as 🎛 Worker (常驻, N programs prepared)
+    participant Dev as ⚙ Device (8chip AICPU+AICore, cards 8-15)
+    participant R as 📦 常驻 residual/KV (rt.alloc_tensor, device)
+    Note over W,R: prepare 一次: N 个 compiled program(COW) + alloc 常驻 R
+    Dr->>W: rt.run(select_decode_layer(0)=dense L0, R, w0, seqlen)
+    W->>Dev: host_orch→chip_orch→InCore
+    Dev->>R: next_hidden 写回 R (=30.4)
+    Dev-->>Dr: L0 返回 (★host barrier)
+    Dr->>W: rt.run(select_decode_layer(1)=dense L1, R, w1)
+    Dev->>R: 写回 R (=53.5)
+    Dev-->>Dr: L1 返回
+    Note over Dr,R: MoE 层(L3+) = 2 次 rt.run
+    Dr->>W: rt.run(attn_swa_prog, R, ...) → resid1
+    Dr->>W: rt.run(select_moe_block(li), resid1, ...) → moe_out
+    Note over Dr,R: … 逐层到 L44 …
+    Dr->>W: rt.run(rms_lm_head_tail, R, ...) → logits
+```
+
+> 对比 **融合(N=1)**：整网一个 program，**层间不回 host**——Device 内部靠 program 依赖把层串起来，上图那些 `Dev-->>Dr` 的 host barrier 全消失（这正是下表 ②③ 收益的来源）。多个 program 的调度本质：**data 常驻 device、control 每层回一次 host**。
+
+### 逐项性能差异
+
 **不只是省 dispatch 时间**——逐项标出融合(N=1)相对多程序**减少/影响的是哪类开销**：
 
 | # | 差异项 | 融合(N=1)减少的开销 | 影响量级 |
