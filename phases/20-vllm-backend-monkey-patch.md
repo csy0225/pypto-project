@@ -322,3 +322,20 @@ root-owned）实测布局：
 - → **G3 sidecar import 无运行时未知量了**：每 rank `rt.import_ipc(key.rankR)` → 按上表 offset 切每层
   K/V `DeviceTensor`（166887424 B）→ 喂 `k_cache_full/v_cache_full`（替 dummy zeros），配 live
   forward_context 的 block_table/slot_mapping/seq_lens。剩纯实现 + token-exact 验证（对 8000）。
+
+### G3 import mechanism = 复用 `WeightIpcMap`（2026-07-11 确认，proven building block）
+
+sidecar KV-import 不用从零写：`tools/step3p5/pypto_weight_ipc.py::WeightIpcMap`（`:358-414`）已实现**正是
+需要的零拷贝 import 模式** —— `rt.import_ipc(key, worker_id=r)` → `peer_base`（int）→
+`DeviceTensor(peer_base + offset, shape, dtype)` per map offset（`device_tensor.DeviceTensor`）。已在 47GiB
+权重池 + per-op `_stage_attn_worker.py::attn_setup`（phase 24 token-exact）验证。`import_ipc` API 在
+`distributed_runner.py:1073`（`def import_ipc(self, key, *, worker_id=0) -> int`），已在 stepfun/develop。
+
+**→ G3 剩纯装配（全部 building block 已 proven + reusable，零未知）**：
+1. 8001 launch `PYPTO_KVPOOL=1`（export 已验证）。
+2. sidecar 仿 `WeightIpcMap` 建 `KvIpcMap`：读 `pypto_kvpool.key.rankR` + `pypto_kvpool_map.json.rankR`
+   → per-layer K/V `DeviceTensor`（offset 见上表）。**在 chip child context 内 import**。
+3. 用这些 DeviceTensor 替 `_ordered_args` 里的 dummy k_cache/v_cache（per-op attn_setup 已证 rt.run 收 DeviceTensor）。
+4. sidecar 程序按 `MAX_SEQ_DEFAULT`=KV-slot 数（166887424/head_dim）重编（tile-shape ABI）。
+5. socket 协议 length-prefixed 带 block_table/slot_mapping/seq_lens；sidecar `--layers 0..44` 真 W8A8。
+6. 对 8000 token-exact A/B（G5b）。**全 device-iteration，须 live 8001，= 专门 session。**
