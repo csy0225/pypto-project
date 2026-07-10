@@ -25,6 +25,11 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 > （7 programs, 87 steps, 无 OOM 无 507018）。**full "torch-ref 全层过" offline 不可达**（dummy KV →
 > device 残差 L17 NaN，可复现/输入无关；full-chain 正确性必须 live A/B）。**本 session G1 offline
 > 收尾：任务 1-4 全 ✅**。下一步 = G2 `_pypto_full_forward` live wiring（任务 5-7）。
+> **续⁵（G3 HBM gate 修正）**：cards 8-15 实测 **64GB HBM/卡**（npu-smi HBM Capacity 65536MB）。
+> TP=8 sharded：vLLM W8A8 ~24G→3GB/卡 + pypto BF16 ~47G→6GB/卡 + KV ≈ ~10GB/卡 → **fits 64GB**。
+> memory 旧记「vLLM24G+pypto47G=OOM」是 aggregate/非-sharded（71G 压一卡）误判 → **G3 HBM 非硬
+> blocker**。任务 5-7 剩余 = 纯 INTEGRATION（常驻 whole-decode 服务 + 真 KV import + `_pypto_full_forward`
+> + live 8001 A/B），需专门 session，但无 HBM 门槛。
 
 > **2026-07-10 环境确认 latest/consistent + tmov 编译 blocker 解除 + 整网集成真实状态盘点（team `vllm-pypto-e2e`）**：
 > 在 0162 `stepfun/develop` 上确认工具链一致且最新：driver `25.5.2` / CANN `9.0.0 non-GA` /
