@@ -258,3 +258,27 @@ patch 走 **`/logs/pypto_patch/sitecustomize.py`**：按 env var（`PYPTO_DENSE_
   API，dummy-KV 数值 garbage）；(G5b) 真数值 token-exact（gate 在 G3 真 KV）。
 - **hazard**：pypto AICore timeout → `aclrtResetDeviceForce` 卡级 nuke vLLM（见
   `../deployment/cotenancy-simpler-no-hccl.md` §hazard）；live 前确保 vLLM stream idle + pypto 不 timeout。
+
+### G5a live 落地进度 + 硬经验（2026-07-11 首次实跑 mode=full）
+
+已实装 + 部署（备份 `workspace/g5_{whole_decode_backend,start_8001_full,start_sidecar}_*`）：
+- **自包含容器后端** `/logs/pypto_patch/pypto_whole_decode_backend.py`（内联 BATCH=16/HIDDEN=4096，
+  无 pypto-lib import）+ sitecustomize 加 `_load_backend("PYPTO_WHOLE_DECODE", ...)`。**device 实测：
+  8 rank 全部 autoload + install `Step3p5Model.forward -> sidecar` 成功**。
+- **mode=full launch** `/logs/start_8001_full.sh`（`PYPTO_WHOLE_DECODE=1` + `PYPTO_WHOLE_DECODE_SOCK=
+  /logs/pypto_whole_decode.sock` + util 0.5 + enforce-eager）。
+
+**踩过的坑（下次直接避开）**：
+1. **socket 必须在 `/logs`（共享 mount），不能 `/tmp`**：容器 `/tmp` 与 host 不共享；per-op 也用 `/logs`。
+2. **fallback 必须 COLLECTIVE**：`_pypto_full_forward` 8 rank 都跑。原版只 rank-0 查 sidecar + fallback，
+   rank≠0 直奔 `tp.broadcast` → rank-0 fallback 不 join broadcast → **HCCL broadcast 超时 error 9 / TP
+   deadlock（shm_broadcast "No available block in 60s"）**。修：**每 rank `os.path.exists(sock)` 一致判定**，
+   absent（profiling 期）→ 全 rank fallback 到 original forward（不 broadcast）。已修 backend + pypto-lib 版。
+3. **sidecar sock profiling 期必须 absent**：startup `_dummy_run` 会调 patched forward；sock 在 → 尝试连
+   死 sidecar → broadcast 分叉。启 8001 前 `rm -f` sock，让 profiling 走 fallback，8001 ready 后再起 sidecar。
+4. **停 8001 要 `pkill -9 -f VLLM::EngineCore`（不只 `vllm serve`）**：只杀 serve 会**孤儿化 EngineCore
+   子进程**，多个 EngineCore 抢 cards 8-15 → shm_broadcast 争用 hang。杀后 `npu-smi` 确认 HBM 归 0。
+
+**下一步**：clean boot（cards 空 + collective fallback + sock absent）→ profiling 走 fallback → ready →
+起 sidecar（`/logs` sock）→ 送 prompt 验证 plumbing 连通（rank-0 drive + broadcast，dummy-KV garbage
+数值但验 embed/broadcast API + socket 路径）→ 即 G5a。G5b token-exact gate 在 G3 真 KV。
