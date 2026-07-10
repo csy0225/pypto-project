@@ -5,18 +5,19 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 **最后更新**：2026-07-11
 
-> **2026-07-11 G4 co-tenancy device 定论 = 硬 blocker（HCCL comm-world 冲突）[NEXT-SESSION task 1 结论]**：
-> 在 0162 cards 8-15 起 idle vanilla vLLM 8001（enforce-eager，TP=8，util 0.5，health=200），
-> 再同卡跑 whole-decode worker `_stage_whole_decode_run.py --worker`：**CO-PREPARE OK**（4 programs、
-> 8 chip_process ready）但首个 dispatch `allocate_domain→_ensure_comm_base` 挂 `comm_hccl.cpp:301
-> HcclCommInitRootInfo failed: 7`（8/8 ranks）。**standalone（无 vLLM）同 worker comm_init 成功 rc=0**
-> → 纯 HCCL 共存冲突：两个进程在同 8 卡各建一个 HCCL communicator 不被支持。distinct
-> `HCCL_IF_BASE_PORT` 已排除（device 级非 port）。per-op `_MlpService`（phase 24）能共存是因为
-> worker 侧无 collective（不建 HCCL world）；whole-decode 做 TP all_reduce + EP a2a 必须建 → 冲突。
-> **live single-handoff（tasks 5-7）被 gate 在此**：需 (a) IPC-only control comm（上游 simpler 改
-> `_ensure_comm_base`/`comm_hccl.cpp`）或 (b) in-process 复用 vLLM comm/device context（phase 22 重构）。
-> 详见 [`blockers.md` §NEW 2026-07-11](blockers.md) + memory `project_g4_cotenancy_hccl_conflict.md`。
-> **下一步 = team 定 (a) vs (b) 可行性；两者均跨 session。**
+> **2026-07-11 G4 co-tenancy ✅ DISPATCH-RESOLVED（vLLM+pypto 同卡共存已解）[NEXT-SESSION task 1]**：
+> 原症状：idle vLLM 8001 占 cards 8-15 时 whole-decode worker 首个 dispatch 挂 `comm_hccl.cpp:301
+> HcclCommInitRootInfo failed: 7`（两 HCCL communicator 同 8 卡不共存；distinct HCCL_IF_BASE_PORT 无效）。
+> **根因**：simpler HCCL control comm 是 vestigial（只 init/barrier/destroy，无 AllReduce/Send；唯一
+> 消费者 `comm_barrier` dispatch 路径无调用者；数据面+domain 建立已走 file_barrier+IPC peer-access）。
+> **修法（root-cause，env-gated）**：`SIMPLER_COMM_NO_HCCL=1` → comm_init 跳过 HcclGetRootInfo/
+> HcclCommInitRootInfo（保 run_token 文件+file_barrier），relax null 检查，comm_barrier no-op。默认
+> 不变（安全）。patch a2a3 `comm_hccl.cpp`（simpler commit 0162-local `878f3742`，待 push fork）+ 重编
+> a2a3 runtime。**device 验证（0162 cards 8-15）**：worker + idle 8001 同卡 → PREPARE OK、all steps
+> dispatched、rc=0、无 HcclCommInitRootInfo、8001 health=200；real-weight L0 full_dense torch-ref
+> **PASS 1.000**；standalone HCCL vs NO_HCCL L0 **bit-identical**（swa/MoE 差异 = dummy-KV 非确定性，
+> HCCL 路径同样，非 NO_HCCL 引入）。runbook：[`deployment/cotenancy-simpler-no-hccl.md`](deployment/cotenancy-simpler-no-hccl.md)。
+> **剩余（tasks 5-7）**：G2 `_pypto_full_forward` wiring + G3 real KV import + G5 live A/B（真数值 token-exact 在此定论）。
 
 > **2026-07-10 (续²) G1 Option-C 真 W8A8 dense/attn device 跑通 [NEXT-SESSION 任务 1+2 完成]**：
 > Option-C worker `_stage_whole_decode_run.py` 4 层链（0,1,2,3=3 dense+1 swa_moe，5 步）在 0162
@@ -445,7 +446,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | # | Blocker | 严重度 | gate 什么 | Owner | 详情 |
 |--:|---------|--------|-----------|-------|------|
-| G4 | **co-tenancy：whole-decode worker HCCL world 与 vLLM 同卡冲突** | 🔴 架构 | **live single-handoff A/B（tasks 5-7）** | team-lead | [`blockers.md`](blockers.md) §NEW 2026-07-11 |
+| G4 | **co-tenancy：whole-decode worker HCCL world 与 vLLM 同卡冲突** | ✅ RESOLVED (dispatch) | ~~live single-handoff~~ → 已解，`SIMPLER_COMM_NO_HCCL=1` | team-lead | [`deployment/cotenancy-simpler-no-hccl.md`](deployment/cotenancy-simpler-no-hccl.md) |
 | 0 | **0234 节点级跨卡 IPC poison（507899 ImportByKey）** | 🔴 基础设施 | **0234 上所有多卡 device 运行**（N=1 dispatch / Option-C 链 / MoE 8 卡） | 需 host 级 reset/reboot | [`blockers.md`](blockers.md) §NEW 2026-07-10 |
 | 1 | Phase 20 production backend 未接入 | 🟡 功能 | 真实 vLLM 请求走 PyPTO runner | 未指派 | `phases/20-vllm-backend-monkey-patch.md` |
 | 2 | Prefill MoE L1 overflow（TASK-29） | 🟡 功能/性能 | 真实 PyPTO NPU prefill kernel + TTFT | 未指派 | [`blockers.md`](blockers.md) §2 |

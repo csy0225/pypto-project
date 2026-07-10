@@ -34,8 +34,19 @@
    attention-core 正确性 **只能对着跑起来的 8001 vLLM 验证**（attn_metadata / paged-KV device buffer
    只在 serving 时存在）。可复用积木：phase 24 的零拷贝 KV-IPC 已在 per-op 路径 token-exact
    （`project_phase24_25_zero_copy_kv_handoff`）；attn_setup import_ipc 全 45 层 token-exact。
-2. **co-tenancy 507018（G4）**：pypto whole-decode worker 跑在 vLLM 进程内 = 同卡两个 `chip_process`
-   owner，未解架构 blocker（phase 24.4 `run_prepared code 13` 家族）。**这是 task 5 能否成立的前提。**
+2. **co-tenancy（G4）✅ DISPATCH-RESOLVED（2026-07-11）**：原判「pypto whole-decode worker 与 vLLM
+   同卡两个 chip_process owner = 未解架构 blocker」**已解**。真实症状不是 507018 而是
+   `comm_hccl.cpp:301 HcclCommInitRootInfo failed: 7`（两个 HCCL communicator 同 8 卡不共存）。
+   **根因 + 修法**：simpler 的 HCCL control comm 是 vestigial（只用 GetRootInfo/CommInitRootInfo/
+   Barrier/Destroy，无 AllReduce/Send/Recv；唯一消费者 `comm_barrier` 在 dispatch 路径无调用者；
+   数据面 + domain 建立已走 `file_barrier`+IPC peer-access）。**env-gated 修复 `SIMPLER_COMM_NO_HCCL=1`**：
+   comm_init 跳过 HcclGetRootInfo/HcclCommInitRootInfo（保留 run_token 文件 + file_barrier），
+   relax `hccl_comm==nullptr` 检查，no-op comm_barrier。默认(flag 未设)=原 HCCL 路径不变（安全）。
+   patch 在 a2a3 `comm_hccl.cpp`（5 anchors，备份 `.bak_nohccl`），已重编 a2a3 runtime。
+   **device 验证**：idle vLLM 8001 + whole-decode worker(`SIMPLER_COMM_NO_HCCL=1`) 同卡 8-15 →
+   PREPARE OK、all steps dispatched、rc=0、无 HcclCommInitRootInfo failure、8001 health=200。
+   → **task 5（co-tenancy）前提已成立**。剩：real-weight torch-ref 数值确认（合成跑出 L3 MoE nan，
+   须排除 barrier-ordering race vs 合成数据 blowup）+ commit simpler patch + standalone regression。
 
 ## 可复用积木（别从零写）
 

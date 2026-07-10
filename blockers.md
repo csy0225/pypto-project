@@ -11,9 +11,15 @@ Blocker 解决时，**删掉本文件里这一节**，到
 
 ---
 
-## ⛔ NEW 2026-07-11 — G4 co-tenancy：whole-decode worker 的 HCCL comm world 与 vLLM 8001 同卡冲突（live single-handoff 硬 gate）
+## ✅ RESOLVED 2026-07-11 — G4 co-tenancy：whole-decode worker 的 HCCL comm world 与 vLLM 8001 同卡冲突
 
-**严重度**：🔴 阻塞 live single-handoff A/B（NEXT-SESSION tasks 5-7）—— pypto whole-decode worker 无法与 vLLM 在同 8 卡共存。
+**状态**：✅ **DISPATCH-RESOLVED**（mechanism 已解，device 验证）。修法 = env-gated `SIMPLER_COMM_NO_HCCL=1`
+（simpler a2a3 `comm_hccl.cpp`，commit 0162-local `878f3742`，**待 push fork**）。完整 runbook +
+根因见 [`deployment/cotenancy-simpler-no-hccl.md`](deployment/cotenancy-simpler-no-hccl.md)。
+**剩余**：swa/MoE 全层数值 token-exactness 走 live A/B（real KV）定论（offline synthetic 不可信；
+非本 blocker 范畴）。下面保留原始症状/分析供 post-mortem。
+
+**严重度**：~~🔴~~ → mechanism 已解。
 
 **症状（0162 cards 8-15 device 实测，2026-07-11）**：先在 cards 8-15 起 vanilla vLLM 8001（enforce-eager，TP=8，`--gpu-memory-utilization 0.5`，health=200 idle），再在同卡跑 whole-decode worker `_stage_whole_decode_run.py --worker --tp 8 --dev-offset 8 --layers 0,1,2,3`：
 - **CO-PREPARE OK**（4 distinct programs co-prepare 成功、8 个 chip_process ready）。
