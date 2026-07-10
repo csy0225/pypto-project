@@ -112,13 +112,20 @@
    + phase 23 doc + attn_setup import_ipc，per-op 已 token-exact）。forked chip 的 IPC import 必须
    在 child 进程 context 内（每 rank 一条：sidecar chip-r import vLLM rank-r KV）。sidecar 协议加
    kv_args/attn_args 随 hidden 一起收。
-4. 接 `_pypto_full_forward`（`tools/step3p5/vllm_monkey_patch.py:233`，现 fail-closed）：
-   lazily 建常驻服务 client（rank-0 drive + `tensor_model_parallel_broadcast` 给其余 7 rank）+ 45 层
-   dispatch loop（常驻 DeviceTensor residual handoff）+ 读 live forward_context 进 attn args +
-   final hidden copy 回。整模型 patch（不 per-layer），enforce_eager。
-5. G5 live A/B：8001 起 mode=full（`PYPTO_STEP3P5_PATCH_MODE=full`），恢复 8001 顺序 = 先起
-   8001 等 HCCL init 完再起 pypto sidecar（`SIMPLER_COMM_NO_HCCL=1`）。跑 3-prompt A/B vs 8000
-   vanilla，要 token-exact。swiglu(L43/L44) 精度也在此定论（offline 合成不可信）。
+4. ✅ **接 `_pypto_full_forward` — 代码已写 + socket 客户端 unit-tested（2026-07-11）**：
+   `tools/step3p5/vllm_monkey_patch.py` 加 `_WholeDecodeClient`（AF_UNIX，pad live `[T,HIDDEN]`→
+   `[BATCH,HIDDEN]` 送、recv、slice 回）+ `_whole_decode_client()` singleton（env `PYPTO_WHOLE_DECODE_SOCK`，
+   sidecar 缺失时 fail-closed 明确报错）；`_pypto_full_forward` body 实装：embed（vLLM）→ rank-0 drive
+   sidecar → `get_tp_group().broadcast(src=0)` → 返回 post-45-layer / pre-final-norm hidden。**KV/attn 是
+   sidecar 内部事（G3），此 body 对 G3 前向兼容、无需改**。**验证**：AST_OK + IMPORT_OK + socket 客户端
+   pad/send/recv/unpad round-trip unit-test PASS（echo bit-exact）。备份
+   `workspace/g2_vllm_monkey_patch_wiring_20260711_023659.py`。**剩（G5 时验证）**：live embed/broadcast
+   API + 真数值（须 G3 真 KV + 8001 mode=full 实跑）。
+5. G5 live A/B（gate 在 G3 真 KV）：8001 起 mode=full（`PYPTO_STEP3P5_PATCH_MODE=full`），恢复 8001 顺序
+   = 先起 8001 等 HCCL init 完再起 pypto sidecar（`SIMPLER_COMM_NO_HCCL=1` + `--serve`）。跑 3-prompt A/B
+   vs 8000 vanilla，要 token-exact。swiglu(L43/L44) 精度也在此定论（offline 合成不可信）。
+   ⚠ hazard：pypto AICore timeout → `aclrtResetDeviceForce` 卡级会 nuke vLLM，须防（见
+   `deployment/cotenancy-simpler-no-hccl.md` §hazard）。
 
 ## 关键契约（读码已证，别信旧 memory）
 - HBM 非门槛：64GB/卡，TP=8 sharded vLLM+pypto ≈10GB/卡 fits（旧「24G+47G=OOM」是 aggregate 误判）。
