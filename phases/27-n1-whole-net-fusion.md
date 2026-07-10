@@ -91,7 +91,8 @@ host_orch，`decode_layer.py:903-1140`）**泛化到 45 层 + tail**（~90 seque
 - `Mixed2Method` full/swa（compile ✅）—— 证明 per-protocol 分离（attn method + MoE method）编译；**swa_moe 分离 compile 过（fused swa_moe const-fold 失败）**，确认 per-protocol 分离是必需且正确的结构。
 - `MixedMoeTail`（dense-attn method + 完整 EP-MoE method-set + tail，compile ✅ rc=0）—— 证明三者在**一个 program** 共存 + 链接（45 层程序所需的确切结构）。
 - `MoeLayerReal`（真实 MoE 层：`swa_attn_only_orch` 纯 attention→resid1 → MoE `chip_orch` → residual → tail，compile ✅ rc=0）—— 证明真实 MoE 层结构（独立 attention 喂 MoE block）。
-- `WholeDecodeProgram`（1 dense + 1 MoE mixed-min，compile ✅ rc=0）+ **`WholeDecodeNetwork`（全 45 层，compile ✅ rc=0）** —— N=1 整网编译达成。
+- `WholeDecodeProgram`（1 dense + 1 MoE mixed-min，compile ✅ rc=0）+ `WholeDecodeMixedMin`（忠实 dense-prefix + 真实 MoE 层，compile ✅ rc=0）+ **`WholeDecodeNetwork`（全 45 层 all-MoE 近似，compile ✅ rc=0）** —— N=1 整网编译达成。
+- **`WholeDecodeFaithful`（忠实全 45 层：L0 full-dense + L1/L2 swa-dense + L3-44 42× 真实 per-protocol MoE + tail，88 个源码级展开 pass block，compile ✅ rc=0，`build_output/WholeDecodeFaithful_20260710_051822`）** —— **真实 step3p5 层表**的整网编译完成（非 all-MoE 近似）。
 
 **遗留（Phase 4 device+runtime = 下一步）**：(1) 8 卡 device dispatch 决定性实验（per-protocol 分离是否躲开 Wall-2 `TaskMapSize=0`）。(2) 权重索引 3-class 在 45 层规模的解耦（当前编译用复用单 slab / all-MoE-layer 近似；真实需 host-side stack 切片 + dense-prefix L0-L2 + full-attn L0）。(3) 47GiB 单 key 权重 IPC + `_pypto_full_forward` single-handoff + live A/B。
 
