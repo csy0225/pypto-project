@@ -155,6 +155,28 @@ host_orch，`decode_layer.py:903-1140`）**泛化到 45 层 + tail**（~90 seque
 
 **边界**：dummy 权重 → 输出 0，只证 forward-progress（无 stall）；**逐层数值对齐 vLLM 仍是 task #2/Step-2**（真实 per-layer 权重 + L1 ratio_allclose）。
 
+### Step-2 refined 蓝图（2026-07-10，code-explorer 精确定位）—— faithful reuse-one-slab → 真实 per-layer 权重
+
+**逐层 3-class 索引映射（绝对层 L=0..44）**：
+- **norm_layer_idx = L**（绝对；入 45 行 norm 栈：input_rms/post_rms/q_norm/k_norm；KV-cache base = L×per_layer_rows）
+- **attn_layer_idx = type-local**：full 层用 `L//4`（0..11，入 12 行 `KEY_W*_FULL`）；swa 层用 `L-(L//4+1)`（0..32，入 33 行 `KEY_W*_SWA`）。例：L0 full→0；L1 swa→0；L2 swa→1；L3 swa→2；L4 full→1。
+- **mlp_layer_idx = L**（L0/1/2 → 0/1/2，入 3 行 `KEY_DENSE_*`）
+- **moe pos = L-3**（L3..44 → 0..41，入 42 行 `KEY_MOE_*`）
+
+**两处必改（gap）**：
+1. **faithful 内联 orchestrator**（`full_chip_orch`/`swa_chip_orch`/`swa_attn_only_orch`/`chip_orch`/`attn_dense_orch`）当前收单 `layer_idx` 复制成 `(layer_idx,layer_idx)` 传 inline。→ 改成收 3 个真实 scalar，host_orch 逐 pass-block 传 `(norm=L, attn=type_local, mlp/moe_pos)`。inline `_func` 签名**已就位**（norm+attn / norm+mlp），无需再改 kernel base 公式。
+2. **MoE `chip_orch` 无 layer 维**：`gate_w`/`router_bias`/`w_{gate,up,down}_{r,s}` 直接传子步骤，无索引（仅 `post_rms` 按 `layer_idx` 切）。→ 加 `moe_pos` scalar + 给这些权重加前导 `[42]` 维在 body 内切片，**或**（推荐，对齐 `decode_layer.py:19142` 的 host-side slicing 延期note）host_orch 侧按 pos 切 slab 再传单层。
+
+**两处 pre-existing 坑（真实权重才暴露）**：
+- **swa `LAYER_HIDDEN_ROWS_DYN=49152`（=12×HIDDEN，full 高度）被 attention_swa 复用于 swa wq/wk/wv**，但 swa 有 33 层 → 真实 swa 栈应 `33×4096=135168`。reuse-one-slab（idx=0）掩盖了此不一致。喂真实 swa 权重前必须核对 loader `KEY_WQ_SWA[33,HIDDEN,...]` flatten 后的行数 + 调 config 常量。
+- **L1/L2 各有独立 `l1_*/l2_*` slab 但都传 idx=0**；真实权重下 L1 用 swa-local 0、L2 用 swa-local 1 → 可合并成一份 swa 栈 + 逐层 idx。
+
+**weight_loader 已就绪**（`weight_loader.py:747-864`，无需改）：bundle 已按 3 类栈（norm[45]abs / attn full[12]+swa[33] type-local / dense[3] / MoE[42]pos）+ 每 rank EP/TP 切好；W8A8 index + dequant 已支持。真实权重路径 `/mnt/hw910test-jfs/models/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp/`。
+
+**device harness `_stage_whole_faithful_device.py`**：单-slab 输入 → 全栈（`m_gate_w`→`[tp,42,HIDDEN,N_EXPERTS]`、`m_w_gate_r`→`[tp,42,36,HIDDEN,1280]` 等加前导 42；ma_*/m_* swa attn → `[tp,33,...]`；norm 已 `[tp,45,...]`）。
+
+**验证**：compile rc=0（host）→ 8 卡 device 逐层 hidden vs vLLM eager dump（L1 ratio_allclose atol=0.04）；final logits argmax 一致。建议先加 flag/新 builder，保当前 per-layer-window reuse-one-slab 干净基线不回归。
+
 ### Step 2 实施蓝图（3-class 权重解耦；compile 可先做，device 数值验证 gate 在 reboot 后）
 
 > N=1 分支（base `94aa015`）**没有** `8b4bf3fa`（stepfun/develop）的 3-scalar split —— grep 零 `norm_layer_idx`/`attn_layer_idx`/`mlp_layer_idx`；`WholeDecodeFaithful` 全部方法只吃单个 `layer_idx: pl.Scalar[INT32]`（`decode_layer.py` full_chip_orch@20727 / swa_chip_orch@20784 / chip_orch@20502 / swa_attn_only_orch@20842 / attn_dense_orch@20454）。
