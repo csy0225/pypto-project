@@ -6,6 +6,46 @@
 
 
 
+## 2026-07-10 (续 —— G1 Option-C 整网 decode worker 真机 Pass 1/2)
+
+承接同一目标（live single-handoff A/B）。用户拍板两条决策：(1) 环境不 rebase，基于当前
+0162 `stepfun/develop @47c260e3` 一致线开发；(2) 走 **Option-C 多程序**路线（非 n1-fusion）。
+4-agent team（reverse-review / hw-analyst / sw-analyst / upstream-scout）协作。
+
+**关键修正（2 agent 独立读码，推翻旧 memory）**：`select_moe_block` 返回的 standalone
+`EpTpMoE` **不自带** post-attn RMSNorm / residual（只出 `moe_out`）。Option-C worker 必须自补：
+attn→未归一化 resid1 → post-RMSNorm(EPS=1e-5, Gemma +1.0) → moe_block → `next_hidden=resid1_fp32+moe_out`。
+
+**卡状态澄清（hw-analyst）**：cards 8-15 的 Aicore=100% 是 **sticky 计数器假象**，非功能性
+poison —— L3 allreduce golden smoke（-d 8-9）实测 `max|out-expected|=0`。可直接 launch，无需重置。
+
+**gate_r 语义（sw-analyst）**：`gate_r` 是**真 per-head gate 乘子**（非 ×1 旁路，committed 于
+47c260e3）；worker 必须喂 `gate_exp=sigmoid(RMSNorm(hidden)@w_g)`（复用 gate_r 槽，见 head-gate
+matmul_acc N=16 绕过）。
+
+**worker 交付**：`_stage_whole_decode_run.py --worker`（+~508 行，in-tree 未提交）—— N=7 Option-C
+DistributedWorker（dedup by `id(select_moe_block)`+kind）、3-scalar layer_idx、worker 自补 norm+residual、
+per-layer gate_exp、real W8A8 加载。reverse-review 抓到 gate_exp L96 shape bug（`w_g` 取成 `[pad]`
+向量应切 `[HIDDEN,pad]` 块）+ sw-analyst 自查 4 个（double `_expand_tp`、`w_g` 非连续切片、
+fork 后共享内存 must-`share_memory_()`-before-`prepare()`、synth shape）已全修。
+
+**device 结果（cards 8-15, `-p a2a3 --tp 8 --dev-offset 8`）**：
+- **Pass 1（synth 机制）rc=0**：4 程序编译 + PREPARE OK + 8 chip ready + 全 5 步派发（L0/1/2 dense +
+  L3 attn+moe_block），**无 507018**。逐步 next_hidden：30.9 / 44.8 / 59.8 / 61.8。moe_out=0（synth 零专家，
+  验证 dispatch/combine/shared/residual 机制）。**N=7 co-prepare + 3 程序类型 + resident-sh 复用 +
+  3-scalar + norm/residual handoff 在真机验证通过**。
+- **Pass 2（真 W8A8）rc=0**：47GB 真权重（8 rank bundle）加载成功 + 全链真机派发无 507018。
+  **`moe_out` 从 0 → 3.5（非零）—— 真 MoE 专家在 device 上跑通**（整网 decode 首次带真权重跑通）。
+  边界：dense/attn 各层输出 ≈ Pass 1 synth（31/44.25/60.5/63），说明 **dense/attn 仍走 synth 权重**
+  （deferred wiring 未完成），当前仅 moe_block 接了真权重。
+
+**遗留（继续做）**：(1) dense/attn 真 W8A8 wiring（build_dense_inputs / `_moe_attn_sh` 目前 synth）+
+per-rank gate；(2) torch-ref 逐层对拍坐实 3-scalar 数值正确性（离线 attention-core KV-blocked，真
+token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant_moe_input` 的 `pl.spmd`
+在 InCore helper 泄漏 InCoreScopeStmt）—— 定 **Option C：InCore→Inline**（对齐 DeepSeek `gate.py`
++ step3p5 自己的 `_expert_routed`，数值与 L43 device-PASS 版字节一致），扩 45 层前修。
+
+
 ## 2026-07-10 (goal session —— 3-scalar split committed + push fork + decode 接管 gap 盘点)
 
 承接「继续 pypto+vLLM 集成、完成后端替换、接管 step3p5 整网 decode」目标。启动 4-agent team
