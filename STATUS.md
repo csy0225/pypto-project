@@ -8,8 +8,10 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 > **2026-07-10 环境确认 latest/consistent + tmov 编译 blocker 解除 + 整网集成真实状态盘点（team `vllm-pypto-e2e`）**：
 > 在 0162 `stepfun/develop` 上确认工具链一致且最新：driver `25.5.2` / CANN `9.0.0 non-GA` /
 > pypto `5e619dc7`(rebased origin/main) / pto-isa `ecc63…` / PTOAS `72ada0a1`(≈v0.49) / simpler `71e39623`；
-> pypto-lib `94aa015c`。cards 0-7 = vanilla oracle(8000)，8-15 空闲。**（注意：本地 `b-csy-develop`
-> 上是 `feat/whole-net-n1-fusion` 分叉实验分支，非权威；开发一律在 0162 `stepfun/develop`。）**
+> pypto-lib `94aa015c`。cards 0-7 = vanilla oracle(8000)，8-15 空闲。**（注意：`feat/whole-net-n1-fusion`
+> 是独立的 N=1 整网融合攻关线 —— 见 [`phases/27-n1-whole-net-fusion.md`](phases/27-n1-whole-net-fusion.md)，
+> 2026-07-10 已达成整网**编译**里程碑（`WholeDecodeFaithful` 真实 45 层单 program compile rc=0），
+> 分支已 push `csy0225/pypto-lib` HEAD `0fd5afa`。与本 stepfun/develop 主线正交，勿混。主线开发仍在 0162 `stepfun/develop`。）**
 > ① **tmov 编译 blocker 解除**：升级后 `full_out_proj_matmul` 报 `pto.tmov` 不支持的 address-space
 > pair（910B 无 L1→L1 DMA）。4-agent 定位：N=256 时 out_proj cube RHS [256,256]=128KB 超 L0B 64KB →
 > 触发 #1601 Vec-LHS→Mat staging → 非法 Mat→Mat tmov。修复 `OUT_PROJ_N_CHUNK 256→64`（RHS 降到 32KB，
