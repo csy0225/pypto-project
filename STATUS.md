@@ -18,6 +18,9 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 > **PASS 1.000**；standalone HCCL vs NO_HCCL L0 **bit-identical**（swa/MoE 差异 = dummy-KV 非确定性，
 > HCCL 路径同样，非 NO_HCCL 引入）。runbook：[`deployment/cotenancy-simpler-no-hccl.md`](deployment/cotenancy-simpler-no-hccl.md)。
 > **剩余（tasks 5-7）**：G2 `_pypto_full_forward` wiring + G3 real KV import + G5 live A/B（真数值 token-exact 在此定论）。
+> **2026-07-11 追加 G2 运行时机制 de-risk（device）**：所有 `_pypto_full_forward` resident holder 依赖的运行时机制已 device 验证 co-resident：
+> (1) co-tenancy NO_HCCL ✓；(2) **resident prepared-rt 跨 decode step 复用**（worker `--steps 2` co-resident 8001 → step0+step1 各 dispatch L0-2、`reusing prepared rt`、rc=0、8001 health=200）✓；
+> (3) real-weight dispatch co-resident（L0 torch-ref 1.000）✓。→ G2 剩纯 CODE：把 worker build+prepare+dispatch 抽成常驻 holder（module-global rt、manual `__enter__/__exit__`）+ 接 `vllm_monkey_patch.py:233 _pypto_full_forward`（45 层 dispatch loop + resident DeviceTensor residual + live forward_context→attn args）。G3/G5 后续。
 
 > **2026-07-10 (续²) G1 Option-C 真 W8A8 dense/attn device 跑通 [NEXT-SESSION 任务 1+2 完成]**：
 > Option-C worker `_stage_whole_decode_run.py` 4 层链（0,1,2,3=3 dense+1 swa_moe，5 步）在 0162
