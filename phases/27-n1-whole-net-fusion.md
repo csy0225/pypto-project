@@ -61,7 +61,7 @@ host_orch，`decode_layer.py:903-1140`）**泛化到 45 层 + tail**（~90 seque
 | **1** | swa attention tile-space 重写**数值验证**（走 swa_dense known-good device 路径，无 oracle 风险） | gate device |
 | **2** | 建 whole-decode @pl.program 骨架：**3 dense 层 + tail**（`_build_whole_decode_dense_prefix_program` = `WholeDecodeDensePrefix`；full/swa 隔离 method + per-layer 权重 slab @layer_idx=0 + resident `pl.Out` handoff + 2-pass host_orch）。**compile ✅ 2026-07-10**（8 卡 device pending） | compile ✅ |
 | **3** | dense-attn method + 完整 EP-MoE method-set + tail 在**一个 program** 共存 + 链接（`_build_mixed_moe_tail_program` = `MixedMoeTail` = Mixed2Method + `lm_head_orch` + pass-3 tail）。**compile ✅ 2026-07-10 rc=0**（`build_output/MixedMoeTail_20260710_025646`）。per-protocol 分离躲 `TaskMapSize=0` 的 8 卡 device 决定性实验 pending | compile ✅ |
-| **4** | 扩到全 45 层（full/swa dense + swa/full-attn-only method + MoE method-set + tail，46-pass host_orch）+ 权重索引 3-class 解耦（45 层 slab 不能逐层显式传参，需 host-side layer 切片 or inline body 拆 norm/attn/kv/mlp idx）+ 47GiB 单 key 权重 IPC + wire `_pypto_full_forward` single-handoff + live A/B 8001-vs-8000 | 进行中（下一步） |
+| **4** | 全 45 层：`_build_whole_decode_all_program`=`WholeDecodeNetwork`，ONE `@pl.program` 跑全 45 层（每层 attn-only method → EP-MoE method，per-protocol 分离）+ tail。**compile ✅ 2026-07-10 rc=0**（`build_output/WholeDecodeNetwork_20260710_043504`；N=4 先导→N=45 全深度，源码级显式展开——前端禁 `@pl.function` 体内 Python `for`）。**遗留**：8 卡 device dispatch（Wall-2 决定性实验）+ 权重索引 3-class 45 层解耦（当前复用单 slab / dense-prefix L0-L2 近似）+ 47GiB 单 key 权重 IPC + `_pypto_full_forward` single-handoff + live A/B 8001-vs-8000 | compile ✅ / device+runtime 进行中 |
 
 ## 权重索引（3-scalar split，`weight_loader.py:755-789`）
 
@@ -85,13 +85,15 @@ host_orch，`decode_layer.py:903-1140`）**泛化到 45 层 + tail**（~90 seque
 
 ## Status
 
-🟢 **compile 基础全部打通（2026-07-10）**：N=1 所需的 per-protocol 结构积木**全部 compile-verified** on 0234（升级栈 pypto `5e619dc7` + ptoas v0.45 + tmov 修复）：
+🟢 **N=1 整网编译里程碑达成（2026-07-10）**：`WholeDecodeNetwork` —— ONE `@pl.program` 跑**全 45 层** decode（每层 attn-only method → EP-MoE method，per-protocol 分离）+ tail —— **编译通过 rc=0** on 0234（升级栈 pypto `5e619dc7` + ptoas v0.45 + tmov 修复；`build_output/WholeDecodeNetwork_20260710_043504`）。逐级验证链全绿：
 
 - `WholeDecodeDensePrefix`（3 dense 层 + tail，compile ✅）—— 证明多 dense 层 + tail 经 resident `pl.Out` handoff + 多-pass host_orch 在一个 program 内链接。
 - `Mixed2Method` full/swa（compile ✅）—— 证明 per-protocol 分离（attn method + MoE method）编译；**swa_moe 分离 compile 过（fused swa_moe const-fold 失败）**，确认 per-protocol 分离是必需且正确的结构。
 - `MixedMoeTail`（dense-attn method + 完整 EP-MoE method-set + tail，compile ✅ rc=0）—— 证明三者在**一个 program** 共存 + 链接（45 层程序所需的确切结构）。
+- `MoeLayerReal`（真实 MoE 层：`swa_attn_only_orch` 纯 attention→resid1 → MoE `chip_orch` → residual → tail，compile ✅ rc=0）—— 证明真实 MoE 层结构（独立 attention 喂 MoE block）。
+- `WholeDecodeProgram`（1 dense + 1 MoE mixed-min，compile ✅ rc=0）+ **`WholeDecodeNetwork`（全 45 层，compile ✅ rc=0）** —— N=1 整网编译达成。
 
-**遗留（Phase 4 = 下一步）**：(1) 全 45 层单 program 组装 —— 核心难点是权重索引 3-class 在 45 层规模的解耦（per-layer slab 显式传参在 3 层可行，45 层不可行；需 host-side layer 切片或把 inline body 的单一 `layer_idx` 拆成 norm/attn/kv/mlp 四个 idx）。(2) 8 卡 device dispatch 决定性实验（per-protocol 分离是否躲开 Wall-2 `TaskMapSize=0`）。(3) 47GiB 单 key 权重 IPC + `_pypto_full_forward` single-handoff + live A/B。
+**遗留（Phase 4 device+runtime = 下一步）**：(1) 8 卡 device dispatch 决定性实验（per-protocol 分离是否躲开 Wall-2 `TaskMapSize=0`）。(2) 权重索引 3-class 在 45 层规模的解耦（当前编译用复用单 slab / all-MoE-layer 近似；真实需 host-side stack 切片 + dense-prefix L0-L2 + full-attn L0）。(3) 47GiB 单 key 权重 IPC + `_pypto_full_forward` single-handoff + live A/B。
 
 ### 历史
 
