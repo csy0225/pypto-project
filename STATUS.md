@@ -13,7 +13,12 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 > + MoE-block(L3 moe_out) **精确 1.000**；SWA-attn 路径稳定 0.994（不累积 → 非层索引错位；满足项目
 > `max_error_ratio=0.10` 判据；worker 阈值 0.999 过严）。SWA token-exact 定论留 live A/B。
 > 详见 [`archive/milestones-2026-Q2.md` 2026-07-10 (续²)](archive/milestones-2026-Q2.md)。
-> **下一步 = item 4：修 L43/L44 SplitIncoreOrch → 扩 45 层链 device 对齐。**
+> **续³（任务 3 完成）**：L43/L44 编译 blocker 修复（`_quant_moe_input` moe.py:1801 `InCore→Inline`，
+> #1828 SplitIncoreOrch）；`--layers 0,1,2,44 --ckpt` device rc=0 无 507018。swiglu MoE offline 合成数值
+> 不可信（synthetic-only，走 vLLM/live 定论），silu MoE 精确 1.000。**任务 4（45 层链）发现 blocker**：
+> worker `_moe_block_sh` stack+share 全权重 → 3 variant `/dev/shm` OOM + 同 variant 多层复用首层权重，
+> 需 per-layer weight-stream 重构（与 G2 常驻 weight-IPC 重叠）。
+> **下一步 = 任务 4：worker per-layer weight-stream 重构 → 45 层链 → G2 live wiring。**
 
 > **2026-07-10 环境确认 latest/consistent + tmov 编译 blocker 解除 + 整网集成真实状态盘点（team `vllm-pypto-e2e`）**：
 > 在 0162 `stepfun/develop` 上确认工具链一致且最新：driver `25.5.2` / CANN `9.0.0 non-GA` /

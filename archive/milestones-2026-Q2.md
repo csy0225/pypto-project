@@ -6,6 +6,45 @@
 
 
 
+## 2026-07-10 (续³ —— G1 任务 3：L43/L44 SplitIncoreOrch 编译修复 + 45 层 weight-stream blocker 定位)
+
+承接续²。完成 NEXT-SESSION 任务 3（扩 45 层前先修 L43/L44 standalone SplitIncoreOrch）。
+
+**编译 blocker 根因 + 修复（device 验证）**：swiglu MoE 变体（L43 swiglu7_silu / L44 swiglu7_swiglu16）
+的 standalone `select_moe_block` 编译报 `#1828 SplitIncoreOrch: InCore ScopeStmt found in non-InCore
+function` at `moe.py:1813`。根因 = `_quant_moe_input`（moe.py:1801，per-token INT8 dynamic-quant，
+**仅 swiglu 路径 `_routed_swiglu_step` 才调**，故 silu L3 不受影响）声明为 `@pl.function(InCore)`，
+其整个 body 是一个 `pl.spmd`（本身即 InCore scope）→ #1828 outliner 拒。**修复**：decorator
+`InCore → Inline`（body 字节不变），对齐同文件工作的 `_expert_routed`(959) / `gate_step`(555) /
+`expert_shared_step`(1439)（全是 Inline + pl.spmd + pl.Out）。3b236e6 时是 InCore（旧 pypto 无
+#1828 故过）；#1828 是升级后新加的更严 precondition（见 memory `upgrade_pypto_originmain_breaks_moe`）。
+
+**device 验证**：`--layers 0,1,2,3,43,44 --smoke` → **compiled 7 distinct programs, SMOKE_RC=0**；
+`--layers 0,1,2,44 --ckpt`（真 W8A8）→ **device rc=0 无 507018**，L44 swiglu16 moe_block 跑通。
+
+**任务 3 完成（编译 deliverable）**。swiglu MoE **offline synthetic 数值不可信**（moe_out kern-vs-torchref
+0.363）——但这是 synthetic-ref fidelity 问题，非 kernel bug：① 项目已有 commit `13384ed7 docs: mark
+swiglu16 as synthetic-only`；② kernel 侧 swiglu16 修复齐全（`2b00bec9` 5-chunk clamp + `1a6c6342`
+router_bias BF16 + SHARED_SWIGLU_N_CHUNK=32）；③ L44 历史上 vs **真 vLLM dump** 已 PASS 0.9995；
+④ torch-ref 有两处 axis 与 kernel 不一致（clamp-limit 本 session 已修让 ref 收 per-layer limit；
+routed INT8 requant ref 仍 `routed_w8a8_dynamic=False` 不 requant，属 gap-5 territory）。swiglu16
+真精度定论 = vLLM dump / live A/B，非 offline 合成链。silu MoE（42 层里 40 层）offline 精确 1.000。
+
+**任务 4（45 层链）发现 blocker——需 per-layer weight-stream 重构**：当前 worker `_moe_block_sh`
+把每个 variant 的全部路由专家权重 stack + `share_memory_()`。3 个 MoE variant 同时载 → `/dev/shm`
+峰值 OOM（`No space left on device`，虽 shm 1TB，峰值 RSS 764GB + 多 variant stack）；且 worker 按
+`id(program)` dedup moe_block，**同 variant 的多层复用首层权重**（42 个 MoE 层权重各异 → 除首层外全错）。
+45 层链需改成：moe_block step 前把该层权重 `copy_` 进 cached sh 的权重槽（像 x 那样），按需流式载，
+不 stack-all。此重构与 G2 常驻 weight-IPC（47GiB WeightIpcExporter）目标重叠。
+
+**修的 host bug（本 session 续²+续³）**：`_set_gate_exp` 广播、`_recon_attn` per-rank w_g、`_share`
+连续化、torch-ref `step_moe_block` 收 per-layer swiglu limit（clamp axis）。moe.py `_quant_moe_input`
+InCore→Inline。**备份**：`workspace/g1_worker_task3done_20260710_225746.py` +
+`workspace/g1_moe_incore_inline_20260710_225746.py`。
+
+**下一步**：任务 4 = worker per-layer weight-stream 重构（gate 45 层链）；然后 G2 `_pypto_full_forward`
+live wiring。swiglu 精度走 vLLM/live 不走 offline 合成。
+
 ## 2026-07-10 (续² —— G1 Option-C 真 W8A8 dense/attn device 跑通 + torch-ref 对拍 [tasks 1+2])
 
 承接 Pass 1/2。目标：完成 NEXT-SESSION 任务 1（真 W8A8 接 dense/attn，此前仅 moe_block 真、
