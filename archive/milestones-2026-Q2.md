@@ -6,6 +6,27 @@
 
 
 
+## 2026-07-10 (续⁵ —— G3 HBM 假门槛移除 + resident-runtime 复用验证 [de-risk 任务 5-7])
+
+承接续⁴。G1 offline（任务 1-4）已收尾；本段是对 G2-G5（任务 5-7）的两个 de-risk 进展。
+
+**① G3 HBM 假门槛移除**：`npu-smi info -t memory -i 8` 实测 cards 8-15 = **65536MB = 64GB HBM/卡**。
+TP=8 sharded：vLLM W8A8 ~24G→3GB/卡 + pypto BF16 ~47G→6GB/卡 + KV ≈ ~10GB/卡 → **fits 64GB**。
+memory 旧记「vLLM24G+pypto47G=OOM」是 aggregate/非-sharded（71G 压一卡）误判。真正 OOM 风险是
+ring arena `task_window`（2^20→64GB，用 2^17=131072 已解），非权重共存。**G3 非硬 blocker**，
+memory 已补 `project_hbm_cotenancy_not_gating_64gb`。
+
+**② resident-runtime 复用验证（任务 5 最核心未知）**：worker 加 `--steps N` —— 让**同一个 prepared
+`rt` 跨多个 decode-step 批次复用**（每批 reset residual 重 bootstrap）。测 `--layers 0,1,2,3 --steps 2`
+真 W8A8 device：decode step 0 与 step 1 输出**逐字节一致**（76/478/520/512），10 次派发共用一次
+prepare，**rc=0 无状态污染**。这正是把 pypto runtime 塞进 vLLM per-call `forward`（`_pypto_full_forward`
+常驻 module-global rt）的关键机制 —— 现 device 坐实：rt 可持有并重复 run，结果确定、无 corruption。
+
+**任务 5-7 剩余（纯 live 集成，需专门 session）**：常驻服务化（module-global 持 rt，manual enter/exit
+替 `with`）+ 真 KV import（attn_setup import_ipc 接进 whole-decode attn args）+ forward_context
+（block_table/slot_mapping/seq_lens）接线 + live 8001 mode=full A/B vs 8000 token-exact。**门槛已清**：
+HBM 不挡、resident 机制已验、offline worker 是移植参考（`workspace/g1_worker_resident_*`）。
+
 ## 2026-07-10 (续⁴ —— G1 任务 4：per-layer weight-stream 重构 + 45 层链 device 跑通 rc=0)
 
 承接续³。完成 NEXT-SESSION 任务 4（扩 45 层链）。
