@@ -7,7 +7,38 @@ Blocker 解决时，**删掉本文件里这一节**，到
 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)
 "Resolved blockers" 段补一条 post-mortem。
 
-**最后检视**：2026-07-10。
+**最后检视**：2026-07-11。
+
+---
+
+## ⛔ NEW 2026-07-11 — G4 co-tenancy：whole-decode worker 的 HCCL comm world 与 vLLM 8001 同卡冲突（live single-handoff 硬 gate）
+
+**严重度**：🔴 阻塞 live single-handoff A/B（NEXT-SESSION tasks 5-7）—— pypto whole-decode worker 无法与 vLLM 在同 8 卡共存。
+
+**症状（0162 cards 8-15 device 实测，2026-07-11）**：先在 cards 8-15 起 vanilla vLLM 8001（enforce-eager，TP=8，`--gpu-memory-utilization 0.5`，health=200 idle），再在同卡跑 whole-decode worker `_stage_whole_decode_run.py --worker --tp 8 --dev-offset 8 --layers 0,1,2,3`：
+- **CO-PREPARE OK**（4 distinct programs co-prepare 成功、8 个 chip_process ready）。
+- **首个 dispatch step 即失败** at `allocate_domain → _ensure_comm_base`：
+  ```
+  comm_hccl.cpp:301 [comm rank 0..7] HcclCommInitRootInfo failed: 7
+  worker.py:3620 _ensure_comm_base failed on 8/8 chips; control_comm_init failed / comm_init failed
+  ```
+- 8001 全程 health=200（worker 失败不影响 vLLM）。
+
+**决定性隔离**：同一 worker **standalone（cards 8-15 无 vLLM）comm_init 成功、rc=0**（本 session baseline 复验通过）。→ 纯 **HCCL 共存冲突**：vLLM 已在 cards 8-15 建了一个 HCCL comm world，worker 的第二个 `HcclCommInitRootInfo`（`worker.py:3573 _ensure_comm_base` lazy build on first `allocate_domain` → `dw.control_comm_init` :3607 → a2a3 `comm_hccl.cpp:56 HcclCommInitRootInfo`）在同 NPU 上返回 error 7。
+
+**根因**：simpler 的 **control comm base 走 HCCL**（`HcclCommInitRootInfo` + RootInfo handshake + EnablePeerAccess，`worker.py:3673` 注释）。两个独立进程在同一批 Ascend 卡上各建一个 HCCL communicator 不被支持。per-op `_MlpService`（phase 24）能同卡共存是因为它 **worker 侧无 collective**（per-rank partial，all_reduce 由 vLLM 做）→ 不建 HCCL world；whole-decode worker 做 TP all_reduce + EP a2a → 必须建自己的 comm world → 冲突。
+
+**已排除的绕法**：
+- (d) 给 worker 设 distinct `HCCL_IF_BASE_PORT=61000` → **同样 `HcclCommInitRootInfo failed: 7`**。不是 socket/port 冲突，是 device 级 HCCL 资源冲突。
+
+**解除条件（候选，均为跨 session 工程）**：
+- **(a) IPC-only control comm（无 HCCL）**：让 simpler 用 file/socket 交换 IPC key + `aclrtDeviceEnablePeerAccess` bootstrap control comm（Phase-16 probe2.c 手工做过），data 走已有的 `domain_alloc_via_ipc`（aclrtIpcMemImportByKey）。全程无 HCCL → 不与 vLLM 冲突。需上游 simpler 改 `_ensure_comm_base`/`comm_hccl.cpp`。
+- **(b) in-process 复用 vLLM comm/device context**：pypto whole-decode kernel 跑进 vLLM 的 8 个 TP worker 进程内，复用 vLLM 已建的 HCCL comm / device context，不 fork 独立 DistributedWorker（不建第二个 HCCL world）。对应 `phases/22-device-shared-inprocess-*.md`。架构级重构。
+- **(c) standalone-only（非 live，降级）**：whole-decode 跑 standalone（cards 8-15 无 vLLM）对齐 vLLM dump。但 dump 是 18-tok prefill 非 decode-step，真 token-exact 仍须 live A/B → 只能部分验证，非 NEXT-SESSION 目标。
+
+**链接**：NEXT-SESSION.md task 1（G4）；memory `project_g4_cotenancy_hccl_conflict.md`（本 session 新建）；deployment `troubleshooting-8001-pypto-bridge.md`（per-op 恢复顺序，与本 blocker 的 whole-decode 场景不同）。
+
+**Owner**：team-lead（team `vllm-pypto-e2e` sw-analyst 查 IPC-only/in-process 路径可行性，upstream-scout 查 HCCL error 7 + 共存 config + 上游 comm-backend 修复）。
 
 ---
 
