@@ -240,3 +240,21 @@ KV_HEADS_LOCAL=1（TP=8 per-rank）。
 → sidecar import → decode → 对 torch golden `bad_ratio=0`），再 live（vLLM `_allocate_kv_cache_tensors`
 整池 export → sidecar chip-r import rank-r KV）。forked chip 的 import **必须在 child context 内**。
 真实 num_blocks + 布局只能对 **跑起来的 8001** 定 → 这步是 device-gated，须 live vLLM 迭代。
+
+### G5 live 落地路径（2026-07-11 定位容器 patch 加载机制）
+
+**容器无 pypto-lib mount** —— vllm-8001 只 mount `/logs`（host `/mnt/nvme1/.../step3p5_910b_w8a8_v001/`）。
+patch 走 **`/logs/pypto_patch/sitecustomize.py`**：按 env var（`PYPTO_DENSE_MLP_BACKEND` /
+`PYPTO_ATTN_BACKEND` / `PYPTO_KVPOOL`）加载**自包含**后端文件（各含 `maybe_autoload()` + `status()`）。
+- **G5 packaging（net-new）**：`vllm_monkey_patch.py`（含新 `_WholeDecodeClient` + `_pypto_full_forward`）
+  import 了 `models.step3p5.config`（BATCH/HIDDEN）——容器里没有。须做**自包含** `/logs/pypto_patch/
+  pypto_whole_decode_backend.py`：内联 BATCH/HIDDEN 常量 + 客户端 + `maybe_autoload()`（调
+  `install(mode="full")` 等价逻辑），+ sitecustomize 加一行 `_load_backend("PYPTO_WHOLE_DECODE", ...)`。
+- **`_pypto_full_forward` 已加 profiling fallback**（sidecar-absent → 响亮回退 original forward + 计数，
+  非 silent mask；once sidecar up → pypto 路径）→ 解 mode=full startup profiling 的 chicken-and-egg。
+- **live 顺序**：起 8001 mode=full（profiling 走 fallback 存活）→ 等 ready → 起 sidecar
+  （`SIMPLER_COMM_NO_HCCL=1 --serve`，先 dummy-KV 验证 plumbing 连通，再 G3 真 KV）→ 送 prompt。
+- **里程碑拆分**：(G5a) plumbing 连通（sidecar 收到 live 请求 + vLLM 出 token，验证 embed/broadcast
+  API，dummy-KV 数值 garbage）；(G5b) 真数值 token-exact（gate 在 G3 真 KV）。
+- **hazard**：pypto AICore timeout → `aclrtResetDeviceForce` 卡级 nuke vLLM（见
+  `../deployment/cotenancy-simpler-no-hccl.md` §hazard）；live 前确保 vLLM stream idle + pypto 不 timeout。
