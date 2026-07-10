@@ -30,6 +30,31 @@
     不落 `.git/config`。（fork SSH 在 0162/本地都 publickey 失败；0162 无 GitHub 权限 →
     走 `git bundle` → 本地 → HTTPS(PAT) 推送。）
 
+### 0.11 gap-5 W8A8-native：抄 DeepSeek 结构 vs 保留 step3p5 特有（2026-07-09 定案）
+
+**结论**：W8A8 量化方案在 step3p5-checkpoint / vLLM-oracle / DeepSeek-kernel 三方**等价**
+（per-token 对称激活量化 amax/127 rint、per-output-channel INT8 权重、row×col expand_mul
+反量化、中间激活重量化、swiglu+可选 clamp）。DeepSeek `models/deepseek/v4/{gate,dispatch,
+expert_routed}.py` 的 **pypto 内核结构可照抄**（设备验证过的 codegen）。
+
+**决策**：pivot 到 DeepSeek dispatch-side 量化 —— 在 gate 里把 x_norm 量化成 INT8，dispatch
+搬 INT8 recv_x + scale，expert **删掉 in-expert 输入量化**（in-expert `routed_input_quant`
+pl.at scope 是 84.6% 设备误编译的头号嫌疑；INT8 数学本身已 CPU 证实正确 cosine 0.9998，
+只是 in-expert scope 的 codegen 误编译）。
+
+**可以照抄 DeepSeek**：INT8 grouped-GEMM 结构、`pl.at(CORE_GROUP)` 量化作用域、
+`col_expand_mul(row_expand_mul(int32→fp32, act_scale), w_scale)` 反量化、exp_h_q 中间重量化。
+（注：DeepSeek 取整实为四舍五入——INT32 cast 用 `mode="rint"`，末尾 INT8 `trunc` 只窄化已取整的整数。）
+
+**必须保留 step3p5 特有（抄错即全错，LANDMINE）**：
+1. **权重朝向 / b_trans**：DeepSeek 权重 HF 朝向 `[MOE_INTER,D]` + matmul `b_trans=True`；
+   step3p5 loader **已预转置**成 `[HIDDEN,INTER]` → **不用 b_trans**。二选一保持一致。
+2. **swiglu_limit 逐层**：step3p5 L43=7 / L44=16 / shared swiglu16；DeepSeek 0/10。用 step3p5 层表值。
+3. **Shared expert**：step3p5 是 BF16（不量化），已 PASS，保持不动。
+4. **symmetric fixed-slot a2a 修复**：搬 INT8 payload 时不能回退（历史数据可用性修复）。
+5. **验收对齐 vLLM，不是 DeepSeek**：DeepSeek 仅作"内核怎么写才 device-correct"的参考；
+   数值（rint、逐层 clamp）以 vLLM W8A8 oracle 为准。
+
 ---
 
 ## 1. 当前状态（2026-07-07 更新）
