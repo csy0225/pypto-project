@@ -210,6 +210,27 @@ host_orch，`decode_layer.py:903-1140`）**泛化到 45 层 + tail**（~90 seque
 
 **注意**：本蓝图**不动**当前 compile-passing 的 reuse-one-slab `_build_whole_decode_faithful_program`（保留 device dispatch 决定性实验的干净基线）；3-class 变体建议加 flag 或新 builder，避免回归编译。
 
+### Step-2 增量②（2026-07-11）—— 真实 per-layer 权重 + full+swa 完整路由（新 builder）✅ compile + device dispatch
+
+**用户拍板两决策**：(1) 11 个 full-attn MoE 层（L4,8,…,44）本 session 直接做 **full+swa 完整路由**（不留 swa 近似）；(2) 用**新 builder + 新 program**（`whole_decode_faithful_real`），保护 Task#1 的 reuse-one-slab device 干净基线不回归。
+
+**decisive 探针（`tests/step3p5/_probe_single_layer_inline.py`）**：确认 `pl.inline(attention_swa._func)` **接受实参 leading dim 比标注小**（单层 `[HIDDEN,…]` 喂进标注 `[LAYER_HIDDEN_ROWS_DYN=12*HIDDEN,…]` 的 inline，`attn_layer_idx=0` 读 `[0:HIDDEN]`）→ `RESULT=SINGLE_LAYER_INLINE_OK`。因此 swa-MoE attn 走**干净 host-slice 单层**，不需 33-stack resize / sub-stack 回退。
+
+**统一设计**（`weight_loader.expected_shapes()` 1:1 对上 host_orch）：
+- norm（input_rms/post_rms/q_norm/k_norm）`[45]` full stack，kernel-index 绝对 `norm_layer_idx=L`（KV base = `norm*rows` 需绝对 L）。
+- attn（wq/wk/wv/wo/w_g/gate_r）+ dense-MLP（w_gate/w_up/w_down）：**host-slice 单层 slab**，kernel weight-index=0。full attn 走 `full_attn_only_orch`（新增），swa 走 `swa_attn_only_orch`（重写单层）。
+- MoE experts（gate_w/router_bias/w_*_{r,s}）`[42]` stack，host-slice by `pos=L-3`；`chip_orch` 仅 `layer_idx→norm_layer_idx` rename（post_rms），expert 参数不变。
+
+**codegen 落地**：一次性生成器 `tools/step3p5/_gen_faithful_real.py` 从 compile+device 验证过的 `_build_whole_decode_faithful_program` 派生 `_build_whole_decode_faithful_real_program`（`WholeDecodeFaithfulReal`）：method-set 逐字复用，chip_orch rename，重写 full/swa_chip_orch + swa_attn_only_orch 单层，新增 full_attn_only_orch，重写 host_orch（统一栈签名 + 42 层 full/swa 路由 + 真实索引/host-slice）。N_FULL=12 / N_SWA=33 / N_DENSE=3 / N_MOE=42。
+
+**验证**：
+- smoke rc=0（import 构造 `whole_decode_faithful_real`）。
+- **compile rc=0**（canonical TP=8，`build_output/WholeDecodeFaithfulReal_20260710_164924`，harness `tests/step3p5/_stage_whole_faithful_real_device.py --compile-only`）。
+- **8 卡 device DISPATCH_CLEAN 285.36s**（dummy 权重，88 pass-block 全跑，无 507018 / 无 scheduler stall；`_stage_whole_faithful_real_device -d 0..7`）。
+- 真实 W8A8 权重 device run harness `tests/step3p5/_stage_whole_faithful_real_weights.py`（`weight_loader` 逐 rank bundle stack；ckpt `/mnt/hw910test-jfs/models/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp`）—— 运行验证中。
+
+**遗留（Task#4 逐层对齐 vLLM 的真正 gate）**：vLLM eager dump 是 **18-token PREFILL**，decode kernel 是 **BATCH=16 单 token**——shape 不兼容，逐层 kernel-vs-dump 无法直接比。真正 token-exact 对齐需 **decode-step golden** 或 **live single-handoff A/B（Task#3）**。`current_hidden` + KV cache 也需真实 decode 上下文（当前 harness 用 synthetic）。
+
 ### 历史
 
 🟡 **Phase 0（2026-07-09）**：0234 五仓 + ptoas-bin 切升级栈；clean 重编 pypto+simpler；团队 3 份调查报告交付（Wall-1/Wall-2 root-cause + N=1 结构建议）。

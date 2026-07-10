@@ -1,5 +1,31 @@
 # NEXT SESSION — N=1 整网融合 kickoff prompt
 
+## ⏱ 2026-07-11 进展更新（Task#2 增量② 核心达成 + 剩余硬 gate）
+
+**✅ 已完成并推送（pypto-lib `be10ba0`，分支 `feat/whole-net-n1-fusion`）**：新 program
+`whole_decode_faithful_real`（`WholeDecodeFaithfulReal`）—— **真实 per-layer 权重 + full+swa 完整路由**
+（11 full-MoE 层 L4,8,…,44 走 full attn；31 swa）。norm[45] kernel-index 绝对 L；attn/dense/MoE
+全部 host-slice 单层（探针 `_probe_single_layer_inline` 证明 `pl.inline` 接受实参 leading dim <
+标注）；MoE experts[42] host-slice by pos；`chip_orch` 仅 `layer_idx→norm_layer_idx`。生成器
+`tools/step3p5/_gen_faithful_real.py`（保留 reuse-one-slab 干净基线）。**smoke rc=0 + compile rc=0 +
+8 卡 device DISPATCH_CLEAN 285s（dummy，88 pass-block，无 507018/stall）**。旧基线不回归。
+phase27 已记录、memory `n1_real_per_layer_builder_device_clean` 已存。
+
+**⛔ 剩余两个硬 gate（本 session 无法关闭，不是本程序的问题）**：
+1. **Task#4 逐层对齐 vLLM**：vLLM eager dump 是 **18-token PREFILL**，decode kernel 是 **BATCH=16 单
+   token** → shape 不兼容，kernel-vs-dump 无法直接逐层比。**需生成 decode-step golden**（1 tok/step，
+   batch≤16）或走 live 路径对齐。（真实权重 harness `_stage_whole_faithful_real_weights.py` 已写好，
+   但它在驱动进程 8× 全量 jfs 重读 checkpoint 太慢——要改 per-rank forked-load 对齐生产；且它也不解决
+   数值对齐。ckpt 路径 `/mnt/hw910test-jfs/models/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp` 正确。）
+2. **Task#5 live A/B（IPC + single-handoff）**：memory `hccl_single_world_cotency_blocks_forked_worker`
+   —— whole-decode worker 的 HCCL world 与同卡 vLLM 冲突（`HcclCommInitRootInfo failed:7`，一卡一个
+   HCCL world）。需 (a) 上游 simpler IPC-only control comm，或 (b) in-process 复用 vLLM comm（Phase 22）。
+
+**下个 session 起点建议**：(1) decode-step golden 生成 → 用 `whole_decode_faithful_real` 逐层 device 对齐；
+或 (2) 推进 Task#5 的 HCCL 共存上游方案。分支仍用 `feat/whole-net-n1-fusion`。
+
+---
+
 > 直接把下面代码块粘贴为 `/goal` 执行。自包含。
 
 ```
