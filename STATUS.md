@@ -335,6 +335,34 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 - 🟡 `Step3p5DecodeFwd`/prefill runner 尚未接入真实 vLLM online backend；见 Phase 20 production backend blocker。
 - 🟡 head_gate ×1 parity 策略仍待在线 backend L1 gate 决策。
 
+## 🎯 Decode 接管 gap 盘点（2026-07-10，下 session 集中攻破）
+
+**目标口径**：pypto 接管 step3p5 整网 decode = **live single-handoff A/B**（8001 vLLM 内 pypto 跑完
+整 45 层 decode，token-exact vs 8000 vanilla）。
+
+**已就绪（地基）**：
+- 逐层精度离线验证过（dense / MoE-block 8 卡 / tail），数学正确。
+- 编译级 blocker 全清：tmov（`d3075ac9`）+ 3-scalar 多层索引（`8b4bf3fa`）；`_smoke_program_build` rc=0。
+- 47GiB 单 key IPC ✓；N=7 co-prepare device-clean ✓；Option-C 43-45/45 层 COMPILE ✓。
+- dense L0-2 + tail 曾 live token-exact（早期 session）。
+
+**还差的工作（按关键路径排序，"集中攻破"顺序）**：
+
+| # | Gate | 内容 | 估时 | 依赖 |
+|--:|------|------|------|------|
+| **G1** | **Option-C 45 层链 device 验证**（**下 session 首攻**） | 恢复 `/tmp/bak_realw` worker（N=7 dedup + C1/C2 post_rms+FP32 residual handoff）进 `_stage_whole_decode_run.py --worker`；串真设备输出 residual 跨 `rt.run`；喂每层 3-scalar type-local 值（split 已就位）。真 W8A8 权重、vLLM 卸载、checkpoint-H2D（~58GB）跑 standalone 45 层链 → 对齐 vLLM per-layer dump。**同时验证 3-scalar split 的多层正确性 + 整网机制**。 | 1-2 session | 无（split 已 committed） |
+| **G2** | **`_pypto_full_forward` live wiring** | `vllm_monkey_patch.py:233`（当前 fail-closed）：install() 建常驻 DistributedWorker holder；import KV pool（pypto_kvpool）+ 权重 pool；45 层 dispatch loop + 常驻 DeviceTensor residual handoff；读 live `forward_context` slot_mapping/block_table 进 attn args；final hidden copy 回。 | 1 session | G1 |
+| **G3** | **HBM 共存 / 权重策略（live 硬 gate）** | vLLM W8A8(~24GB) + pypto BF16 pool(47GB) = OOM(>64GB)。方案 (a) standalone（vLLM 卸载，~58GB，验机制非 live）先行；(b) **gap-5**：pypto 直接吃 vLLM 常驻 W8A8 + in-kernel dequant（INT8×INT8→INT32，primitive 已 device-validated）→ ~31GB 可共存。gap-5 是 net-new kernel 工作但 primitive 已验证。 | gap-5 2-3 session | G1 |
+| **G4** | **co-tenancy 507018 device 测试** | whole-decode worker 在与 resident-idle vLLM 共卡时能否干净 dispatch（single-handoff vLLM-idle 可能绕开 per-layer co-tenancy 507018）。未测。 | 0.5 session | G2 |
+| **G5** | **tail** | pypto rms_lm_head 重新接进 compute_logits（当前委托 vLLM），或保留 vLLM tail（decode 接管可接受 lm_head 留 vLLM）。 | 次要 | - |
+
+**Deferred（不阻塞 decode 接管）**：prefill MoE L1 overflow（TASK-29）、MTP、Qwen3-aligned out_proj 根因修复（prefill perf）、MoE ST `w_gate_d` OOB redesign、单层 ST harness 腐坏修复（moe.py:208 / gate_r）。
+
+**下 session 单点突破 = G1**（Option-C 45 层链 standalone device 跑通 + vs vLLM 对齐）。worker 骨架在
+`/tmp/bak_realw`，3-scalar caller 已就位（`_stage_whole_decode_run.py` type-local）。
+
+---
+
 ## 立即可做的下一步（按优先级）
 
 0. **（新，2026-07-03 主线）Phase 24 —— step 6 整层 live 替换（P0）**：把已验证的
@@ -356,6 +384,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler（submodule） | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------------------|-----------|
+| 2026-07-10 | tmov 修复 + 3-scalar layer_idx split（整网多层 gating blocker）committed + push fork stepfun/develop | `stepfun/develop:5e619dc7` | `stepfun/develop:47c260e3`（`d3075ac9` tmov chunk64 + `8b4bf3fa` 3-scalar split + `47c260e3` ST arity；fork `b511da0→47c260e`） | `main:ecb6c303` | `main:72ada0a1` | `71e39623` | v0.49 |
 | 2026-07-07 | MoE-block 精度全 PASS 合并到集成分支 + import_ipc 全网 push + 0162/fork 对齐（L44 shared-swiglu16 clamp + router_bias BF16 补齐到 backend/worker 线；三仓 push；0162 rebase 到最新） | `stepfun/develop:be90f992`（DeviceTensor.__getitem__ slicing + distributed_runner import_ipc glue；submodule→simpler 1aa6efb） | `stepfun/develop:1a6c634`（L44 精度修复 cherry-pick 到 bb9e683 merge 线：routed a2a + INT8 + shared clamp `2b00bec` + router_bias BF16 `1a6c634`） | `stepfun/develop:e25732f0`（未改） | `stepfun/develop:da011a3d`（未改） | `stepfun/develop:1aa6efb`（import_ipc device-IPC key import `c236194`/rebased `1e55bba` + timeout 实验 + comm PID-whitelist fix `25a0544`） | `v0.45` |
 | 2026-07-05 | backend↔co-resident-worker code path 完成（BE 协议 + layer targeting + 容器安全 import，selftest bad=0） | `stepfun/develop:b00c8b23` | `stepfun/develop:dbad26d`（pypto_moe_backend co-resident 协议 + container-safe；已推送 fork） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-07-05 | co-resident worker routed op device PASS（dense+routed 同 ChipWorker，无 co-tenancy） | `stepfun/develop:b00c8b23` | `stepfun/develop:0249700`（pypto_mlp_worker routed op；已推送 fork） | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |

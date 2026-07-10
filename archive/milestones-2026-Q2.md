@@ -6,6 +6,28 @@
 
 
 
+## 2026-07-10 (goal session —— 3-scalar split committed + push fork + decode 接管 gap 盘点)
+
+承接「继续 pypto+vLLM 集成、完成后端替换、接管 step3p5 整网 decode」目标。启动 4-agent team
+（reverse-review / hw-analyst / sw-analyst / upstream-scout）。全部开发在 0162 `stepfun/develop`。
+
+- **环境确认 latest/consistent**：driver `25.5.2` / CANN `9.0.0 non-GA` / pypto `5e619dc7` /
+  pto-isa `ecb6c303` / PTOAS `72ada0a1` / simpler `71e39623`；cards 0-7 = vanilla oracle(8000)、8-15 空闲。
+  识别并规避本地 `b-csy-develop` 的 `feat/whole-net-n1-fusion` 分叉分支（非权威，开发一律 0162 stepfun/develop）。
+- **tmov 编译 blocker committed（`d3075ac9`）**：`OUT_PROJ_N_CHUNK 256→64`。4-agent 定位根因 = N=256 时
+  out_proj cube RHS 128KB 超 L0B 64KB → #1601 Vec-LHS→Mat staging → 910B 非法 Mat→Mat tmov（无 L1→L1
+  DMA；#1960 只检测）。arch-gate 是死路（跳过 staging 重触发 L0B 溢出）。真正根因修复 = 对齐 Qwen3
+  split-N atomic-add out_proj，deferred prefill Phase 17/22。MoE compile rc=0。
+- **⭐ 3-scalar layer_idx split committed（`8b4bf3fa`）—— 整网多层 gating blocker 内核修复**：单 `layer_idx`
+  无法索引三种布局不同的权重栈（norm[45]abs / attn[full|swa]type-local / dense-MLP[3]dense-order，仅 L0
+  重合 → 多层拿错权重）。拆成 norm/attn/mlp 三 scalar，74 内核 edit + callers + ST arity（`47c260e3`）。
+  原子 patch 脚本 backup+assert+rollback；reverse-review 语义 GO（index-class/arity/dispatch 全对）；含
+  `layer_cache_base`（KV[45]abs）修正。`_smoke_program_build` rc=0。**单层行为不变、只改多层索引**。
+- **push fork**：`csy0225/pypto-lib` stepfun/develop `b511da0 → 47c260e`（bundle-via-local，token 不落 netboot 0162）。
+- **诚实边界**：单层 ST 无法作 device gate —— 本树三个单层 ST 各有独立 pre-existing 腐坏（dense:
+  `moe.py:208` apply_tp1_patch assert；multirank dense: 缺 `gate_r`；MoE: `w_gate_d` 12-vs-3 层 OOB），
+  均非本次回归。3-scalar split 的 device/多层正确性验证走 Option-C 整网链 vs vLLM（下 session）。
+
 ## 2026-07-10 (goal session cont.) —— tmov 阻塞解除 + 整网 43/45 层 COMPILE；余 L43/L44 SplitIncoreOrch
 
 目标：完成 e2e 集成 + 精度验证。承接用户提供的 tmov fix 文档
