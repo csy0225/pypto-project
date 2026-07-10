@@ -3,7 +3,26 @@
 pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状态
 变化都更新这里**。历史细节查 [`archive/`](archive/)。
 
-**最后更新**：2026-07-09
+**最后更新**：2026-07-10
+
+> **2026-07-10 环境确认 latest/consistent + tmov 编译 blocker 解除 + 整网集成真实状态盘点（team `vllm-pypto-e2e`）**：
+> 在 0162 `stepfun/develop` 上确认工具链一致且最新：driver `25.5.2` / CANN `9.0.0 non-GA` /
+> pypto `5e619dc7`(rebased origin/main) / pto-isa `ecc63…` / PTOAS `72ada0a1`(≈v0.49) / simpler `71e39623`；
+> pypto-lib `94aa015c`。cards 0-7 = vanilla oracle(8000)，8-15 空闲。**（注意：本地 `b-csy-develop`
+> 上是 `feat/whole-net-n1-fusion` 分叉实验分支，非权威；开发一律在 0162 `stepfun/develop`。）**
+> ① **tmov 编译 blocker 解除**：升级后 `full_out_proj_matmul` 报 `pto.tmov` 不支持的 address-space
+> pair（910B 无 L1→L1 DMA）。4-agent 定位：N=256 时 out_proj cube RHS [256,256]=128KB 超 L0B 64KB →
+> 触发 #1601 Vec-LHS→Mat staging → 非法 Mat→Mat tmov。修复 `OUT_PROJ_N_CHUNK 256→64`（RHS 降到 32KB，
+> 原生 stage，数值 parity-safe），commit pypto-lib `d3075ac9`；MoE per-rank compile rc=0。**真正的根因
+> 修复（对齐 Qwen3-14B split-K×split-N atomic-add out_proj，或落 `stage_lhs_to_mat` arch-gate）只影响
+> prefill 性能，deferred 到 Phase 17/22**（见 blockers.md）。arch-gate 本身是死路（跳过 staging 会重新
+> 触发 L0B 溢出）。② **整网集成真实状态盘点（sw-analyst 逐行核对 0162 WT）**：`_pypto_full_forward`
+> (vllm_monkey_patch.py:233) 仍 fail-closed stub；**3-scalar layer_idx split 尚未落地**（grep 空，是
+> 多层整网的 gating blocker）；Option-C 多程序 worker harness 被弃到 `/tmp/bak_worker*`；tail
+> compute_logits 目前委托 vLLM norm+lm_head（非 pypto rms_lm_head kernel）。整网 live A/B 的有序 punch-list：
+> (1) 3-scalar split → (2) 恢复 Option-C 7-program worker + 串真设备输出 → (3) 真 W8A8 权重 → (4) standalone
+> 45 层链 device 验证 vs vLLM → (5) 接 `_pypto_full_forward` → (6) co-tenancy 测试 → (7) 8001 翻 `full` + live A/B。
+> 下一步：执行 3-scalar split（Item 1）。
 
 > **2026-07-09 全栈升级到最新（parity 通过，pypto-lib 已推）+ gap-5 上游定位**：pypto
 > `5e619dc7`(rebased origin/main) / pto-isa `ecb6c303` / PTOAS-src `72ada0a1`(v0.49) /

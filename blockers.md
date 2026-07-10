@@ -7,7 +7,38 @@ Blocker 解决时，**删掉本文件里这一节**，到
 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)
 "Resolved blockers" 段补一条 post-mortem。
 
-**最后检视**：2026-07-08。
+**最后检视**：2026-07-09。
+
+---
+
+## ⭐ NEW 2026-07-09 — 融合 dense 程序 layer_idx 复用 = 整网多层 index-class bug（Track A whole-network 硬 blocker）
+
+**严重度**：🔴 阻塞整网离线精度对齐 —— dense 层（L0/L1/L2）在多层串联时拿错权重。
+
+**症状**：`_stage_whole_decode_run.py` 跑 real-weights 多层链时，dense 层（L1/L2 swa_dense）会拿到错误的 attn 或 norm/MLP 权重。单层 ST（L0 / L3 / L4 …）从不暴露——因为单层 absolute-li == type-local-idx，一个 layer_idx 恰好两边都对。
+
+**根因（本会话逐行读 `decode_layer.py` + `weight_loader.py` 定位，布局已完全确认）**：融合 dense 程序 `_build_decode_layer_dense_program`（`decode_layer.py:553`）只接 **一个** `layer_idx: pl.Scalar[INT32]`（`:688`），却要同时索引 **三类布局不同**的权重栈：
+- **norm 栈**（`input_rms_weight` / `post_rms_weight` / `q_norm_weight` / `k_norm_weight`）`[LAYER_DYN=45, ...]`（`config.py:63` 编译常量）= **45 行 absolute-li**（loader `weight_loader.py:794` `for li in range(45)` 全层 append）。
+- **attn 栈**（`wq`/`wk`/`wv`/`wo`/`w_g`）`[LAYER_HIDDEN_ROWS_DYN, ...]`（动态）= **type-local**（loader `KEY_WQ_FULL=[NUM_FULL_LAYERS]` / `KEY_WQ_SWA=[NUM_SWA_LAYERS]`，`:809` 按 `is_full_attention(li)` 分桶）；attention_inline 用 `layer_idx*HIDDEN` 作 base。
+- **dense-MLP 栈**（`w_gate`/`w_up`/`w_down`）`[LAYER_HIDDEN_ROWS_DYN/LAYER_INTER_ROWS_DYN, ...]`（动态）= **`[NUM_DENSE_LAYERS=3]` dense-order**（loader `KEY_DENSE_GATE=[3]`，`:862` 只 append dense 层）；`_dense_mlp_body_tp` 用 `layer_hidden_base=layer_idx*HIDDEN`。
+
+**三类 index 只有 L0 重合**（absolute=full-type=dense-order=0）。L1（abs=1/swa-type=0/dense-order=1）、L2（abs=2/swa-type=1/dense-order=2）三向发散 → 一个 `layer_idx` 无解。
+
+**为何 per-layer 全 PASS**：dense 单层 ST 只跑一层、三 index 都=0（或匹配），从未触发；MoE 层 ST（§7.1）根本不走 dense 程序。**只有整网多层 dense 串联暴露**。
+
+**当前状态**：bug + 精确布局已完全确认（sw-analyst 逐行验证）。**范围比初判更广**：norm 45-row 栈被 type-local `rlidx` 索引的问题**不止 dense L1/L2，还命中每个 MoE 层的 attn step**（whole-decode harness 的 standalone TP-attention 同样吃 45-row norm 栈 + type-local 索引；abs-li≠type-local 的层全错）。per-layer ST 全 PASS 是因为走 per-layer 单层（非 stacked）权重，从不触发 stacked-index。
+
+**❌ harness-only 修法不可行（已证伪）**：三类 order（attn type-local `[12]/[33]` / dense-MLP dense-order `[3]` / norm abs-li `[45]`）互不相容，**不存在**单个 scalar 同时满足；也不能传 1-row pre-sliced（`LAYER_DYN=45` 是编译常量）。必须改程序签名。
+
+**解除条件（唯一 root-cause 修法 = 3-scalar split，改生产 kernel）**：把融合程序的单个 `layer_idx` 拆成三个 scalar：
+- `attn_layer_idx`（type-local）→ 索引 `wq/wk/wv/wo/w_g`（`attention_full.py:214/276`、`attention_swa.py` 镜像）；
+- `norm_layer_idx`（abs-li）→ 索引 `input_rms/q_norm/k_norm`（`attention_full.py:258/349/361`）+ `post_rms`（`decode_layer.py:307`）；
+- `mlp_layer_idx`（dense-order）→ 索引 `w_gate/w_up/w_down`（`decode_layer.py:271-272/332/380`）。
+穿过 `attention_full/swa` 签名 + `_dense_mlp_body_tp` + `DecodeLayerDense.chip_orch/host_orch`（`:546/605`）+ harness `_stage_whole_decode_run.py`（dense step 传 `attn=rlidx / norm=li / mlp=dense_ctr`；MoE attn step 传 `attn=rlidx / norm=li`）。**机械改动，但改 `attention_full/swa`（所有层共用）→ 必须重跑全部 per-layer ST 回归确认无退化**。
+
+**链接**：memory `feedback_step3p5_weight_stack_index_class.md`（本 bug 是该陷阱实例）；task #14（sw-analyst 已交付完整 3-class 定位 + 3-scalar split spec）；task #15（Track A 修 + 验证）。
+
+**Owner**：team-lead（sw-analyst 出 3-scalar split diff → review → apply → device 验证 L0-3 vs vLLM → 全 per-layer ST 回归）。
 
 ---
 
@@ -142,6 +173,20 @@ Blocker 解决时，**删掉本文件里这一节**，到
 4. vLLM single-handoff + live A/B。
 attention 用 original（fused 重写非所需，存 /tmp 备 fused 若未来修 fork-prewarm race）。
 
+### 2026-07-08 续6 — ⭐ 定位收敛：N≥6「墙」大部分是 over-counting，真实 N=7 device 跑通
+
+**用户要求「先把 block 到底是什么限制定死再进下一阶段」。4-agent 交叉验证 + team-lead 追踪，结论如下：**
+
+**(1) 之前的 distinct 程序数记错了。** `select_moe_block(li)` 是 **attention-agnostic**：对 L3(swa_moe_silu)/L4(full_moe_silu)/L5/L8 返回**同一个 program 对象**（`id()` 实测相同）——silu moe_block 是**一个共享程序**，swa/full 通用。真实整网 Option-C distinct = **7**（`full_dense`, `swa_dense`, `attn_full`, `attn_swa`, `moe_silu`(L3-42), `moe_swiglu7_silu`(L43), `moe_swiglu16`(L44)），**不是 8**。文档/harness 记成 8，是因为 `_stage_whole_decode_run.py` 的 `moeblk_cache` 按 `kind`（含 swa/full）做 key，把同一个 silu 程序编译两遍 → 多算 1 个。修法：按 `id(select_moe_block(li))` 去重。
+
+**(2) 真实 N=7 device 跑通。** 探针 `pypto-lib/_probe_Nsweep_v0.py`（cards 8-15, TP=8, V0, synthetic）：编译 7 个真实 distinct 程序 → `c0.prepare(extra_compiled=[其余6])` → 派发 program-0(full_dense)。结果 **`PREPARE OK N=7 -> DISPATCH OK N=7 rc=0 -> SUCCESS`，clean finalize，无 507018、无 reset**。log `/tmp/probe_n7.log`。-> **真实 7 程序整网装得下单 worker，live-serving 可行，无需分批、无需改 runtime、无需 per-token re-prepare**。实测墙 = N=6 通 / N=8 挂 / **N=7 通**（之前从没测过 7）。
+
+**(3) 已 file:line 否定的 N-scaling 候选**（勿再查）：comm-domain window（同名 `comm_d0` + dup-live-reject + 每次 alloc `aclrtMemset` 清零，per-dispatch time-multiplexed）、tensormap/ring/arena（per-Worker，无 program-id 字段，xMAX_RING_DEPTH 非 xN）、fork-prewarm（阻塞 ack-barrier）、per-program state select（对象 key dict）。**用户的「signal window + GM 通信缓冲区 O(N) 池撑爆」假设被代码否定——没有这样一个固定池。**
+
+**(4) 诚实边界 / 遗留**：探针只派发了 program-0 一次；还需验证**完整 7 程序链**（各层类型顺序派发 + residual 串接）。「为什么 N=8 挂」的确切设备侧天花板（hw: IPC export-key/handle 表；sw: AICPU prepared-identity/slot 表）**未 micro-pin**，需 device bisect——只在将来 co-prepare >=8 程序时才要紧（tail TpRmsLmHead 作第 8 个会撞，但 tail 走独立 live compute_logits 路径，故整网层保持 7）。
+
+**链接**：memory `blocker1_coprepare_wall_overcounting_N7.md`。**Owner**：team-lead（进入下一阶段：完整 7 程序链 + 数值 handoff C1/C2 + 真权重 + tail + live A/B）。
+
 ---
 
 ## 0. Phase 20 production backend 未接入
@@ -225,6 +270,45 @@ length，跳 prefill，测 decode-only TPS / ITL。详见
 workaround"。
 
 **Owner**：未指派。
+
+---
+
+## 7. out_proj Vec-LHS → 910B 非法 Mat→Mat tmov（decode 已绕过；prefill perf 待根因）
+
+**严重度**：🟢 已绕过（decode 不受影响）；根因修复 gate prefill 性能。
+
+**症状**：升级到 stepfun/develop latest（pypto `5e619dc7`）后，step3p5
+`full_out_proj_matmul` 编译报 `'pto.tmov' op expects a supported tmov
+address-space pair for this target`。
+
+**根因（team `vllm-pypto-e2e` 4-agent 定位，2026-07-10）**：out_proj 的
+LHS `attn_out` 是 UB/Vec-resident；tiler 走 #1601 `stage_lhs_to_mat`
+（`auto_tile_matmul_l0_pass.cpp:694`）→ Vec→Mat staging → 非法 Mat→Mat
+`tmov`。910B **无 L1→L1 DMA**（`#1960` 只检测不修复），是 ISA 硬限制。
+N=256 时 cube RHS `[256,256]` BF16 = 128KB 超 L0B 64KB，tiling 是必需的，
+staging 因此被迫触发。
+
+**已绕过（decode 生产路径 OK）**：`OUT_PROJ_N_CHUNK 256→64`
+（`config.py:294`，commit pypto-lib `d3075ac9`）——RHS 降到 32KB 原生放得下
+L0B，不再 tile-staging，无 tmov。数值 parity-safe（K-reduction 不变）。
+MoE per-rank compile rc=0。
+
+**根因修复（deferred → Phase 17/22 prefill perf）**：chunk=64 相比 Qwen3
+canonical N=256 损失 L1 利用率，prefill（大 batch）代价更明显。两条候选，
+**arch-gate 单独不行**（hw-analyst：跳过 Vec-LHS staging 会重新触发 L0B 溢出，
+三条出口全堵）：
+- (a) 对齐 **Qwen3-14B** `decode_layer.py:880-904` 的 out_proj = split-K×split-N
+  **atomic-add** 结构（N=256/512，`OUT_TN=512`），从根上不走 Vec-LHS staging；
+- (b) 上游 `ExpandMixedKernel` 把 #1601 GM-pipe Mat→Mat copy-out 换成合法路径
+  （defer-tfree / per-chunk-pop）——多 session codegen 工作。
+
+**解除条件**：prefill kernel 落地时（TASK-29）选 (a) 或 (b)，把
+`OUT_PROJ_N_CHUNK` 恢复到 256 且编译通过。
+
+**链接**：`deployment/troubleshooting-mat-mat-tmov-vec-lhs-matmul.md`（前会话
+"试过但不行" arch-gate 记录）；memory `feedback_codegen_issue_platform_gate.md`。
+
+**Owner**：未指派（deferred）。
 
 ---
 
