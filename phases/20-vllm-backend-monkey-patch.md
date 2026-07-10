@@ -150,3 +150,68 @@ hook 做 per-layer hidden_states diff 给精度验证用。
   `0e0901376`
 - pypto-lib 参考：`models/step3p5/decode_fwd.py:198 _build_decode_fwd_program`，
   `models/step3p5/weight_loader.py:197 expected_shapes`
+
+---
+
+## G2/G3/G5 live single-handoff 实现蓝图（2026-07-11，co-tenancy gate 已清后落地）
+
+> 前置 gate **G4 co-tenancy 已解**（`SIMPLER_COMM_NO_HCCL=1`，见
+> [`../deployment/cotenancy-simpler-no-hccl.md`](../deployment/cotenancy-simpler-no-hccl.md)）。
+> 运行时机制已 device 验证 co-resident：NO_HCCL + resident prepared-rt 跨 step 复用 +
+> real-weight dispatch（L0 torch-ref 1.000）。以下是把 offline worker 接进 live 8001 的具体设计。
+
+### 架构决策：whole-decode ≠ per-op 拓扑
+
+- **per-op live（phase 24，已工作）**：8 个独立 per-rank ChipWorker（`--device 8+r --rank r`），
+  每个 vLLM rank-r 进程经 Unix socket `pypto_mlp_rank{r}.sock` 连自己的 worker，**vLLM 做 all_reduce**
+  （`pypto_dense_mlp_backend.py:57 _WorkerClient` / `:137 forward` per-rank）。
+- **whole-decode（本 phase）**：需 TP all_reduce + EP a2a **在 pypto 内部**跨 8 卡 → 必须是**一个
+  DistributedWorker**（1 host 进程 + 8 chip children co-prepare，共享 comm domain），**不是** 8 个独立
+  ChipWorker。→ 不能照搬 per-op 的 8-socket 模型。
+
+### 单 handoff 数据流（TP hidden 层间 replicated 这一事实是关键）
+
+vLLM TP 下每个 decoder-layer 边界的 hidden 在 8 rank 间 **replicated**（RMSNorm replicated、
+attn/MLP shard 后 all_reduce 回 replicated）。pypto whole-decode worker 内部自己 TP 分片
+（`_expand_tp` 把 [1,...] 复制到 [tp,...]）、自己 all_reduce、出 replicated 结果。所以整步只需
+**一次** full-hidden handoff：
+
+1. **sidecar** = 一个常驻 pypto DistributedWorker 进程（8 chip children on cards 8-15，`SIMPLER_COMM_NO_HCCL=1`），
+   module-global 持 `rt`（manual `__enter__/__exit__`，resident `--steps` 机制已验证）。暴露 socket
+   `pypto_whole_decode.sock`：收 full hidden `[BATCH,HIDDEN]` → 跑 45 层 → 回 full next hidden。
+2. **`_pypto_full_forward`（vllm_monkey_patch.py:233，8 rank 都跑）**：driver = rank-0 连 sidecar 发
+   hidden、收结果；其余 7 rank 经 `tensor_model_parallel_broadcast`（src=0）拿同一结果（因结果 replicated）。
+   或 8 rank 各连 sidecar 拿同一 replicated 结果（sidecar 广播回）。**推荐 rank-0 drive + broadcast**（少 7 次拷贝）。
+3. **final hidden** → vLLM `compute_logits`（tail 现委托 vLLM，可留；或后续接 pypto rms_lm_head）。
+
+### G3 真 KV import（复用 phase 24 零拷贝 KV-IPC）
+
+pypto sidecar 的 chip-r 需读 vLLM rank-r 的 paged KV。**每 rank 一条 IPC**（8 export / 8 import，
+与 phase 24 per-op 已 token-exact 的 `attn_setup import_ipc` 同）：
+- vLLM rank-r：`_allocate_kv_cache_tensors` 产「一 buffer + 一 key」（phase 23/24 的整池 map，
+  避免 per-tensor MemPool OOM）；45 层合一 buffer → 1 key → sidecar chip-r `rt.import_ipc(key)` →
+  `DeviceTensor(peer_base+offset)[block]`，`child_memory=True`。
+- **forked chip 的 IPC import 必须在 child 进程 context 内**（父 import 的 ptr 在 child 读 0）。
+- attn args（slot_mapping / block_table / seq_lens）从 live `forward_context` 取，每步随 hidden 一起
+  发给 sidecar（现 offline worker 用 dummy KV → L17 residual NaN，input-independent；真 KV 消除之）。
+
+### 实现顺序（每步可 device 验证）
+
+1. **resident holder 重构**：把 `_stage_whole_decode_run.py::_run_worker` 的 build+prepare+dispatch
+   抽成 `WholeDecodeHolder`（`build()` / `__enter__` prepare / `decode(cur, kv_args, fwd_ctx)->next` /
+   `__exit__`）。offline worker 改用它跑通（standalone device rc=0）= 回归不退化。
+2. **sidecar 进程 + socket 协议**：holder 包成常驻服务（收 hidden+attn_args → decode → 回 next）。
+   先 dummy-KV standalone 验证 socket round-trip。
+3. **G3 KV-IPC**：sidecar chip-r import vLLM rank-r KV（先 offline exporter/worker 对拍 bad_ratio=0，
+   再 live）。
+4. **`_pypto_full_forward` 接线**：install() lazily 建 sidecar client；rank-0 drive + broadcast；
+   读 forward_context 进 attn_args；final hidden 回。
+5. **G5 live A/B**：8001 `PYPTO_STEP3P5_PATCH_MODE=full`（先起 8001 等 HCCL init，再起 sidecar，
+   sidecar 设 `SIMPLER_COMM_NO_HCCL=1`）；3-prompt vs 8000 token-exact；swa/MoE(L43/L44) 数值在此定论。
+
+### 已验证可复用积木
+
+- co-tenancy：`SIMPLER_COMM_NO_HCCL=1` + 重编 a2a3 runtime（simpler `878f3742`）。
+- resident rt 复用：`_stage_whole_decode_run.py --steps N`（device ✓ co-resident ✓）。
+- 47GiB 单 key 权重 IPC（STATUS 2026-07-07 ④）；phase 24 KV-IPC token-exact；tail live（phase 24）。
+- 启动顺序 + 停机：[`../deployment/troubleshooting-8001-pypto-bridge.md`](../deployment/troubleshooting-8001-pypto-bridge.md)。
