@@ -117,6 +117,44 @@ host_orch，`decode_layer.py:903-1140`）**泛化到 45 层 + tail**（~90 seque
 
 **新 blocker（Phase 4 遗留）= scheduler timeout（`sched_error_code=100` / 507018）mid whole-net 执行**：整网跑到执行中途某个 task 前向不进 → scheduler 超时。**不是数据退化**（random gate_w 分散路由后同样）、**不是 ring pool 不够**（`PTO2_RING_HEAP=4G/TASK_WINDOW=131072/DEP_POOL=131072` 后同样）。是 88-pass-block 顺序链里某个 scope 的真实 forward-progress 停滞。下一步 = dispatch-cut bisect（截断到第 N 个 pass-block 看在哪 stall），定位是某具体层 / tail / 还是深度/资源上限。**注意：这与 Wall-2 正交**——dispatch 是干净的，卡在执行。
 
+### Phase 4 scheduler-timeout 二分定位（2026-07-10）—— 根因 = MoE 层间 comm-window 复用违反 RAW-only-v1 non-aliasing ✅ 定位
+
+**前置修复**：`b90e82e` 的 3-scalar split 只改了 inline `_func` 签名（`layer_idx`→`norm_layer_idx`+`attn/mlp_layer_idx`），但 N=1 whole-net 的 **29 处 inline 调用点**仍传单 `layer_idx` → 全部 whole-net program 编不过。reuse-one-slab 修复：29 处 `layer_idx` 复制成两份（norm=attn/mlp=layer_idx，字节等价，编译近似不变）。`smoke rc=0`。
+
+**dispatch-cut bisect**（新增 env 门控 `P_FAITHFUL_MOE_LAYERS`，默认 42 = full；诊断脚手架，不进产品路径）：
+
+| 程序 | dense-prefix | MoE 层 | 窗口 | 结果 |
+|------|------|------|------|------|
+| `whole_decode_program`（新 harness `_stage_whole_program_device.py`） | L0 full | 1（full-attn） | 独立 l0_*/l3_* | **RUN_CLEAN** 24s |
+| faithful `P_FAITHFUL_MOE_LAYERS=1` | L0+L1/L2 | 1（swa） | 用 1 次 | **RUN_CLEAN** 40s |
+| faithful `P_FAITHFUL_MOE_LAYERS=2` | L0+L1/L2 | 2（swa） | **复用 1 套** | **STALL 507018** |
+
+**根因（代码级证据）**：K=2 的生成 `orchestration/host_orch.py` 里，layer-3 (`_ta_4`) 与 layer-4 (`_ta_6`) 的 `chip_orch` 把**同一个** `combine_done_buf__ssa_v0`（以及 recv_x/pub_counts/routed_y/data_done 等）当输入 —— **同一 SSA 版本 = 别名**。scheduler timeout 明细 `completed=177/180 running=1 waiting=2 stuck_task_id=2^32+5(TaskKey scope1/task5)` = 卡在 layer-4 chip_orch / tail。整网 42 个 MoE 层复用一套 comm/scratch window，违反 pypto **RAW-only-v1 的 non-aliasing 前提**（设计 P3 / ADR-013：`IMemoryManager` 须保证 intermediate memory non-aliasing）。dense-prefix 用 per-layer 窗口（`l0_*/l1_*` 各一套）正是为规避此问题；MoE 层却共用一套。
+
+**与 DeepSeek 差异**：DeepSeek V4 用 **multi-program**（每层独立 dispatch/scope，窗口天然新分配 = 非别名）从根本规避。N=1 把 42 层塞进一个 host_orch 复用窗口，正撞此墙。
+
+**下一步（fix）**：(1) 验证 per-layer（非别名）窗口修复 K=2；(2) 评估 42 层 per-layer 窗口 comm-domain 内存（recv_x+send_buf 各 8MB → ~17MB/层 × 42 ≈ 735MB/rank，可能超）；(3) 若超，抉择「小窗口池 + 层间显式 fence（让 scheduler 认非别名）」vs「对齐 DeepSeek multi-program（Option-C resident-DeviceTensor，constraint H 的既定 whole-decode 路线）」。
+
+### Phase 4 scheduler-timeout 修复（2026-07-10）—— per-layer comm 窗口，N=1 整网 8 卡 device 跑通 ✅ SOLVED
+
+**用户约束**：只做 N=1 单 program 集成，**multi-program 不考虑**。所以 fix 必须在一个 `@pl.program` 内解决 comm-window 别名。
+
+**fix = per-layer（非别名）comm 窗口**：把 faithful host_orch 里 42 个 MoE 层复用的 13 个 comm/scratch window（ad_attn_tmp/attn_tmp/pub_counts/count_done/recv_x/recv_r_route/data_done/sh_tmp/sh_sig/routed_y/combine_done + 2 sig）从「顶部分配一套、全层复用」改成**每层各自 `pld.alloc_window_buffer`（`_L{pos}` 后缀，distinct SSA）**。每个 window 只被 1 个 submission 写 → 满足 RAW-only-v1 non-aliasing。dead 的旧共享 alloc 必须删（`MaterializeCommDomainScopes` pass 会因 dead window alloc 报错，反证 pypto 不为 dead alloc 占内存）。
+
+**device 验证（canonical TP=8 + dummy 权重，8 卡）**：
+
+| 变体 | 窗口 | 结果 |
+|------|------|------|
+| shared K=2 | 复用 1 套 | STALL 507018 |
+| **per-layer K=2** | 2 套 distinct | **RUN_CLEAN 40s** |
+| **per-layer K=42（全 45 层）** | 42 套 distinct | **RUN_CLEAN 45.89s，无 507018 / 无 OOM** |
+
+→ **N=1 整网（L0 full-dense + L1/L2 swa-dense + 42 真实 per-protocol MoE + tail，88 pass-block）在 8 卡 device 上编译 + dispatch + 执行全程无 stall**。42 套 window fits comm domain（无需 `pl.free`）。scheduler-timeout blocker 清除。
+
+**代码**：`decode_layer.py` faithful builder 内 per-layer 窗口 + 诊断用 env 门控 `P_FAITHFUL_MOE_LAYERS`（默认 42 = 全量；bisect 时截断 N 层）。新 harness `tests/step3p5/_stage_whole_program_device.py`（1 dense+1 MoE endpoint）。前置：29 处 3-scalar inline 调用点 reuse-one-slab 修复（smoke rc=0）。
+
+**边界**：dummy 权重 → 输出 0，只证 forward-progress（无 stall）；**逐层数值对齐 vLLM 仍是 task #2/Step-2**（真实 per-layer 权重 + L1 ratio_allclose）。
+
 ### Step 2 实施蓝图（3-class 权重解耦；compile 可先做，device 数值验证 gate 在 reboot 后）
 
 > N=1 分支（base `94aa015`）**没有** `8b4bf3fa`（stepfun/develop）的 3-scalar split —— grep 零 `norm_layer_idx`/`attn_layer_idx`/`mlp_layer_idx`；`WholeDecodeFaithful` 全部方法只吃单个 `layer_idx: pl.Scalar[INT32]`（`decode_layer.py` full_chip_orch@20727 / swa_chip_orch@20784 / chip_orch@20502 / swa_attn_only_orch@20842 / attn_dense_orch@20454）。
