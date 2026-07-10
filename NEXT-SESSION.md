@@ -91,24 +91,29 @@
 
 ## 按顺序攻克（tasks 5-7）
 0. 先起 team + 读 skill + ssh 0162 + 拉最新 offline worker 备份核对现状（见「worker 备份」）。
-1. 【前置 gate】解 co-tenancy 507018（G4）：pypto whole-decode chip_process 与 8001 vLLM 同卡
-   共存。先 standalone 摸底：8001 起在 cards 8-15（enforce_eager），再在同卡 fork pypto worker，
-   看是否撞 `run_prepared code 13` / 507018（phase 24.4 家族）。方案候选：(a) 复用 per-op `_MlpService`
-   的进程模型（核对 phase 24 它是否已与 vLLM 同卡共存）；(b) pypto 用 vLLM 已 init 的 device context
-   而非自己 fork；(c) 若无解，退而先做 standalone whole-decode（cards 8-15 无 vLLM）对齐 vLLM dump。
-2. 建常驻 whole-decode 服务：把 offline worker 的 build+prepare+dispatch 抽成常驻 holder
+1. ✅ **【前置 gate】co-tenancy（G4）已解（2026-07-11）**：`SIMPLER_COMM_NO_HCCL=1`（重编 a2a3 runtime，
+   simpler commit 0162-local `878f3742`）→ whole-decode worker 与 idle vLLM 8001 同卡 rc=0、8001 200。
+   完整 runbook + 根因：[`deployment/cotenancy-simpler-no-hccl.md`](deployment/cotenancy-simpler-no-hccl.md)。
+   运行时机制全 device de-risk：NO_HCCL + resident rt 跨 step 复用（`--steps 2` co-resident rc=0）+
+   real-weight L0 torch-ref 1.000。**下一 session 从第 2 步（G2 code）开始，别重测 co-tenancy。**
+   → **具体实现蓝图见 [`phases/20-vllm-backend-monkey-patch.md`](phases/20-vllm-backend-monkey-patch.md)
+   §G2/G3/G5 live single-handoff 实现蓝图**（whole-decode=单 DistributedWorker 非 per-op 8-ChipWorker；
+   TP hidden 层间 replicated → 单 handoff rank-0 drive+broadcast；G3 每 rank 一条 KV-IPC；5 步实现顺序）。
+2. 建常驻 whole-decode 服务（sidecar）：把 offline worker 的 build+prepare+dispatch 抽成常驻 holder
    （module-global 持 rt，manual `__enter__`/`__exit__` 替 `with`；resident 机制已 device 验证过
-   `--steps`）。暴露 `decode(current_hidden, kv_args, forward_context) -> next_hidden`。
+   `--steps`）。暴露 `decode(current_hidden, kv_args, forward_context) -> next_hidden`。sidecar 进程设
+   `SIMPLER_COMM_NO_HCCL=1`。先 dummy-KV standalone 验证 socket round-trip。
 3. 接真 KV：把 offline 的 dummy k_cache/v_cache/seq_lens/block_table/slot_mapping 换成 vLLM
    forward_context 的真值 —— 复用 phase 24 零拷贝 KV-IPC（`project_phase24_25_zero_copy_kv_handoff`
    + phase 23 doc + attn_setup import_ipc，per-op 已 token-exact）。forked chip 的 IPC import 必须
-   在 child 进程 context 内。
+   在 child 进程 context 内（每 rank 一条：sidecar chip-r import vLLM rank-r KV）。
 4. 接 `_pypto_full_forward`（`tools/step3p5/vllm_monkey_patch.py:233`，现 fail-closed）：
-   lazily 建常驻服务 holder + 45 层 dispatch loop（常驻 DeviceTensor residual handoff）+ 读 live
-   forward_context 进 attn args + final hidden copy 回。整模型 patch（不 per-layer），enforce_eager。
+   lazily 建常驻服务 client（rank-0 drive + `tensor_model_parallel_broadcast` 给其余 7 rank）+ 45 层
+   dispatch loop（常驻 DeviceTensor residual handoff）+ 读 live forward_context 进 attn args +
+   final hidden copy 回。整模型 patch（不 per-layer），enforce_eager。
 5. G5 live A/B：8001 起 mode=full（`PYPTO_STEP3P5_PATCH_MODE=full`），恢复 8001 顺序 = 先起
-   8001 等 HCCL init 完再起 pypto worker。跑 3-prompt A/B vs 8000 vanilla，要 token-exact。
-   swiglu(L43/L44) 精度也在此定论（offline 合成不可信）。
+   8001 等 HCCL init 完再起 pypto sidecar（`SIMPLER_COMM_NO_HCCL=1`）。跑 3-prompt A/B vs 8000
+   vanilla，要 token-exact。swiglu(L43/L44) 精度也在此定论（offline 合成不可信）。
 
 ## 关键契约（读码已证，别信旧 memory）
 - HBM 非门槛：64GB/卡，TP=8 sharded vLLM+pypto ≈10GB/卡 fits（旧「24G+47G=OOM」是 aggregate 误判）。
