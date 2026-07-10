@@ -342,3 +342,16 @@ sidecar KV-import 不用从零写：`tools/step3p5/pypto_weight_ipc.py::WeightIp
 4. sidecar 程序按 `MAX_SEQ_DEFAULT`=KV-slot 数（166887424/head_dim/itemsize）重编（tile-shape ABI）。
 5. socket 协议 length-prefixed 带 block_table/slot_mapping/seq_lens；sidecar `--layers 0..44` 真 W8A8。
 6. 对 8000 token-exact A/B（G5b）。**全 device-iteration，须 live 8001，= 专门 session。**
+
+**G5b 精确 wiring 点（读码 pin，2026-07-11，line-level）**：
+- **ABI 覆盖**：build 前设 `config.MAX_SEQ_DEFAULT = num_slots`（现默认 4096；`config.py:83`）→ 编译出的
+  k_cache 输入 shape = `[1, num_slots, HEAD_DIM]`；`MAX_BLOCKS_PER_SEQ` 随之（`config.py:328`）。
+- **喂 KV**：`_ordered_args`（`_stage_whole_decode_run.py`）按 param name 取 `sh[name]` → decode step 前
+  `sh["k_cache"]=k_dt; sh["v_cache"]=v_dt`（KvIpcMap.kv_device_tensors(layer) 的 DeviceTensor）替 dummy。
+  per-op attn_setup 已证 rt.run 收 DeviceTensor 混 host tensor。
+- **dtype**：worker dummy k_cache 现 `bf16`（build），vLLM W8A8 kv_cache dtype 待 live 确认（若 int8 则
+  KvIpcMap itemsize=1 → num_slots=1303808 且 attention kernel 需 int8-KV 读取/dequant；若 bf16 →
+  itemsize=2 → num_slots=651904 直配）。**这是唯一须对 live 8001 定的量**。
+- **attn args**：socket 协议扩 length-prefixed，client（`_pypto_full_forward`）随 hidden 发
+  forward_context 的 block_table/slot_mapping/seq_lens；sidecar 每 step `sh[...]=...`。
+- **全 45 层**：sidecar `--layers 0,1,...,44 --ckpt <w8a8>`（真权重，sharded ~6GB/卡 fits）。
