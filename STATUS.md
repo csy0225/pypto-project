@@ -5,6 +5,19 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 **最后更新**：2026-07-11
 
+> **2026-07-11 (续) G5a LIVE 整网 plumbing device 验证 ✅ [tasks 5-7 大幅推进]**：在 G4 co-tenancy 解除
+> （`SIMPLER_COMM_NO_HCCL=1`）基础上，把 whole-decode 接进 live 8001 mode=full 并 device 验证 plumbing：
+> ① 自包含容器后端 `/logs/pypto_patch/pypto_whole_decode_backend.py`（内联 BATCH/HIDDEN，sitecustomize
+> autoload）**8 rank 全 install** `Step3p5Model.forward -> sidecar`；② startup profiling 靠 **collective
+> fallback**（全 rank `os.path.exists(sock)` 一致判定，sock absent → 全回退 original forward）存活 →
+> 8001 **health=200**；③ 起 sidecar（`_stage_whole_decode_run.py --serve`，co-resident running 8001，
+> NO_HCCL）→ 送 prompt → **HTTP 200 出 token**，8001 log `pypto forward #1 hidden(2,4096)->(2,4096)`
+> （8 rank，serving 期 0 fallback），sidecar 收 live hidden 跑 decode。→ **embed + tp broadcast + socket
+> 路由 + live co-tenancy 全链 device 验证**（G2 wiring live 证）。**剩 G5b token-exact**：现 dummy-KV + 4
+> 层 → token garbage（nan），gate 在 **G3 真 KV-IPC + 全 45 层**。硬坑记录见 `phases/20` §G5a。
+> 交付：backend + launch scripts 备份 `workspace/g5_*`；`_pypto_full_forward` + `_WholeDecodeClient`
+> （pypto-lib 树 + 容器自包含版）；collective-fallback 修复。机器已清（8001 down / 8000 oracle 200 / cards 8-15 free）。
+
 > **2026-07-11 G4 co-tenancy ✅ DISPATCH-RESOLVED（vLLM+pypto 同卡共存已解）[NEXT-SESSION task 1]**：
 > 原症状：idle vLLM 8001 占 cards 8-15 时 whole-decode worker 首个 dispatch 挂 `comm_hccl.cpp:301
 > HcclCommInitRootInfo failed: 7`（两 HCCL communicator 同 8 卡不共存；distinct HCCL_IF_BASE_PORT 无效）。

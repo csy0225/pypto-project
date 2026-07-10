@@ -121,11 +121,16 @@
    pad/send/recv/unpad round-trip unit-test PASS（echo bit-exact）。备份
    `workspace/g2_vllm_monkey_patch_wiring_20260711_023659.py`。**剩（G5 时验证）**：live embed/broadcast
    API + 真数值（须 G3 真 KV + 8001 mode=full 实跑）。
-5. G5 live A/B（gate 在 G3 真 KV）：8001 起 mode=full（`PYPTO_STEP3P5_PATCH_MODE=full`），恢复 8001 顺序
-   = 先起 8001 等 HCCL init 完再起 pypto sidecar（`SIMPLER_COMM_NO_HCCL=1` + `--serve`）。跑 3-prompt A/B
-   vs 8000 vanilla，要 token-exact。swiglu(L43/L44) 精度也在此定论（offline 合成不可信）。
-   ⚠ hazard：pypto AICore timeout → `aclrtResetDeviceForce` 卡级会 nuke vLLM，须防（见
-   `deployment/cotenancy-simpler-no-hccl.md` §hazard）。
+5. 🟡 **G5a live plumbing DONE（2026-07-11 device 验证）/ G5b token-exact 剩**：8001 起 mode=full
+   （`/logs/start_8001_full.sh`：`PYPTO_WHOLE_DECODE=1` + 自包含容器后端 autoload）→ **health=200**
+   （collective fallback 让 startup profiling 全 rank 回退存活）→ 起 sidecar（`/tmp/start_sidecar.sh`，
+   `SIMPLER_COMM_NO_HCCL=1 --serve`，co-resident running 8001）→ 送 prompt → **HTTP 200 出 token**，
+   8001 log `[pypto whole-decode] pypto forward #1 hidden(2,4096)->(2,4096)`（8 rank，0 fallback），
+   sidecar log 收到 live hidden 跑 decode。→ **embed + tp broadcast + socket 路由 + live co-tenancy 全
+   device 验证**。**G5b 剩（gate 在 G3 真 KV + 全 45 层）**：现 sidecar 用 dummy-KV + 4 层 → token
+   garbage（nan）；接 G3 真 KV + `--layers 0..44` → 3-prompt A/B vs 8000 token-exact。
+   ⚠ 停机顺序：`pkill -9 -f "[V]LLM::EngineCore"`（不只 vllm serve，否则孤儿 EngineCore 抢卡）→
+   sidecar 用 SIGTERM（非 -9，clean chip finalize）；启动前 `rm -f` sock 让 profiling 走 fallback。
 
 ## 关键契约（读码已证，别信旧 memory）
 - HBM 非门槛：64GB/卡，TP=8 sharded vLLM+pypto ≈10GB/卡 fits（旧「24G+47G=OOM」是 aggregate 误判）。
