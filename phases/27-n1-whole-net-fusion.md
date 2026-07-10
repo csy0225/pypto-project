@@ -106,6 +106,17 @@ host_orch，`decode_layer.py:903-1140`）**泛化到 45 层 + tail**（~90 seque
 - **需要 host 级介入**：0234 需 **host 侧 `npu-smi set -t reset` 或整机 reboot** 才能清 IPC poison；容器内不可达。在此之前 N=1 device dispatch（step 1）+ 权重解耦验证（step 2）+ IPC/live A/B（step 3）全部 gate 住。
 - **本次新增测试脚手架**（pypto-lib `feat/whole-net-n1-fusion`）：`tests/step3p5/_probe_whole_faithful_canonical.py`（canonical TP=8 编译探针）、`tests/step3p5/_stage_whole_faithful_device.py`（8 卡 device dispatch harness，80 输入）。
 
+### Phase 4 device 续（2026-07-10 晚）—— device 解封 ✅ + Wall-2 决定性答案 = 分离躲开 dispatch fault ✅ + 新 blocker: scheduler timeout ⏸
+
+**reboot 没有解决 507899**（新 pod 上单卡 `hello_world -d 0` 也挂 507018）→ 排除硬件 poison，定位为 **runtime 构建问题**（升级栈 device 路径从没验过）。两个独立修复：
+
+1. **单卡 AICPU 507018 = stale/mismatched `.so`** → `build_runtimes --platforms a2a3` clean 重编 → 单卡 hello PASS。
+2. **多卡 IPC 507899 = `SIMPLER_ENABLE_PTO_SDMA_WORKSPACE` force-ON**（升级栈 `71e39623` 丢了 Phase-16 SDMA-OFF patch）。其 `SdmaWorkspaceManager::Init()` 在 `domain_alloc_via_ipc` 发 AICPU `aclnnShmemSdmaStarsQuery`，fault 后毒化紧跟的 `aclrtIpcMemImportByKey`。**`set(...OFF)`（host/CMakeLists.txt:42）+ reconfigure + rebuild** → `allreduce -d 0-7` 全 8 卡 `max|out-expected|=0.000e+00` ✅。详见 [`deployment/troubleshooting-multirank-507899.md`](../deployment/troubleshooting-multirank-507899.md) 新增段。fix 已 commit simpler `98ce22a6`。
+
+**Wall-2 决定性答案（本 phase 的核心问题）= ✅ 分离躲开 dispatch fault**：device 解封后跑 `_stage_whole_faithful_device -d 0,1,2,3,4,5,6,7`（canonical TP=8 + dummy 权重）——WholeDecodeFaithful **编译 rc=0 + 8 卡 comm domain 分配成功（无 507899）+ host_orch 真实 dispatch 并执行了 ~88 个 pass-block scope（strace `device_wall.orch/sched` 多 inv）**。**没有 `TaskMapSize=0`、没有 dispatch-time fault**。→ **per-protocol 分离（TP-attn method + EP-MoE method 各自 dispatch pass）在真机确实躲开了 fused attn+MoE 的 Wall-2**。这是 N=1 的 **device dispatch 里程碑**。
+
+**新 blocker（Phase 4 遗留）= scheduler timeout（`sched_error_code=100` / 507018）mid whole-net 执行**：整网跑到执行中途某个 task 前向不进 → scheduler 超时。**不是数据退化**（random gate_w 分散路由后同样）、**不是 ring pool 不够**（`PTO2_RING_HEAP=4G/TASK_WINDOW=131072/DEP_POOL=131072` 后同样）。是 88-pass-block 顺序链里某个 scope 的真实 forward-progress 停滞。下一步 = dispatch-cut bisect（截断到第 N 个 pass-block 看在哪 stall），定位是某具体层 / tail / 还是深度/资源上限。**注意：这与 Wall-2 正交**——dispatch 是干净的，卡在执行。
+
 ### Step 2 实施蓝图（3-class 权重解耦；compile 可先做，device 数值验证 gate 在 reboot 后）
 
 > N=1 分支（base `94aa015`）**没有** `8b4bf3fa`（stepfun/develop）的 3-scalar split —— grep 零 `norm_layer_idx`/`attn_layer_idx`/`mlp_layer_idx`；`WholeDecodeFaithful` 全部方法只吃单个 `layer_idx: pl.Scalar[INT32]`（`decode_layer.py` full_chip_orch@20727 / swa_chip_orch@20784 / chip_orch@20502 / swa_attn_only_orch@20842 / attn_dense_orch@20454）。
