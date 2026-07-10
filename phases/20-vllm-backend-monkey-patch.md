@@ -334,8 +334,11 @@ sidecar KV-import 不用从零写：`tools/step3p5/pypto_weight_ipc.py::WeightIp
 **→ G3 剩纯装配（全部 building block 已 proven + reusable，零未知）**：
 1. 8001 launch `PYPTO_KVPOOL=1`（export 已验证）。
 2. sidecar 仿 `WeightIpcMap` 建 `KvIpcMap`：读 `pypto_kvpool.key.rankR` + `pypto_kvpool_map.json.rankR`
-   → per-layer K/V `DeviceTensor`（offset 见上表）。**在 chip child context 内 import**。
+   → per-layer K/V `DeviceTensor`（offset 见上表）。**在 chip child context 内 import**。**已写：
+   `tools/step3p5/pypto_kv_ipc.py::KvIpcMap`（AST-verified；`from_files(key,map,rt,worker_id) →
+   kv_device_tensors(layer)→(k_dt,v_dt) [1,num_slots,head_dim]`；num_slots=nbytes//itemsize//head_dim，
+   itemsize/dtype 可配 int8 或 bf16 —— 下 session 对 8000 定 kv_cache_dtype）**。
 3. 用这些 DeviceTensor 替 `_ordered_args` 里的 dummy k_cache/v_cache（per-op attn_setup 已证 rt.run 收 DeviceTensor）。
-4. sidecar 程序按 `MAX_SEQ_DEFAULT`=KV-slot 数（166887424/head_dim）重编（tile-shape ABI）。
+4. sidecar 程序按 `MAX_SEQ_DEFAULT`=KV-slot 数（166887424/head_dim/itemsize）重编（tile-shape ABI）。
 5. socket 协议 length-prefixed 带 block_table/slot_mapping/seq_lens；sidecar `--layers 0..44` 真 W8A8。
 6. 对 8000 token-exact A/B（G5b）。**全 device-iteration，须 live 8001，= 专门 session。**
