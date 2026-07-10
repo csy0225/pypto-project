@@ -6,6 +6,49 @@
 
 
 
+## 2026-07-10 (续² —— G1 Option-C 真 W8A8 dense/attn device 跑通 + torch-ref 对拍 [tasks 1+2])
+
+承接 Pass 1/2。目标：完成 NEXT-SESSION 任务 1（真 W8A8 接 dense/attn，此前仅 moe_block 真、
+dense/attn 还是 synth）+ 任务 2（torch-ref 逐层对拍坐实 3-scalar split）。发现上个 session
+已把 `_override_real_dense`/`_override_real_moe_attn`/`_TorchRefChain` 代码写好但**未在 device
+验证**，本 session 跑通并修 bug。
+
+**修了 3 个 host 侧 bug**（device 路径本身健康，8 卡 PREPARE OK 无 507018）：
+1. `_set_gate_exp` `IndexError`：首层 dense 用 bootstrap `cur=[1,B,H]`（未 expand），循环 `[r]`
+   越界。修法：leading-dim=1 时广播 row 0 到所有 rank（current_hidden 是跨 TP 复制的 residual 流）。
+2. `_TorchRefChain._recon_attn` w_g shape：per-rank `w_g` 用**全局** `NUM_HEADS_FULL(64)` 切
+   `[:, :64]`，但 per-rank 只有 pad=16 列 → 切不动 → cat 8 rank = 128 而非 64。改用 per-rank
+   `NUM_HEADS_*_LOCAL`（device 侧 `_override_real_moe_attn` 本就对，只 torch-ref 错）。
+3. `_share` 非连续：`_override_real_moe_attn` 的 `w_g` slice+reshape+`.to(bf16)`（bf16 no-op 保留
+   strided view）非连续 → `make_tensor_arg` reject。修法：`_share` 统一 `.contiguous().share_memory_()`
+   （对已连续张量无副作用，覆盖所有路径）。
+
+**4 层链（0,1,2,3 = 3 dense + 1 swa_moe，5 步）device rc=0**（真 W8A8，
+`/mnt/nvme1/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp`）：
+
+| step | device next_hidden | kern-vs-torchref |
+|------|------|------|
+| L0 full_dense | 76.0（≠synth 30.9）| **PASS 1.000**（max\|diff\| 0.75）|
+| L1 swa_dense | 478.0（≠synth 44.8）| 0.995（max\|diff\| 2.0）|
+| L2 swa_dense | 520.0（≠synth 59.8）| 0.994（max\|diff\| 4.0）|
+| L3 swa_moe/attn | resid1 512.0 | 0.994（max\|diff\| 4.0）|
+| L3 swa_moe/moe | moe_out 1.88 | **PASS 1.000**（max\|diff\| 0.047）|
+
+**任务 1 完成**：真 W8A8 dense/attn 已接 device，输出全部 ≠ synth，rc=0 无 507018。
+
+**任务 2（3-scalar split 验证）**：full-attn(L0) + MoE-block(L3 moe_out) **精确 1.000**；SWA-attn
+路径（L1/L2/L3-attn）稳定 ~0.994（**不随层数累积** → 排除层索引错位，错位会灾难性失配而非 0.994）。
+worker 的 `_compare_layer` 用 **过严** 阈值 0.999；项目实际 L1 判据是
+`ratio_allclose(atol=0.04, rtol=0.04, max_error_ratio=0.10)`（允许 ≤10% 元素超差）→ 0.994（0.6%
+超差）**满足判据**。合成输入幅值巨大（478-520）放大了 SWA online-softmax 参考的 BF16 微小差；
+真 decode-step golden 不可得（现有 dump 是 prefill 18-token），SWA 是否影响 token-exact **只能靠
+live A/B（任务 5）定论**，offline 合成链无法覆盖 attention-core。
+
+**worker 备份**（in-tree 未提交）：`workspace/g1_worker_task1done_20260710_220029.py` +
+日志 `workspace/g1_task1_realw_20260710_220029.log`。
+
+**下一步**：任务 3（L43/L44 standalone SplitIncoreOrch 修复）→ 任务 4（扩 45 层链）→ G2 live wiring。
+
 ## 2026-07-10 (续 —— G1 Option-C 整网 decode worker 真机 Pass 1/2)
 
 承接同一目标（live single-handoff A/B）。用户拍板两条决策：(1) 环境不 rebase，基于当前

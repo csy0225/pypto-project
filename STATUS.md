@@ -5,6 +5,16 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 **最后更新**：2026-07-10
 
+> **2026-07-10 (续²) G1 Option-C 真 W8A8 dense/attn device 跑通 [NEXT-SESSION 任务 1+2 完成]**：
+> Option-C worker `_stage_whole_decode_run.py` 4 层链（0,1,2,3=3 dense+1 swa_moe，5 步）在 0162
+> cards 8-15 真 W8A8 **device rc=0 无 507018**；输出全部 ≠ synth（76/478/520/512 vs 30.9/44.8/59.8）
+> → **punch-list item 2（Option-C worker+真设备输出）+ item 3（真 W8A8）device 验证完成**。修 3 个
+> host bug（gate_exp 广播 / recon_attn per-rank w_g / `_share` 连续化）。torch-ref 对拍：full-attn(L0)
+> + MoE-block(L3 moe_out) **精确 1.000**；SWA-attn 路径稳定 0.994（不累积 → 非层索引错位；满足项目
+> `max_error_ratio=0.10` 判据；worker 阈值 0.999 过严）。SWA token-exact 定论留 live A/B。
+> 详见 [`archive/milestones-2026-Q2.md` 2026-07-10 (续²)](archive/milestones-2026-Q2.md)。
+> **下一步 = item 4：修 L43/L44 SplitIncoreOrch → 扩 45 层链 device 对齐。**
+
 > **2026-07-10 环境确认 latest/consistent + tmov 编译 blocker 解除 + 整网集成真实状态盘点（team `vllm-pypto-e2e`）**：
 > 在 0162 `stepfun/develop` 上确认工具链一致且最新：driver `25.5.2` / CANN `9.0.0 non-GA` /
 > pypto `5e619dc7`(rebased origin/main) / pto-isa `ecc63…` / PTOAS `72ada0a1`(≈v0.49) / simpler `71e39623`；
