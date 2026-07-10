@@ -370,3 +370,15 @@ sidecar KV-import 不用从零写：`tools/step3p5/pypto_weight_ipc.py::WeightIp
 → **G5b 每个机制现已确认 + 代码就绪**：KvIpcMap + build_stacked_kv（写好）；per-rank import（runtime 支持）；
 MAX_SEQ_DEFAULT 覆盖（config.py:83）；`sh["k_cache"]=StackedDeviceTensor` feed（_ordered_args by name）；
 socket attn-args 协议扩展。剩：装配 + 对 live 8001 定 kv dtype + 45 层 + token-exact A/B。纯 device-iteration。
+
+### ⚠ G5b 新发现：KV layout 是 multi-head paged，与 worker 单-head 假设不符（须 device 对齐/可能改 kernel）
+
+boot log：`GPU KV cache size: 162,944 tokens`（= 1273 blocks × 128 block_size）。KVPOOL 每 K/V/layer =
+166887424 B → **1024 B/slot** = `num_kv_heads_local × head_dim(128) × itemsize`：
+- bf16(itemsize=2) → num_kv_heads_local=4；int8(itemsize=1) → num_kv_heads_local=8。
+- **worker 的 `k_cache=[1, MAX_SEQ, HEAD_DIM]` 假设 单 KV head**；vLLM 存的是 **多头 paged**
+  `[num_blocks, block_size, num_kv_heads_local, head_dim]`。→ **layout 不一致**：sidecar 的 attention
+  须按 vLLM 的多头 paged 结构读（num_kv_heads_local + block-based addressing），**可能要改 attention kernel**，
+  不是简单换 DeviceTensor。这是 G5b 的真实工程量核心，须 live device 迭代对齐 + 数值验证。
+- 精确 num_kv_heads_local / dtype / block layout 须对 running 8001 的 KV tensor spec 定（KVPOOL backend
+  的 copy 逻辑 + vLLM kv_cache spec）。**→ G5b 确认是 dedicated device session**（非纯装配）。
