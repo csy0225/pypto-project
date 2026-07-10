@@ -51,6 +51,46 @@
 
 ---
 
+## ⚠ 新增根因（2026-07-10）：三件套全对 + flag 对，仍 507899 → SDMA workspace force-ON
+
+**如果 driver 25.5.2 / firmware 7.8.0.7.220 / CANN beta.1 三件全对、ImportByKey flag 也对，
+但多卡仍 507899，且 507899 之前紧跟着 `[SDMA] aclrtSynchronizeStream (aicpu) failed`** ——
+这不是三件套问题，是 **simpler runtime 的 `SIMPLER_ENABLE_PTO_SDMA_WORKSPACE` 被 force-ON**。
+
+- 根因：`ensure_sdma_workspace()`→`SdmaWorkspaceManager::Init()` 在 `comm_hccl.cpp:815`
+  （`domain_alloc_via_ipc` 内）发一个 AICPU `aclnnShmemSdmaStarsQuery`，在本机 driver/CANN 上
+  fault（507018），**毒化紧跟其后的跨卡 `aclrtIpcMemImportByKey`（507899）**。它按自己的 CMake
+  注释是 "logically orthogonal to HCCL comm bootstrap, only needed by sdma_async_completion_demo"
+  —— comm 不该依赖它。
+- 为什么升级后才出现：Phase-16 验证栈（simpler `a6e06406`）本带 "SDMA OFF" patch；升级到
+  origin `71e39623` 把这个 patch **丢了**并 force-ON。（升级栈 device 路径此前只做过 compile
+  验证，没在真机跑过 → 潜藏 regression。）
+- **判据**：对比 log —— 2026-06-29 成功 log 里 `[SDMA] aclrtSynchronizeStream (aicpu) failed`
+  计数 = 0（当时 SDMA OFF）；升级栈失败 log 里每次都有，且在 507899 之前。
+- **另一个独立症状**：同一份 stale/mismatched `.so` 会让**单卡** `hello_world -d 0` 也挂
+  `aclrtSynchronizeStream (AICPU) failed 507018`（跟多卡无关）。
+
+### 修复（两步都要）
+
+```bash
+# 1) 单卡 AICPU 507018：clean 重编 runtime（stale .so）
+cd $WS/pypto && python -m simpler_setup.build_runtimes --platforms a2a3   # 注意：--clone-protocol 已移除
+python examples/beginner/hello_world.py -p a2a3 -d 0    # 期望 PASS
+
+# 2) 多卡 IPC 507899：关掉 SDMA workspace
+#    pypto/runtime/src/a2a3/platform/onboard/host/CMakeLists.txt:42
+#      set(SIMPLER_ENABLE_PTO_SDMA_WORKSPACE OFF)   # 并把 PTO_ISA_ROOT FATAL_ERROR + include 收进 if(...ON)
+mv $WS/pypto/runtime/build/cache $WS/pypto/runtime/build/cache.bak.$(date +%s)   # 强制 reconfigure
+cd $WS/pypto && python -m simpler_setup.build_runtimes --platforms a2a3
+cd $WS/pypto/runtime/examples/workers/l3/allreduce_distributed
+python main.py -p a2a3 -d 0-7 --mode twophase   # 期望 8 卡全 max|out-expected|=0.000e+00 ✅
+```
+
+**通用教训**：升级到 origin pin 后，必须审计"哪些本地 patch 被 origin 吞了 / 丢了"（这次丢的是
+SDMA-OFF）；升级栈只做 compile 验证不够，device 路径（单卡 hello + `allreduce -d 0-7`）必须重新验证。
+
+---
+
 ## 排查清单（按顺序核对）
 
 ```bash
