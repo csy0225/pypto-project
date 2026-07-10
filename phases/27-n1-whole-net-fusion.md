@@ -106,6 +106,27 @@ host_orch，`decode_layer.py:903-1140`）**泛化到 45 层 + tail**（~90 seque
 - **需要 host 级介入**：0234 需 **host 侧 `npu-smi set -t reset` 或整机 reboot** 才能清 IPC poison；容器内不可达。在此之前 N=1 device dispatch（step 1）+ 权重解耦验证（step 2）+ IPC/live A/B（step 3）全部 gate 住。
 - **本次新增测试脚手架**（pypto-lib `feat/whole-net-n1-fusion`）：`tests/step3p5/_probe_whole_faithful_canonical.py`（canonical TP=8 编译探针）、`tests/step3p5/_stage_whole_faithful_device.py`（8 卡 device dispatch harness，80 输入）。
 
+### Step 2 实施蓝图（3-class 权重解耦；compile 可先做，device 数值验证 gate 在 reboot 后）
+
+> N=1 分支（base `94aa015`）**没有** `8b4bf3fa`（stepfun/develop）的 3-scalar split —— grep 零 `norm_layer_idx`/`attn_layer_idx`/`mlp_layer_idx`；`WholeDecodeFaithful` 全部方法只吃单个 `layer_idx: pl.Scalar[INT32]`（`decode_layer.py` full_chip_orch@20727 / swa_chip_orch@20784 / chip_orch@20502 / swa_attn_only_orch@20842 / attn_dense_orch@20454）。
+
+**现状（reuse-one-slab）**：`full_chip_orch` 把一个 `layer_idx` 同时传给 `attention_full_inline` + `dense_mlp_inline`，两者内部各自 `layer_idx*HIDDEN`(attn/mlp base) / `[layer_idx,:]`(norm) / `layer_idx*INTER_LOCAL`(w_down) 取行。42 个 MoE 层共用 `ma_*`/`m_*` slab + `layer_idx=0` → 全读 layer-0 权重（编译近似）。
+
+**目标**：每层读真实权重，三类栈索引解耦：
+- norm（`KEY_INPUT_RMS`/`KEY_POST_ATTN_RMS`/`KEY_Q_NORM`/`KEY_K_NORM`）`[45]` = **absolute** `layer_idx`
+- attn（`KEY_WQ_FULL[12]`/`KEY_WQ_SWA[33]` + wk/wv/wo/w_g）= **type-local** idx（full→0..11 / swa→0..32）
+- dense-MLP（`KEY_DENSE_GATE/UP/DOWN[3]`）= dense-order idx（L0/1/2 → 0/1/2）
+- MoE experts（`KEY_MOE_GATE_W`/`ROUTER_BIAS`/`W_*_R`/`W_*_S`）`[42]` = **pos = layer_idx − 3**
+
+**改动清单**（execution，reboot 后一次跑通 + device vs vLLM 验证）：
+1. **inline kernel** `attention_full._func` / `attention_swa._func` / `_dense_mlp_body_tp._func` / `moe` 各体：单 `layer_idx` → `norm_layer_idx` + `attn_layer_idx`（+ `mlp_layer_idx`/`moe_pos`），每类 base 用各自 scalar。（可 cherry-pick `8b4bf3fa` 的 74-edit split，注意 N=1 splice 自旧签名，需对齐。）
+2. **5 个 orch 方法**签名：单 `layer_idx` → 3 scalar，转传给 inline。
+3. **host_orch**：`ma_*`/`m_*` 单-slab 入参 → **全栈**（`ma_input_rms [tp,45,HIDDEN]`、`m_w_gate_r [tp,42,n_local_experts,HIDDEN,inter]` …）；88 pass-block 每层传 `(norm=abs_li, attn=type_local_li, moe_pos=li-3)`。
+4. **device harness** `_stage_whole_faithful_device.py`：dummy 全栈 shape 对齐（first-dim 45/42/type-local）+ 逐层 index。真权重经 `weight_loader.py:747-810`（已按 3 类 stack，无需改 loader）。
+5. **验证**：compile rc=0（host，可先做）→ reboot 后 8 卡 device 逐层 hidden vs vLLM dump（L1 ratio_allclose atol=0.04）。
+
+**注意**：本蓝图**不动**当前 compile-passing 的 reuse-one-slab `_build_whole_decode_faithful_program`（保留 device dispatch 决定性实验的干净基线）；3-class 变体建议加 flag 或新 builder，避免回归编译。
+
 ### 历史
 
 🟡 **Phase 0（2026-07-09）**：0234 五仓 + ptoas-bin 切升级栈；clean 重编 pypto+simpler；团队 3 份调查报告交付（Wall-1/Wall-2 root-cause + N=1 结构建议）。
