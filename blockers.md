@@ -7,7 +7,34 @@ Blocker 解决时，**删掉本文件里这一节**，到
 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)
 "Resolved blockers" 段补一条 post-mortem。
 
-**最后检视**：2026-07-09。
+**最后检视**：2026-07-10。
+
+---
+
+## ⛔ NEW 2026-07-10 — 0234 节点级跨卡 HCCL IPC poison（N=1 device dispatch + 所有多卡 e2e 硬 blocker）
+
+**严重度**：🔴 阻塞 0234 上一切多卡 device 运行（N=1 device dispatch / Option-C 整网链 / MoE 8 卡精度）。**需要 host 级介入，容器内不可解。**
+
+**症状**：任何多卡（2..8 卡）跨卡 comm-domain 分配在第一处 `orch.allocate_domain(...)` 即失败：
+```
+domain_alloc_via_ipc: [comm_hccl.cpp:833] alloc_domain: ImportByKey(peer_dr=0 pid=...) -> 507899
+RuntimeError: comm_alloc_domain_windows failed with code -1  (全 N chip)
+```
+随后 `destroy_comm_stream ... 507018`（stream teardown 尾声，非根因）。
+
+**决定性隔离**：已知良好 baseline `allreduce_distributed -p a2a3 -d 0-7`（以及 `-d 0-1`）**现在同样 507899** —— 该 baseline 2026-06-29 在 0234 跑过 `max|out-expected|=0`。→ **是 0234 节点级 IPC 状态卡死，不是任何一个 pypto 程序，也不是 N=1 Wall-2**。
+
+**根因**：driver cap 在位（0234 = driver `25.5.2` / firmware `7.8.0.7.220`，非 Phase 16 cap 缺口），但运行期 driver 跨卡 IPC（`aclrtIpcMemImportByKey`）状态被某次崩溃的多卡 run 卡死，survive fresh 进程。对齐 `pypto/runtime/conftest.py:1039`："poison survives close()+device-reset on shared box；只有 fresh worker process 拿到 clean device" —— 但此处 fresh 进程也失败，poison 在 process/ACL-reset 之下（driver 级）。
+
+**容器内恢复全部无效（已逐一验证）**：
+- `npu-smi set -t reset -i N -c 0`（out-of-band）+ `-m 1`（in-band）→ `rc=214 "This command cannot be executed on a common container"`。
+- `aclrtResetDeviceForce`（ctypes libascendcl，`workspace/reset_cards_acl.py`）→ 8 卡全 rc=0 **但 poison 未清**（baseline 复跑仍 507899）。
+- `/dev/shm`（空）+ `/tmp`（无 hccl/rootinfo/sock）无残留可清；无 `/sys` reset 节点；`CapEff=00000000a80465fb`（无 CAP_SYS_ADMIN，非特权容器）；仅 8 卡无备用组。
+- `npu-smi info` AICore(%) 85-93% + 0 HBM + 无进程 = 这批 910B2C idle telemetry 噪声（reset 后不变），非卡死 kernel。
+
+**解除条件**：**0234 host 侧 `npu-smi set -t reset`（宿主机，非容器）或整机 reboot**。之后先用 `allreduce_distributed -d 0-7` 复验 `max|out-expected|=0`，再重跑 N=1 device dispatch（`tests/step3p5/_stage_whole_faithful_device.py`）。
+
+**链接**：`phases/27-n1-whole-net-fusion.md` §Phase 4 device 尝试（2026-07-10）。
 
 ---
 

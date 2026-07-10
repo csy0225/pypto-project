@@ -96,6 +96,16 @@ host_orch，`decode_layer.py:903-1140`）**泛化到 45 层 + tail**（~90 seque
 
 **遗留（Phase 4 device+runtime = 下一步）**：(1) 8 卡 device dispatch 决定性实验（per-protocol 分离是否躲开 Wall-2 `TaskMapSize=0`）。(2) 权重索引 3-class 在 45 层规模的解耦（当前编译用复用单 slab / all-MoE-layer 近似；真实需 host-side stack 切片 + dense-prefix L0-L2 + full-attn L0）。(3) 47GiB 单 key 权重 IPC + `_pypto_full_forward` single-handoff + live A/B。
 
+### Phase 4 device 尝试（2026-07-10）—— 编译再确认 ✅ + device 被 0234 节点级 IPC poison 卡住 ⛔（非 Wall-2、非本程序）
+
+- **新数据点：canonical TP=8 编译 ✅ rc=0**。此前编译里程碑走 `apply_perrank_patch`（TP=1 单卡）；本次用 `tests/step3p5/_probe_whole_faithful_canonical.py`（**无 patch**，canonical TP=8/EP=8 + `DistributedConfig(device_ids=[0..7])`）编译 `whole_decode_faithful` → `COMPILE OK`（`build_output/WholeDecodeFaithful_20260710_053948`）。说明 pass-37 comm-domain materialization 在真 TP=8/EP=8 下不报编译错，host_orch 生成真实 per-rank task loop（`for r in range(world_size): self.full_chip_orch(...)` 等）。
+- **8 卡 device dispatch → 507899 `ImportByKey`（不是 `TaskMapSize=0`）**。用 `tests/step3p5/_stage_whole_faithful_device.py`（80 个 dummy-zero 输入匹配 host_orch signature，`compiled(*inputs)` 就地 `pl.Out`）在 device_ids=[0..7] 跑，第一处 `orch.allocate_domain("comm_d0", workers=[0..7])` 即失败：`domain_alloc_via_ipc: ImportByKey -> 507899`（`comm_hccl.cpp:833`）→ `comm_alloc_domain_windows failed with code -1` 全 8 chip。
+- **决定性隔离：已知良好 baseline 复现同样的 507899**。`allreduce_distributed -p a2a3 -d 0-7`（Phase 16 canonical 多卡健康检查，0234 曾 2026-06-29 跑 `max|out-expected|=0`）**现在也 507899**；`-d 0-1` 2 卡同样 507899。→ **是 0234 节点级跨卡 HCCL IPC poison，不是 WholeDecodeFaithful 程序，也不是 Wall-2**。Wall-2 决定性实验因此**无法在当前 0234 状态回答**。
+- **驱动 cap 在位**：0234 driver `25.5.2` / firmware `7.8.0.7.220`（STATUS.md 旧记录 25.5.1 已过时）。所以不是 Phase 16 cap 缺口，是运行期 driver IPC 状态卡死（曾工作 → fresh 进程仍失败）。
+- **容器内恢复手段全部无效**：`npu-smi set -t reset`（out-of-band + in-band `-m 1`）→ `rc=214 "cannot be executed on a common container"`；`aclrtResetDeviceForce`（ctypes libascendcl，`reset_cards_acl.py`）→ 8 卡全 rc=0 **但 poison 未清**（对齐 `pypto/runtime/conftest.py:1039` "poison survives close()+device-reset on shared box"）；`/dev/shm`+`/tmp` 无残留；无 sysfs reset 节点；`CapEff=00000000a80465fb`（无 CAP_SYS_ADMIN，非特权容器）；只有 8 卡无备用组。**AICore(%) 85-93% + 0 HBM + 无进程 是这批 910B2C 的 idle telemetry 噪声，非卡死 kernel**（reset 后不变）。
+- **需要 host 级介入**：0234 需 **host 侧 `npu-smi set -t reset` 或整机 reboot** 才能清 IPC poison；容器内不可达。在此之前 N=1 device dispatch（step 1）+ 权重解耦验证（step 2）+ IPC/live A/B（step 3）全部 gate 住。
+- **本次新增测试脚手架**（pypto-lib `feat/whole-net-n1-fusion`）：`tests/step3p5/_probe_whole_faithful_canonical.py`（canonical TP=8 编译探针）、`tests/step3p5/_stage_whole_faithful_device.py`（8 卡 device dispatch harness，80 输入）。
+
 ### 历史
 
 🟡 **Phase 0（2026-07-09）**：0234 五仓 + ptoas-bin 切升级栈；clean 重编 pypto+simpler；团队 3 份调查报告交付（Wall-1/Wall-2 root-cause + N=1 结构建议）。

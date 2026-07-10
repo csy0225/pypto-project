@@ -406,6 +406,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | # | Blocker | 严重度 | gate 什么 | Owner | 详情 |
 |--:|---------|--------|-----------|-------|------|
+| 0 | **0234 节点级跨卡 IPC poison（507899 ImportByKey）** | 🔴 基础设施 | **0234 上所有多卡 device 运行**（N=1 dispatch / Option-C 链 / MoE 8 卡） | 需 host 级 reset/reboot | [`blockers.md`](blockers.md) §NEW 2026-07-10 |
 | 1 | Phase 20 production backend 未接入 | 🟡 功能 | 真实 vLLM 请求走 PyPTO runner | 未指派 | `phases/20-vllm-backend-monkey-patch.md` |
 | 2 | Prefill MoE L1 overflow（TASK-29） | 🟡 功能/性能 | 真实 PyPTO NPU prefill kernel + TTFT | 未指派 | [`blockers.md`](blockers.md) §2 |
 | 3 | head_gate × 1 旁路 — vLLM 原生语义偏离 | 🟡 精度 | 在线 backend L1 layer parity | TASK-L（pto-isa 上游） | [`blockers.md`](blockers.md) §1 |
@@ -437,7 +438,8 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 ## `gpu-a910x-0234` 当前状态
 
-未升级。driver `25.5.1` / firmware `7.8.0.6.201` / CANN `9.0.0-beta.1`。
-多卡 e2e 因 driver shmem-exbus cap 缺口而被卡，必须先升 driver+firmware。
-`.run` 包已 stage 在 0162 `/mnt/persist/ascend-staging/` —— 升级 runbook
-见 [`deployment/machine-recovery.md`](deployment/machine-recovery.md)。
+**已升级（2026-07-10 核对）**：driver `25.5.2` / firmware `7.8.0.7.220` / CANN `9.0.0-beta.1`（三剑合璧齐）。
+Phase 16 cap 缺口**不再是** 0234 的问题（旧记录 25.5.1/7.8.0.6.201 已过时）。0234 曾成功跑多卡
+（2026-06-24 MR-golden dense 8 卡 PASS、2026-06-29 L3 allreduce `max|out-expected|=0`）。
+**当前（2026-07-10）多卡 device 被节点级跨卡 IPC poison 卡住**（507899 ImportByKey，见上方 Blocker #0）——
+是运行期 driver IPC 状态卡死，不是 cap 缺口；需 host 级 reset/reboot。
