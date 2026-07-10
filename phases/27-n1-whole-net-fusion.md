@@ -177,6 +177,18 @@ host_orch，`decode_layer.py:903-1140`）**泛化到 45 层 + tail**（~90 seque
 
 **验证**：compile rc=0（host）→ 8 卡 device 逐层 hidden vs vLLM eager dump（L1 ratio_allclose atol=0.04）；final logits argmax 一致。建议先加 flag/新 builder，保当前 per-layer-window reuse-one-slab 干净基线不回归。
 
+### Step-2 增量①（2026-07-10，pushed `7b9693b`）—— dense-prefix 真实 per-layer 索引 ✅
+
+`full_chip_orch`/`swa_chip_orch` 单 `layer_idx`→3 scalar；host_orch dense 调用传 L0=(0,0,0)/L1=(1,0,1)/L2=(2,1,2)（norm=abs/attn=type-local/mlp=abs）。dense 权重栈已 stack-sized，索引 in-bounds，无 shape 改。smoke rc=0；全 45 层 8 卡 device DISPATCH_CLEAN（dummy，无回归）。
+
+### Step-2 策略决定（下个增量用）：attn+MoE 权重走 **host-side slicing**，norm 走 full-stack
+
+两条路线权衡后选 **host-slice**（更干净，避开两处 friction）：
+- **NORM**（input_rms/post_rms/q_norm/k_norm）：**full [45] stack + 真实 `norm_layer_idx=L`**（kernel 索引；KV-cache base = `norm*cache_rows` 必须用绝对 L，不能 host-slice）。
+- **ATTN**（wq/wk/wv/wo/w_g/gate_r）+ **MoE**（gate_w/router_bias/experts）：host_orch 侧按层 `stack[pos]` 切成**单层 slab** 传进 orchestrator，orchestrator/kernel 的 weight-index 传 **0**（收到的已是该层 slab）。→ **避开 swa 33-stack resize**（不再需要 kernel 索引 33 层）**+ 避开 chip_orch [42]-dim body 改写**（MoE 权重预切，gate/dispatch/expert 步骤不动）。
+- **增量① 的 dense 用了 kernel-index（真实 attn idx）**：dense 栈小无 friction，可保留；但 MoE-层 attn + experts 统一走 host-slice。或把 dense 也改 host-slice 以统一（attn/mlp idx=0）。**下个增量二选一并统一。**
+- 待改：`swa_attn_only_orch`(norm=L,attn=0) + `chip_orch`(norm=L, MoE 权重预切) 签名/调用；host_orch MoE 段按 `pos=L-3` / `attn=swa-local` slice [42]/[33] stack；harness 传 [45]/[42]/[33] full stack（由 weight_loader 真实权重填充）；device 逐层 vs vLLM。
+
 ### Step 2 实施蓝图（3-class 权重解耦；compile 可先做，device 数值验证 gate 在 reboot 后）
 
 > N=1 分支（base `94aa015`）**没有** `8b4bf3fa`（stepfun/develop）的 3-scalar split —— grep 零 `norm_layer_idx`/`attn_layer_idx`/`mlp_layer_idx`；`WholeDecodeFaithful` 全部方法只吃单个 `layer_idx: pl.Scalar[INT32]`（`decode_layer.py` full_chip_orch@20727 / swa_chip_orch@20784 / chip_orch@20502 / swa_attn_only_orch@20842 / attn_dense_orch@20454）。
