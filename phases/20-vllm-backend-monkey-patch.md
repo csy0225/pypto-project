@@ -215,3 +215,28 @@ pypto sidecar 的 chip-r 需读 vLLM rank-r 的 paged KV。**每 rank 一条 IPC
 - resident rt 复用：`_stage_whole_decode_run.py --steps N`（device ✓ co-resident ✓）。
 - 47GiB 单 key 权重 IPC（STATUS 2026-07-07 ④）；phase 24 KV-IPC token-exact；tail live（phase 24）。
 - 启动顺序 + 停机：[`../deployment/troubleshooting-8001-pypto-bridge.md`](../deployment/troubleshooting-8001-pypto-bridge.md)。
+
+### G3 真 KV-IPC 具体 spec（2026-07-11 读码定位，device-gated 下一步）
+
+worker 当前 KV = **dummy zeros**（`_stage_whole_decode_run.py:1025-1026`
+`k_cache=v_cache=torch.zeros(1, MAX_SEQ_DEFAULT, HEAD_DIM, bf16)`，per-rank，build 时 baked、
+fork-inherited），attn args 也是 dummy（`:1022-1024` seq_lens=ones / block_table=zeros /
+slot_mapping=arange）。attention 消费点：`_TorchRefChain._attn` 附近的 `attention_full_inline`
+调用（`:328-348` `k_cache_full=kc, v_cache_full=vc, seq_lens/block_table/slot_mapping`），
+KV_HEADS_LOCAL=1（TP=8 per-rank）。
+
+**G3 要改的三点**：
+1. **KV 来源**：dummy zeros → 从 vLLM rank-r 的 paged KV pool **IPC import**（`rt.import_ipc(key)` →
+   `DeviceTensor`）。vLLM paged 布局 `(num_blocks, block_size, 1, head_dim)` flatten =
+   `[num_blocks*block_size, head_dim]`（phase 24 已 token-exact 证）。**每层一份**（45 层各自 KV；
+   现 worker 单 k_cache 复用 → 需扩成 per-layer KV 输入，或一大池按 layer 切）。
+2. **KV-rows ABI（最硬 gate）**：`MAX_SEQ_DEFAULT`（k_cache 行数）**必须 == vLLM `num_blocks*block_size`**
+   （远大于 dummy 默认）。编译期常量 → sidecar build 时须按 live vLLM 的真实 num_blocks 定。
+3. **attn args per step**：seq_lens/block_table/slot_mapping 从 live `forward_context` 取，随 hidden
+   经 socket 发给 sidecar（协议从 fixed `[BATCH,HIDDEN]` 扩成 length-prefixed + attn-args blob）；
+   sidecar 每 step `copy_` 进 sh 的对应输入。
+
+**验证路径**：先 offline（仿 phase-24 `_stage_attn_e2e.py exporter/worker`：独立进程 export 合成 KV
+→ sidecar import → decode → 对 torch golden `bad_ratio=0`），再 live（vLLM `_allocate_kv_cache_tensors`
+整池 export → sidecar chip-r import rank-r KV）。forked chip 的 import **必须在 child context 内**。
+真实 num_blocks + 布局只能对 **跑起来的 8001** 定 → 这步是 device-gated，须 live vLLM 迭代。
