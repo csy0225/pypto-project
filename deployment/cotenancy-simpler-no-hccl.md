@@ -65,3 +65,17 @@ IPC peer-access（`aclrtIpcMemImportByKey` + `aclrtDeviceEnablePeerAccess`）。
 - ⚠ 边界：swa / MoE 层的全层数值 token-exactness 仍走 **live A/B（real KV）** 定论——
   offline synthetic + dummy-KV 会 residual 爆 nan（input-independent，HCCL 路径同样，
   非 NO_HCCL 引入），不是可信 oracle（项目约定）。
+
+## ⚠ 共存 hazard：pypto force-reset 会连累 vLLM（G5 live 必须防）
+
+`DeviceRunner::force_reset_device()`（`device_runner.cpp:609`，`aclrtResetDeviceForce` `:570/622`）
+是**卡级全局 reset，无 foreign-owner 守护**——pypto worker 一旦 AICore timeout / device poison
+（`run()` 拒绝 `:199`，finalize force-reset `:696`），会把同卡 vLLM 8001 的 ACL context 一起 nuke。
+（`AclInitGuard` 尊重外部 ACL owner，但 `aclrtResetDeviceForce` 没有对应守护。）
+- **对比 `aclInit`**：process-wide、容忍 `ACL_ERROR_REPEAT_INITIALIZE`（`device_runner.cpp:128-150`），
+  pypto 建自己的 context 与 vLLM 共存无冲突——只有 **force-reset** 是破坏性的。
+- **G5 live 缓解**：(1) 确保 pypto dispatch 前 vLLM stream idle（减 halMemCtl 争用 + 507018）；
+  (2) 避免 pypto AICore timeout（force-reset 触发器）；(3) 上游建议：给 reset 加 co-tenancy 守护
+  （`--no-force-reset` / 检测 foreign owner 时跳过 `aclrtResetDeviceForce`），mirror `AclInitGuard`。
+- 另：`code 13 = kHalMemCtlEacces`（`host_regs.cpp:114`）= 并发 chip_process bring-up 抢 halMemCtl
+  串行化窗口的信号（已 retry 3×/50ms）；co-tenancy 下若复现，是 vLLM 争用该窗口，先起 8001 等 idle 可减。
