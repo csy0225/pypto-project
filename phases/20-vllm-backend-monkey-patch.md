@@ -282,3 +282,24 @@ patch 走 **`/logs/pypto_patch/sitecustomize.py`**：按 env var（`PYPTO_DENSE_
 **下一步**：clean boot（cards 空 + collective fallback + sock absent）→ profiling 走 fallback → ready →
 起 sidecar（`/logs` sock）→ 送 prompt 验证 plumbing 连通（rank-0 drive + broadcast，dummy-KV garbage
 数值但验 embed/broadcast API + socket 路径）→ 即 G5a。G5b token-exact gate 在 G3 真 KV。
+
+### G3 真 KV — export 侧已存在（pypto_kvpool_backend），只剩 sidecar import（2026-07-11 定位）
+
+**vLLM KV export 侧已建好，可直接复用**：`/logs/pypto_patch/pypto_kvpool_backend.py`（Phase 24.1，
+`PYPTO_KVPOOL=1` 启用）已 patch `_allocate_kv_cache_tensors` → 把所有目标 attention 层的 K/V 分配进
+**一个 MemPool 的一个 buffer**（块基址可导出）→ `aclrtIpcMemGetExportKey` 导出**单 key** + offset map
+（`/logs/pypto_kvpool.key` + `/logs/pypto_kvpool_map.json`，每层 K/V 的 offset）。→ 解 per-tensor
+MemPool 207001 OOM。
+
+**G3 剩 = sidecar import 侧**（net-new，但 export 免写）：
+1. 8001 mode=full launch 加 `PYPTO_KVPOOL=1`（+ 与 whole-decode 后端共存；vLLM 导出 KV 池 key/map）。
+2. **sidecar 每 rank `rt.import_ipc(key)`**（import_ipc 已在 stepfun/develop `1aa6efb`）→ 按 map offset
+   切每层 K/V `DeviceTensor` → 替换 worker build 里的 dummy `k_cache/v_cache=zeros`（`_stage_whole_decode_run.py:1025`）。
+   forked chip 的 import **必须在 child context 内**。
+3. **KV-rows ABI**：sidecar k_cache shape 行数 = vLLM `num_blocks*block_size`（从 map/vLLM 配置读），
+   layout 对齐 vLLM paged `(num_blocks, block_size, 1, head_dim)` flatten（phase 24 per-op 已 token-exact）。
+4. **attn args per request**：sidecar 协议扩 length-prefixed，随 hidden 收 slot_mapping/block_table/seq_lens
+   （从 live forward_context）→ 每 step copy 进 sh。
+5. sidecar `--layers 0..44`（全 45 层，真 W8A8 `--ckpt`，sharded ~6GB/卡 + vLLM util 0.5 ~28GB fits 64GB）。
+→ 然后 G5b：3-prompt A/B vs 8000 token-exact。**这步须对 running 8001 device 迭代（KV layout/num_blocks
+只能对活的 8001 定）= 专门 session**，但 export 免写 + G5a plumbing 已通 → 范围收敛到 sidecar KV-import。
