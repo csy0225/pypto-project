@@ -99,14 +99,19 @@
    → **具体实现蓝图见 [`phases/20-vllm-backend-monkey-patch.md`](phases/20-vllm-backend-monkey-patch.md)
    §G2/G3/G5 live single-handoff 实现蓝图**（whole-decode=单 DistributedWorker 非 per-op 8-ChipWorker；
    TP hidden 层间 replicated → 单 handoff rank-0 drive+broadcast；G3 每 rank 一条 KV-IPC；5 步实现顺序）。
-2. 建常驻 whole-decode 服务（sidecar）：把 offline worker 的 build+prepare+dispatch 抽成常驻 holder
-   （module-global 持 rt，manual `__enter__`/`__exit__` 替 `with`；resident 机制已 device 验证过
-   `--steps`）。暴露 `decode(current_hidden, kv_args, forward_context) -> next_hidden`。sidecar 进程设
-   `SIMPLER_COMM_NO_HCCL=1`。先 dummy-KV standalone 验证 socket round-trip。
-3. 接真 KV：把 offline 的 dummy k_cache/v_cache/seq_lens/block_table/slot_mapping 换成 vLLM
+2. ✅ **建常驻 whole-decode 服务（sidecar）— 部分完成 + device 验证（2026-07-11）**：`_stage_whole_decode_run.py`
+   加 `--serve`/`--serve-sock` + `_WholeDecodeServer`（AF_UNIX），把 build+prepare 后的 resident rt 包成
+   socket 服务：收 full hidden `[BATCH,HIDDEN]` bf16（经 resid1_host 喂 layer-0）→ 45 层 decode（复用
+   prepared rt）→ 回 next hidden。**device 验证（cards 8-15, SIMPLER_COMM_NO_HCCL=1, 2 请求）**：
+   PREPARE OK → serve request 0 → serve request 1（reusing prepared rt）→ client round-trip
+   `[16,4096]→[16,4096]` ×2、rc=0、clean exit。smoke rc=0。备份 `workspace/g2_worker_sidecar_20260711_022638.py`
+   （in-tree `M _stage_whole_decode_run.py`，未 push fork）。**剩**：`decode(kv_args, forward_context)`
+   透传（= G3 真 KV，现 dummy-KV → nan 是预期 synthetic blowup，非 mechanism）；封装成独立常驻进程 holder。
+3. 接真 KV（G3）：把 offline 的 dummy k_cache/v_cache/seq_lens/block_table/slot_mapping 换成 vLLM
    forward_context 的真值 —— 复用 phase 24 零拷贝 KV-IPC（`project_phase24_25_zero_copy_kv_handoff`
    + phase 23 doc + attn_setup import_ipc，per-op 已 token-exact）。forked chip 的 IPC import 必须
-   在 child 进程 context 内（每 rank 一条：sidecar chip-r import vLLM rank-r KV）。
+   在 child 进程 context 内（每 rank 一条：sidecar chip-r import vLLM rank-r KV）。sidecar 协议加
+   kv_args/attn_args 随 hidden 一起收。
 4. 接 `_pypto_full_forward`（`tools/step3p5/vllm_monkey_patch.py:233`，现 fail-closed）：
    lazily 建常驻服务 client（rank-0 drive + `tensor_model_parallel_broadcast` 给其余 7 rank）+ 45 层
    dispatch loop（常驻 DeviceTensor residual handoff）+ 读 live forward_context 进 attn args +
