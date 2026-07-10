@@ -61,6 +61,26 @@ Failed to generate orchestration 'chip_orch': Verification failed after
    组织对齐 silu）。需读 `_build_decode_layer_moe_program` / EpTpMoE chip_orch 的
    swiglu 分支 inline 顺序。
 
+## 深挖更新（2026-07-10，实测排除法）
+
+- **已 dump pass IR 逐 pass 排查**：`09_after_OutlineIncoreScopes.py` 显示 `_quant_moe_input`
+  **已被正确 outline 成独立 `@pl.function(InCore)`（call 在 chip_orch）**；expert_gate_up/
+  expert_down/routed_dyn_quant 也都是 `with pl.spmd(...): self.<method>(...)` 形式。即在
+  pass 09 时并无未 outline 的 InCore scope。但 precondition verifier 在**所有 pass 之后**
+  （codegen_preconditions.cpp:71，pass 43 之后）才报错 → **某个 09 之后的 pass 重新引入/
+  未能重新 outline 了 InCore scope**。traceback 含 **`split_vector_kernel_pass.cpp:277`
+  （SplitVectorKernel，pass #22）**——疑似该 pass 对 swiglu（更多 vec 算子/clamp）产出
+  的结构与 silu 不同，留下未 outline 的 InCore scope。
+- **❌ 已排除 routed_dyn_quant**：把 moe.py:1118 `if _routed_swiglu_step:`（routed_dyn_quant
+  中间重量化 spmd）改 `if False:` 后 **L44 仍在 moe.py:1813 同样 SplitIncoreOrch FAIL**。
+  → routed_dyn_quant **不是**根因。
+- **❌ 已排除 matmul_mx**（见 gap5 记忆）。silu（L3–L42）用**同一** `_quant_moe_input` 却编过
+  → 根因是 swiglu 结构（clamp 等）在 **09 之后的某 pass** 上与 silu 分叉，非某单一 helper。
+- **下一步定位法**：dump silu(L3) 与 swiglu(L44) 的**每一个** pass IR（09→43），在
+  `_quant_moe_input`/其它 InCore scope 上逐 pass diff，找到 **swiglu 侧从"已 outline"变回
+  "未 outline"或新增未 outline InCore scope 的那个 pass**（首要嫌疑 SplitVectorKernel #22）。
+  需 pass-level 调试，非表层结构猜测（本轮两个结构猜测均被实测证伪）。
+
 ## 边界
 
 - 整网 **43/45 层 COMPILE OK**；仅 L43（1 层）+ L44（1 层）swiglu 变体阻塞。
