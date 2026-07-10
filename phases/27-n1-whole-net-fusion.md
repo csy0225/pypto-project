@@ -234,3 +234,41 @@ host_orch，`decode_layer.py:903-1140`）**泛化到 45 层 + tail**（~90 seque
 ### 历史
 
 🟡 **Phase 0（2026-07-09）**：0234 五仓 + ptoas-bin 切升级栈；clean 重编 pypto+simpler；团队 3 份调查报告交付（Wall-1/Wall-2 root-cause + N=1 结构建议）。
+
+### Step-3 kickoff（2026-07-11）—— live vLLM-IPC 集成：复用 co-tenancy 修复 + 迁移到 0162 ✅ 基础就绪
+
+> NEXT-SESSION-N-1.md 把 Task①（HCCL 同卡共存）当成核心 gate；实际上它**已在另一线程解决**
+> （`deployment/cotenancy-simpler-no-hccl.md` + memory `project_g4_cotenancy_hccl_conflict`）。本 session
+> 复用该修复并把 N=1 整网线迁到唯一可达的 device 机 0162。
+
+**机器现状变更（重要）**：0234（原 N=1 dev 机）**不可达**（DNS→timeout）。0162 可达且是 co-tenancy 修复的验证机，
+故本 session 把 N=1 线**consolidate 到 0162**（此前 phase27 写的"不碰 0162"因 0234 宕机作废）。0162 = **完全一致的升级栈**
+（pypto `5e619dc7` / pto-isa `ecb6c303` / PTOAS `72ada0a1` / simpler `878f3742`=71e39623+co-tenancy patch），
+与 N=1 program 验证栈相同。CANN 走 non-GA symlink `/usr/local/Ascend/cann`（非 beta，见 memory
+`env_0162_cann_symlink_not_beta`）。
+
+**Task① 复用确认（HCCL 层）✅**：`SIMPLER_COMM_NO_HCCL=1` 跳过 `HcclCommInitRootInfo`。device 实测：不带 flag →
+`HcclCommInitRootInfo failed:7`（8/8 rank）；带 flag → error 7 消失。修复在 simpler runtime 层、program-agnostic，
+对 `whole_decode_faithful_real` worker 同样生效。comm_hccl.cpp 已 patch+重编（07-11）。
+
+**机器拓扑发现**：一个 **vanilla vLLM 8000（step3p5 W8A8 oracle）正跑在 cards 0-7 @ util 0.96**（58GB/card，health=200）
+—— 这是 A/B 的对照 oracle。**cards 8-15 空闲**。（npu-smi HBM 列读 0/0 是 idle 遥测假象，真实占用看 proc-mem。）
+最初 allreduce 在 0-7 失败（error 7 + rtMalloc 207001）其实是**撞上 vLLM 8000 的同卡共存**，非节点 poison。
+
+**0162 基础验证 ✅**：
+- allreduce twophase `-d 8-15`（空闲卡，normal HCCL）= `max|out-expected|=0.000e+00` 8/8 golden（env 铁律 baseline 满足；SDMA-ON 在 0162 无 IPC poison）。
+- `whole_decode_faithful_real` compile + **8 卡 device DISPATCH_CLEAN 158.22s**（cards 8-15，dummy 权重，无 507018/stall，rc=0）—— N=1 program 在 0162 升级栈上工作，与 0234 一致。
+- 非破坏性 `git worktree`（`pypto-lib-n1` @ branch `n1-live`，源 d9b7dc6）避免扰动 0162 stepfun/develop 的 gap-5 未提交工作。
+
+**Task② vLLM-IPC 权重 handoff —— 蓝图落定 + card-free 验证**：
+- `pypto_weight_ipc.py`（WeightIpcExporter/WeightIpcMap）从 stepfun/develop 移植进 N=1 分支（commit `d3f155b`，push `feat/whole-net-n1-fusion`）。
+- 权重桥：`weight_loader.KEY_*` → `whole_decode_faithful_real.host_orch` 位置参数 **1:1**（顺序见 `_stage_whole_faithful_real_device.py:104-157` 与作废的 `_weights.py:121-176`）。`gate_r`（full+swa）不在 checkpoint bundle → 合成 zeros/ones（head-gate ×1 bypass）。
+- card-free layout smoke PASS：45 keys、pool **47.46 GiB/rank**、fp32_keys 正确、map round-trip OK。
+- **⚠ live A/B 的 HBM gate = gap-5**：47.46 GiB/rank 是 dequant-BF16 pool，与 vLLM 常驻 W8A8（~24GB）在 64GB 卡上共存 → OOM。co-resident live A/B 需 **in-kernel W8A8 dequant（保 INT8 ~24GB 共享）**，属 perf 阶段的 net-new kernel 工作（task6 memory `project_task6_live_wiring_plan` gap-5）。bring-up 可先走 pypto 独占空闲 8 卡 + 47GB checkpoint-H2D pool（fits，验证 IPC 机制 + real-weight dispatch），但非 co-resident。
+
+**Task③ wire `_pypto_full_forward` —— 蓝图落定（未实现）**：
+- 目标 `tools/step3p5/vllm_monkey_patch.py:233`（fail-closed stub）；`install(mode=full)` 已就位（换 `Step3p5Model.forward` + tail）。
+- net-new：(1) resident `DistributedWorker` holder（install() 建一次，fork 8 chip on 8-15 带 `SIMPLER_COMM_NO_HCCL=1`）；(2) 从 `ir.compile+compiled(*inputs)` auto-shard 改成 `DistributedWorker + import_ipc` per-rank 权重 DeviceTensor（Task②）；(3) resident hidden DeviceTensor handoff；(4) live `forward_context` KV/slot_mapping/block_table（见 `_maybe_dump_forward_context`）。`enforce_eager` 必需。
+- live A/B：可复用 `/mnt/nvme1/chensiyu/logs/step3p5_910b_w8a8_v001/start_8001_cotenancy.sh`（8-15 @ util 0.5）pypto vs 8000 vanilla oracle。这就是 Task#4 逐层对齐的真正落点。
+
+**下个 session 的 punch-list**：(1) resident-worker + weight-IPC device run（Task② flavor-a，pypto 独占 8-15 + 47GB checkpoint-H2D，验证 IPC 机制）；(2) `_pypto_full_forward` body；(3) gap-5 in-kernel W8A8（co-resident HBM gate）；(4) live A/B。
