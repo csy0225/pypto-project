@@ -6,6 +6,45 @@
 
 
 
+## 2026-07-10 (续⁴ —— G1 任务 4：per-layer weight-stream 重构 + 45 层链 device 跑通 rc=0)
+
+承接续³。完成 NEXT-SESSION 任务 4（扩 45 层链）。
+
+**per-layer weight-stream 重构（修 OOM + 权重复用 bug）**：旧 worker `_moe_block_sh` 用
+`_stack_real(KEY)[:, moe_li]` —— `_stack_real` 先 stack 全 [tp, 42, ...] 再切片，w_down_r =
+8·42·1280·4096·2 ≈ **3.5TB** transient → 3 variant 同载 OOM。且 moe_block 按 `id(program)` dedup，
+**同 variant 多层复用首层权重**（42 个 MoE 层权重各异 → 除首层外全错）。**修复**：新增
+`_moe_layer_stack`（slice-then-stack 单层 ~0.9GB）+ `_load_moe_layer_weights`（每 moe_block step 前
+把该层权重 `copy_` 进复用的 shared slot，像 x 那样）。
+
+**per-layer 正确性验证（决定性）**：chain `0,1,2,3,4,5` —— L3(swa_silu)/L4(full_silu)/L5(swa_silu)
+**共享同一 moe_block program id** 但 moe_li=0/1/2 权重各异 → moe_out **1.88/2.06/0.67 各不同**，
+且各自 **torch-ref PASS 1.000**（旧代码会复用 L3 权重 → L4/L5 失配）。**per-layer 权重修复坐实**。
+
+**45 层全链 device 跑通**：`--layers 0..44 --ckpt` → **compiled 7 distinct programs, 87 steps,
+all dispatched, rc=0，无 OOM 无 507018**。Option-C 多程序 + per-layer weight-stream 机制端到端通。
+
+**full "torch-ref 全层过" offline 不可达（方法论硬限制，非 bug）**：offline 链用 **dummy KV cache**，
+device 残差流在 L17 发散→NaN（**可复现、与输入分布无关**：synthetic std=0.02 与 last-prefill-token
+真实 bootstrap 都在 L17 NaN）；per-layer moe 对拍（即便喂 device 输入隔离）0.5-0.9，因 MoE routing
+对 dummy-KV attention 输出敏感。skill/memory 早已明确：**full-chain / attention-core 正确性必须靠
+live A/B（真 KV），offline 合成链覆盖不了**。单 kernel 各自已验证（moe_block vs vLLM 0.9995 历史）。
+
+**本 session G1 offline 收尾**：任务 1（真 W8A8 dense/attn device）✅、任务 2（3-scalar split：
+full+silu-MoE 精确）✅、任务 3（L43/L44 SplitIncoreOrch 编译）✅、任务 4（45 层机制 + per-layer
+权重 device rc=0）✅。**full-chain token-exact = G2-G5 live A/B**（NEXT-SESSION 任务 5-7）。
+
+**遗留可查项（非阻塞）**：offline dummy-KV 链 L17 device NaN 可复现——若后续想要 offline 45 层
+数值信号，需真 decode-step KV（现无，dump 是 prefill）或直接上 live。swiglu(L43/L44) offline 数值
+不可信（synthetic-only marker），走 vLLM/live。
+
+**worker 备份**：`workspace/g1_worker_task4_final_20260710_*.py`（含全部 host 修复 + per-layer
+weight-stream + per-layer isolation + last-token bootstrap）。
+
+**下一步 = G2**：`_pypto_full_forward` live wiring（vllm_monkey_patch.py:233）——常驻 DistributedWorker
+holder + import KV/权重 pool + 45 层 dispatch loop（常驻 DeviceTensor residual handoff）+ 读 live
+forward_context 进 attn args + final hidden copy 回 → live single-handoff A/B token-exact。
+
 ## 2026-07-10 (续³ —— G1 任务 3：L43/L44 SplitIncoreOrch 编译修复 + 45 层 weight-stream blocker 定位)
 
 承接续²。完成 NEXT-SESSION 任务 3（扩 45 层前先修 L43/L44 standalone SplitIncoreOrch）。

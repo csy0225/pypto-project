@@ -19,6 +19,12 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 > worker `_moe_block_sh` stack+share 全权重 → 3 variant `/dev/shm` OOM + 同 variant 多层复用首层权重，
 > 需 per-layer weight-stream 重构（与 G2 常驻 weight-IPC 重叠）。
 > **下一步 = 任务 4：worker per-layer weight-stream 重构 → 45 层链 → G2 live wiring。**
+> **续⁴（任务 4 完成）**：per-layer weight-stream 重构（`_moe_layer_stack` slice-then-stack 修 3.5TB
+> mega-stack OOM + `_load_moe_layer_weights` 每 step copy 修同 variant 多层复用首层权重）；chain 0-5
+> 证 L3/L4/L5 共享 program 但权重各异、moe_out 各自 torch-ref PASS 1.000。**45 层全链 device rc=0**
+> （7 programs, 87 steps, 无 OOM 无 507018）。**full "torch-ref 全层过" offline 不可达**（dummy KV →
+> device 残差 L17 NaN，可复现/输入无关；full-chain 正确性必须 live A/B）。**本 session G1 offline
+> 收尾：任务 1-4 全 ✅**。下一步 = G2 `_pypto_full_forward` live wiring（任务 5-7）。
 
 > **2026-07-10 环境确认 latest/consistent + tmov 编译 blocker 解除 + 整网集成真实状态盘点（team `vllm-pypto-e2e`）**：
 > 在 0162 `stepfun/develop` 上确认工具链一致且最新：driver `25.5.2` / CANN `9.0.0 non-GA` /
