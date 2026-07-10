@@ -303,3 +303,22 @@ MemPool 207001 OOM。
 5. sidecar `--layers 0..44`（全 45 层，真 W8A8 `--ckpt`，sharded ~6GB/卡 + vLLM util 0.5 ~28GB fits 64GB）。
 → 然后 G5b：3-prompt A/B vs 8000 token-exact。**这步须对 running 8001 device 迭代（KV layout/num_blocks
 只能对活的 8001 定）= 专门 session**，但 export 免写 + G5a plumbing 已通 → 范围收敛到 sidecar KV-import。
+
+### G3 KV export ABI — 已从 live 8001 pin 死（2026-07-11，PYPTO_KVPOOL=1 + mode=full 实跑）
+
+8001 mode=full + `PYPTO_KVPOOL=1` boot READY_200，KV export 成功（8 rank 各 `consolidated 45 layers ->
+ONE buffer ... ONE key exported; map entries=90`）。map（`/logs/pypto_kvpool_map.json.rank{0-7}`，
+root-owned）实测布局：
+```
+{"rank":0, "pool_base":<VA>, "pool_bytes":15019868160 (14324 MiB), "num_layers":45,
+ "map":{"L0.K":{offset:0,          nbytes:166887424, shape:[166887424]},
+        "L0.V":{offset:166887424,  nbytes:166887424},
+        "L1.K":{offset:333774848,  ...}, "L1.V":{offset:500662272, ...}, ... 90 entries (45×K/V)}}
+```
+- **每 K/V per layer = 166887424 bytes, flat, stride 166887424**；single buffer 14324 MiB/rank；
+  **一个 IPC key/rank**（`pypto_kvpool.key.rank{r}`）。
+- KV-rows ABI：166887424 B / head_dim(128) = **1,303,808 KV slots**（若 INT8 kv_cache；= num_blocks×block_size，
+  block_size=128 → num_blocks=10186）。sidecar k_cache `MAX_SEQ_DEFAULT` 须 = 该值（编译常量）。
+- → **G3 sidecar import 无运行时未知量了**：每 rank `rt.import_ipc(key.rankR)` → 按上表 offset 切每层
+  K/V `DeviceTensor`（166887424 B）→ 喂 `k_cache_full/v_cache_full`（替 dummy zeros），配 live
+  forward_context 的 block_table/slot_mapping/seq_lens。剩纯实现 + token-exact 验证（对 8000）。
