@@ -15,6 +15,14 @@ Blocker 解决时，**删掉本文件里这一节**，到
 
 **严重度**：🔴 阻塞整网离线精度对齐 —— dense 层（L0/L1/L2）在多层串联时拿错权重。
 
+> **2026-07-10 更新 — kernel 修复已 committed（pypto-lib `8b4bf3fa`），降级 🟡**：3-scalar split
+> （`norm_layer_idx` abs / `attn_layer_idx` type-local / `mlp_layer_idx` dense-order）已落地，共 74 内核
+> edit + callers + dense ST arity（原子 patch，reverse-review 语义 GO：index-class/arity/dispatch 全对）。
+> `_smoke_program_build` rc=0。含 `layer_cache_base`（KV cache [45]abs）修正。单层行为不变（L0 三者相等）。
+> **剩余 = device/多层正确性验证**：经 Option-C 整网链 vs vLLM（Item 2），非单层 ST（单层自洽、不触发碰撞；
+> 且 dense ST 因 pre-existing `moe.py:208` apply_tp1_patch assert 本树无法 run）。MoE ST ScalarSpec redesign
+> （w_gate_d 12-vs-3 层 OOB）deferred。
+
 **症状**：`_stage_whole_decode_run.py` 跑 real-weights 多层链时，dense 层（L1/L2 swa_dense）会拿到错误的 attn 或 norm/MLP 权重。单层 ST（L0 / L3 / L4 …）从不暴露——因为单层 absolute-li == type-local-idx，一个 layer_idx 恰好两边都对。
 
 **根因（本会话逐行读 `decode_layer.py` + `weight_loader.py` 定位，布局已完全确认）**：融合 dense 程序 `_build_decode_layer_dense_program`（`decode_layer.py:553`）只接 **一个** `layer_idx: pl.Scalar[INT32]`（`:688`），却要同时索引 **三类布局不同**的权重栈：

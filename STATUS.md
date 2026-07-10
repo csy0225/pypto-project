@@ -22,7 +22,14 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 > compute_logits 目前委托 vLLM norm+lm_head（非 pypto rms_lm_head kernel）。整网 live A/B 的有序 punch-list：
 > (1) 3-scalar split → (2) 恢复 Option-C 7-program worker + 串真设备输出 → (3) 真 W8A8 权重 → (4) standalone
 > 45 层链 device 验证 vs vLLM → (5) 接 `_pypto_full_forward` → (6) co-tenancy 测试 → (7) 8001 翻 `full` + live A/B。
-> 下一步：执行 3-scalar split（Item 1）。
+> **③ 3-scalar split（Item 1）已 committed（pypto-lib `8b4bf3fa`）**：单个 `layer_idx` 无法同时索引三种布局
+> 不同的权重栈（norm[45]abs / attn[full|swa]type-local / dense-MLP[3]dense-order，仅 L0 重合 → 多层拿错权重）。
+> 拆成 `norm_layer_idx`/`attn_layer_idx`/`mlp_layer_idx`，共 74 内核 edit + callers + dense ST arity（原子 patch
+> 脚本 backup+assert+rollback，reverse-review 语义 GO：index-class/arity/dispatch 全对）。`_smoke_program_build`
+> rc=0。**单层行为不变（L0 三者==layer_idx），只改多层索引**；device/多层正确性经 Option-C 整网链 vs vLLM 验证
+> （Item 2，下一步）。dense ST 在本树因 pre-existing `moe.py:208 apply_tp1_patch` assert 无法 run（CLAUDE.md
+> parity，非本次回归）；MoE ST ScalarSpec redesign（w_gate_d 12-vs-3 层 OOB）deferred。
+> **下一步：恢复 Option-C 45 层 worker（`/tmp/bak_realw`）→ 真权重 standalone 链 device 对齐 vs vLLM。**
 
 > **2026-07-09 全栈升级到最新（parity 通过，pypto-lib 已推）+ gap-5 上游定位**：pypto
 > `5e619dc7`(rebased origin/main) / pto-isa `ecb6c303` / PTOAS-src `72ada0a1`(v0.49) /
