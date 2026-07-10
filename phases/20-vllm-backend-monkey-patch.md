@@ -355,3 +355,18 @@ sidecar KV-import 不用从零写：`tools/step3p5/pypto_weight_ipc.py::WeightIp
 - **attn args**：socket 协议扩 length-prefixed，client（`_pypto_full_forward`）随 hidden 发
   forward_context 的 block_table/slot_mapping/seq_lens；sidecar 每 step `sh[...]=...`。
 - **全 45 层**：sidecar `--layers 0,1,...,44 --ckpt <w8a8>`（真权重，sharded ~6GB/卡 fits）。
+
+### G5b 架构 crux 已解 — 每-rank KV feed = `StackedDeviceTensor`（2026-07-11 读码确认）
+
+之前担心「8 rank 各自 vLLM KV 是 8 个独立 IPC buffer，无法喂一个可切片 k_cache」——**runtime 已原生支持**：
+- `distributed_runner.py:1073 import_ipc(worker_id=r)` 在 **chip-r 的 fork child ACL context 内** import，
+  返回 chip-r 有效指针 → 可 back `DeviceTensor(child_memory=True)`，零拷贝。
+- `device_tensor.py:147 StackedDeviceTensor(shards, full_shape, worker_ids)`：leading-dim 堆叠，
+  `shards[r]` 是 chip-r 上的 DeviceTensor，`worker_ids==range(tp)`（canonical device=r identity）→
+  host_orch `x[r]` 切片路由到 chip-r，`child_memory=True` 跳过 H2D。**这正是每-rank KV feed 机制。**
+- **importer 已补全**：`pypto_kv_ipc.py::build_stacked_kv(kv_maps, layer_idx)` → per-layer (k, v)
+  `StackedDeviceTensor`（每 rank import_ipc(worker_id=r) 的 KvIpcMap → 8 shards）。AST-verified。
+
+→ **G5b 每个机制现已确认 + 代码就绪**：KvIpcMap + build_stacked_kv（写好）；per-rank import（runtime 支持）；
+MAX_SEQ_DEFAULT 覆盖（config.py:83）；`sh["k_cache"]=StackedDeviceTensor` feed（_ordered_args by name）；
+socket attn-args 协议扩展。剩：装配 + 对 live 8001 定 kv dtype + 45 层 + token-exact A/B。纯 device-iteration。
