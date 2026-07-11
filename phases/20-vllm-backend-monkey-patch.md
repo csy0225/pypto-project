@@ -456,3 +456,10 @@ vLLM int8 KV 用 **static per-channel C8 scales**（layer 属性，来自 calibr
   或 worker attention 直接走 int8-KV 路径（读 int8 + inline dequant）。
 - **offline 特性刻画到此彻底完整**：KV shape/dtype/heads/scale/dequant 全定死。G5b 剩 = 纯实现（int8 dequant bridge +
   reshape + MAX_SEQ ABI）+ 对 running 8001 token-exact 验证（须 device 迭代 + 复核 worker attention 数值 vs vLLM 真 KV）。
+
+**C8 scale 来源（2026-07-11，查 checkpoint index）**：checkpoint layer-0 attn 只有
+`q/k/v/o_proj + q/k_norm + g_proj`，**无 C8 KV scale**。→ `_c8_{k,v}_{inv_scale,offset}` 是 **runtime layer 属性**
+（非 static checkpoint tensor），须从 running vLLM **额外小 export**（每层 4 个 per-channel[128] scale，
+仿 KVPOOL 加一个 `PYPTO_KVSCALE` backend 导出 `layer._c8_*`）。→ int8-KV bridge 全部输入齐：
+(1) KV pool export（KVPOOL，已验证）；(2) C8 scale export（小 new backend，下 session 写）；(3) worker import 两者 +
+dequant + reshape + MAX_SEQ ABI。**G5b offline 侧全 spec 完成，剩 = device 实现 + token-exact 验证（专门 session）。**
