@@ -11,7 +11,25 @@ Blocker 解决时，**删掉本文件里这一节**，到
 
 ---
 
-## 🔴 NEW 2026-07-11 — G5b：`rt.import_ipc` facade 在 pypto runtime 中不存在（zero-copy KV import 阻塞）
+## ✅ RESOLVED 2026-07-11 — G5b：`rt.import_ipc` facade 缺失 → 用 **pure-Python `CTRL_IMPORT_IPC`** 解决（无需重编 C++）
+
+**解决**：chip child 经 **Python loop**（`simpler/worker.py::_run_chip_main_loop`）消费 control op，
+且 `broadcast_control_all` 对 Python 可见 → 纯 Python 实现 import_ipc，**无需 C++ 重编**：
+- `simpler/worker.py`：`_CTRL_IMPORT_IPC=16` + child handler `_handle_ctrl_import_ipc`（ctypes
+  `aclrtIpcMemImportByKey(&va, key, 0x1=ENABLE_PEER_ACCESS)`；vLLM export 用 0x1 DISABLE_PID → 无需
+  SetImportPid；VA 经 reply-shm 回传，因 `ControlResult` 无 value 字段）+ dispatch elif + host
+  `Worker.import_ipc_all(device_key_map)->{dev:va}`（`broadcast_control_all`）。
+- `distributed_runner.py`：`DistributedWorker.import_ipc_all` 委托 `self._w`。
+- `_stage_whole_decode_run.py`：批量 import 8 keys → 每 rank 建 `KvIpcMap(peer_base=va)`。
+- **device 验证（0162 cards 8-15，co-resident live 8001 util 0.5，WD_RING_HEAP=1GB）**：dense L0
+  `--worker --kv-ipc-dir` → `import_ipc_all peer_bases=[0x12c1c0000000 ×8]`（与 phase-16 probe2 VA 一致）、
+  `imported 8 KV pools`、`L0 full_dense next_hidden max|abs|=30.8750`（真 KV 读入，非 nan）、rc=0。
+  备份 `workspace/g5b_*_20260711_144753`。memory `g5b_import_ipc_facade_missing`。
+
+**G5b 剩余（import 已通）**：step3 socket 带真 block_table/slot_mapping/seq_lens；step5 paged-index
+数值对拍 vLLM dump；swa const-fold（30 swa-MoE 层）；step6 live A/B token-exact。
+
+<details><summary>（原始症状/根因，供 post-mortem）</summary>
 
 **症状**：`_stage_whole_decode_run.py --worker --kv-ipc-dir` 走到 `KvIpcMap.from_files(...).import_ipc(...)`
 在 device 报 `AttributeError: 'Orchestrator' object has no attribute 'import_ipc'`
@@ -36,6 +54,8 @@ Phase-24 的 PROVEN zero-copy KV 走 chip 级 `attn_setup` op，**不是** `rt.i
 
 **链接**：memory `g5b_import_ipc_facade_missing` / `g5b_kv_bridge_not_pure_reshape`。备份
 `workspace/g5b_*_20260711_*.py`（5 文件）。
+
+</details>
 
 ---
 
