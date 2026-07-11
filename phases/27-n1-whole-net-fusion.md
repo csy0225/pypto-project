@@ -325,3 +325,24 @@ KV/weight 零拷贝导入），**不照搬其 Option-C 架构**；**继续支持
 **修复**：dummy host 张量（current_hidden/KV/rope/gate_r/outputs/logits）改为 **prepare() 前 `.share_memory_()` 分配**；VOCAB_LOCAL 从 map json 读（prepare 前）。run #2 验证中。
 
 **意义**：借用 import_ipc（不照搬 Option-C）让 N=1 单 program 真实权重 device 可跑——Task② 的 device 机制坐实。剩：run #2 出 finite logits → 真 KV import（同 import_ipc_all）+ socket serve（复用 G5a backend）→ live A/B。co-resident live A/B 仍 gate 在 gap-5 HBM（0234 空闲卡跑 standalone 无此限）。
+
+### Step-3 run#3（2026-07-11 四续）—— import_ipc 全链通到 rt.run；剩 StackedDeviceTensor `[r,k]` 结构 gate
+
+run#3（share_memory + norm FP32 两 fix 后）在 0234 cards 0-7 走到**最远**：8 exporter export 真实
+47.46GiB 池 → `import_ipc_all` 8 peer_bases → compile OK → 42 args built → 8 chip_process ready →
+进 `rt.run`。**所有 arg-marshalling 契约全过**（compile / import_ipc / share_memory / dtype）。
+
+**剩余唯一结构 gate**：`rt.run` 报 `ValueError: StackedDeviceTensor only supports whole-shard slicing
+on the leading dim; got partial slice 0 on axis 1 (shard shape (12, 4096, 1024))`。根因：N=1 host_orch
+把权重按 `full_wq[r, k]` 索引（rank r + 层 k 在 axis 1），但 `StackedDeviceTensor.__getitem__`
+（`pypto/python/pypto/runtime/device_tensor.py:261`）只支持 leading（rank）维整 shard 切片，不支持 axis-1
+partial 切。dummy `compiled(*inputs)` 用 host torch 张量支持 `[r,k]`，故没暴露；IPC StackedDeviceTensor 暴露。
+
+**下 session 解法候选**：(a) 增强 `StackedDeviceTensor.__getitem__` 支持 `[r,k]` → 返回
+`DeviceTensor(shard_r.base + k*layer_stride, [4096,1024])`（权重池 per-rank full_wq 是 [12,4096,1024]
+连续，axis-1 slice 是合法 sub-view，最干净，改 device_tensor.py runtime）；(b) build per-(protocol,layer)
+StackedDeviceTensor + 改 host_orch/harness 只索引 `[r]`（需改 _gen_faithful_real，程序签名变大）；(c) 每 rank
+单 DeviceTensor 直传不 stack（看 runtime arg-bind 是否支持）。推荐 (a)。
+
+**结论**：N=1 real-weight import_ipc 距 finite logits 只差这一个 runtime slicing 增强；Task② device 落地
+在下 session 一步之遥。co-resident live A/B 仍另 gate 在 gap-5 HBM。
