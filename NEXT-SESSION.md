@@ -48,17 +48,39 @@ g5b_kv_bridge_not_pure_reshape + 本文件顶部 ⭐⭐「可复用特性 import
   `WD_RING_HEAP=1073741824`(1GB) 才不 OOM（默认 4GB ring 撞 2.57GB static arena 分配失败）。
 
 ## 攻坚顺序（每步 device 可验证）
-1. **swa_moe const-fold 级联**（compile-only，先做，不需 live 8001）：standalone `_build_tp_attention_swa_program`
-   编 swa-MoE 报 `tile.* shape must be ConstInt` 级联 `attention_swa.py:480`(Sub)→`:573`(Var)→更多。根因 = fn-local
-   `SWA_Q_PAD_ALIGNED=32`(L397)/`SWA_WIN_BLOCKS`(L500) 在 moe-ctx 被 tracer 当 Var/Sub 不折叠。⚠ 两条死路已试：
-   (a) 字面量 `[20,HEAD_DIM]` 只推进到 :573；(b) 提 module-const 报 `Undefined variable`（tracer 不解析新 module const）。
-   → 需 skill §C DSV4-style 系统重写（对照 models/deepseek/v4）；full-attn standalone 可能同病。目标
-   `--smoke --layers 3`(swa-moe)+`--layers 5`(full-moe) COMPILE PASS。
-2. **socket 带真 metadata**：`--serve` + 容器后端随 hidden 发 forward_context 的 block_table/slot_mapping/seq_lens，
-   sidecar 每 step copy 进 sh（现是 dummy）。KV 已零拷贝进 sh（import_ipc_all）。
-3. **单层 paged-index 数值对拍** vLLM eager decode dump（须真 metadata）。
-4. **live A/B**：8001 mode=full(PYPTO_WHOLE_DECODE=1 + PYPTO_KVPOOL=1 + sidecar --kv-ipc-dir,
-   SIMPLER_COMM_NO_HCCL=1) → 3-prompt 对 8000 token-exact；swiglu(L43/L44) 精度在此定论。
+1. ✅ **DONE 2026-07-11(续²) — swa_moe const-fold 证伪**（不是 blocker）：当前工作树 canonical TP=8
+   编译 clean（attn_full/attn_swa/full_dense/swa_dense/moe_block(swa L3/full L4/L43/L44) 全 COMPILE OK，
+   含 `--kv-ipc-dir` override）。原复现是 `--smoke` 默认 `--tp 1` 走 `apply_tp1_patch`（unslice 违反铁律）
+   撞 `moe.py:208` parity assert，非 const-fold。复现器 `_probe_alllayers_compile.py`；`--smoke --worker --tp 8` clean。
+2. ✅ **DONE 2026-07-11(续²) — socket 带真 metadata**：sidecar 换 **self-describing length-prefixed 协议**
+   （`_wd_pack_fields`/`_wd_unpack_fields`；`<I hlen>`+JSON+blobs）。三处同步：sidecar
+   `_stage_whole_decode_run.py`（`_WholeDecodeServer.recv_step` + decode-loop `_feed_meta` 每 step copy
+   seq_lens/block_table/slot_mapping 进各 attn sh + rope 按 full/swa 分流，首请求发静态 rope）、in-tree
+   `tools/step3p5/vllm_monkey_patch.py`（`_WholeDecodeClient.decode(hidden, meta_fields)` +
+   `_pypto_full_forward` 提取 forward_context + prefill→collective fallback）、容器后端
+   `/logs/pypto_patch/pypto_whole_decode_backend.py`（自包含，**已部署**，备份 .bak-g5b）。提取镜像 per-op
+   `pypto_attn_backend`。**验证**：offline round-trip + 容器后端 E2E PASS；**device**：sidecar co-resident
+   live 8001（NO_HCCL, WD_RING_HEAP=1GB）import 8 真 KV 池 + 新协议喂 metadata → L0 full-attn active rows
+   non-nan(27.6)。NFS 备份 `workspace/g5b_*_20260711_231307`。复现器 `_test_wd_protocol.py` /
+   `_test_container_backend.py` / `_client_wd_metadata.py`。
+3. **单层 paged-index 数值对拍**（下一步）：对 vLLM eager decode dump（须 decode-step golden，非 18-tok
+   prefill dump）验证 worker `[num_slots,128]` flat + block_table/slot_mapping 索引 == vLLM
+   `[nb,bs,1,128]` flatten `block_id*128+slot`。需真 metadata（step 2 协议已通）+ 真 rope（用 vLLM
+   `cos_sin_cache`，容器后端已提取）。plumbing 已 device 证（step 2 non-nan）；此步定 attention 数值。
+4. **live A/B**（终局）：exact runbook —
+   (a) 停 8001：`sudo nerdctl --namespace k8s.io exec vllm-8001 bash -lc "pkill -9 -f '[V]LLM::EngineCore'"`
+       （容器内 pkill，不碰 8000）；`rm -f /tmp/pypto_whole_decode.sock`；`pgrep -af [c]hip_process` 空。
+   (b) 起 8001 mode=full+KVPOOL：`bash /logs/start_8001_full.sh`（须含 `PYPTO_WHOLE_DECODE=1` + `PYPTO_KVPOOL=1`
+       + `PYPTO_WHOLE_DECODE_SOCK=/logs/...sock`）→ 等 health=200（collective fallback 让 profiling 存活）。
+   (c) 拷 fresh KV key/map 到 host dir：`nerdctl exec vllm-8001 cat /logs/pypto_kvpool.{key,map}.rankR`
+       → host `/tmp/g5b_kvtest2/`（fresh boot=新 VA，旧 key 失效）。
+   (d) 起真权重全 45 层 sidecar：`SIMPLER_COMM_NO_HCCL=1 WD_RING_HEAP=1073741824 PTO2_RING_TASK_WINDOW=131072
+       PTO2_RING_DEP_POOL=131072 python _stage_whole_decode_run.py --worker --serve --serve-sock <同(b)sock>
+       --tp 8 --dev-offset 8 -p a2a3 --ckpt <W8A8> --kv-ipc-dir /tmp/g5b_kvtest2 --layers 0,1,...,44`
+       （sock 必须在容器可见路径，用 /logs；SIGTERM 停，非 -9）。
+   (e) 送 3-prompt 对 8000 token-exact。swiglu(L43/L44) 精度在此定论。
+   ⚠ 真权重全 45 层 sidecar 首跑可能撞 MoE/swa runtime（507018）—— 若卡，先 `--layers 0`（dense）跑通再
+   逐段加层 bisect。
 
 ## 环境 / 铁律
 - 三件套：`source /usr/local/Ascend/cann/set_env.sh && source WS/activate.sh && export PTO_ISA_ROOT=WS/pto-isa`。
