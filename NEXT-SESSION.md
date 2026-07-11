@@ -115,6 +115,17 @@ init 抢不到卡）。解法：`npu-smi info | grep VLLMWorker_TP | sed 's/|/ /
 `nerdctl exec vllm-8001 pkill -9 -f VLLMWorker_TP` 会 self-match（exec 自己的 bash 命令行含该字符串）→ 137，
 用显式 PID kill 更稳。禁 `npu-smi set -t reset`（netboot 重启全 16 卡）。
 
+**2026-07-12(续⁵) ⭐ co-tenancy crash 彻底解决 — 剩纯数值**：offline `--steps 4`（无 vLLM）全 clean →
+rt-reuse 排除 → 一攻 HcclBroadcast err9 + 二攻 507018 **同源 = co-tenancy device 争用**（vLLM `HcclBroadcast`
+kernel 在同卡自旋等 rank-0 → 与 sidecar 争用）。**修复**：容器后端 `_pypto_full_forward` 把 `tp_group.broadcast`
+换 **file-based broadcast**（rank-0 写 /logs，rank1-7 CPU-poll，无 device collective；已部署，备份 .bak-g5b）。
+**device 验证**：8001 file-bcast 后端 + 全 45 层 sidecar → prompt **HTTP 200 完成 4 tokens 无 crash/507018**
+（~120s/token）。**剩 = 攻坚 3 纯数值**：生成 token 错（text=""；早先 sweep 用合成随机 rope 只证无 nan 非正确）。
+**下步**：单层 paged-index 数值对拍 vLLM decode dump，核 (1) `_wd_rope_from_emb` rope 是否匹配 step3p5
+whole-decode kernel（per-op backend 的 `_rope_tables_from_attn` token-exact，但 whole-decode 是不同 kernel）、
+(2) 真 KV 读（consolidated pool per-layer offset）、(3) per-layer 权重流。perf（每步权重 copy → 常驻）后置。
+**⚠ hazard**：停 sidecar 后 force_reset nuke 同卡 8001 → 必 restart 8001 + 清 card8-15 zombie。
+
 ## 环境 / 铁律
 - 三件套：`source /usr/local/Ascend/cann/set_env.sh && source WS/activate.sh && export PTO_ISA_ROOT=WS/pto-isa`。
 - device 跑 sidecar：`SIMPLER_COMM_NO_HCCL=1 WD_RING_HEAP=1073741824 PTO2_RING_TASK_WINDOW=131072

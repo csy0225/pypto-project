@@ -5,6 +5,23 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 **最后更新**：2026-07-12
 
+> **2026-07-12 (续⁵) ⭐ G5b co-tenancy crash 彻底解决（file-broadcast）— live 45 层路径 HTTP 200 稳定跑通；剩纯数值 [攻坚 4 结构性 blocker 清除]**：
+> **决定性隔离**：offline `--steps 4`（4 forward 复用 prepared rt，真 KV，**无 vLLM co-tenancy**）**全 clean rc=0
+> 无 507018** → rt-reuse/资源累积**排除**。→ 一攻的 HcclBroadcast timeout(err9) 和二攻的 507018 **同源** =
+> **co-tenancy device 争用**：rank-0 在 sidecar 跑 45 层时，vLLM rank1-7 的 `HcclBroadcast` kernel 在同卡
+> 8-15 自旋等待 → 与 sidecar kernel 争用（超时→err9 / fault→507018）。
+> **修复（root-cause，仿 G4 NO_HCCL 思路）**：容器后端 `_pypto_full_forward` 把 device 侧 `tp_group.broadcast`
+> 换成 **file-based broadcast**（rank-0 写结果到共享 /logs，rank1-7 **CPU-poll** 读，无 device collective）。
+> 已部署 /logs（备份 .bak-g5b，`fwd_step` 计数 + `pypto_wd_bcast.{step}.bin` + lazy cleanup）。
+> **device 验证**：restart 8001 mode=full（file-bcast 后端）+ 真权重全 45 层 sidecar → **prompt → HTTP 200
+> 完成 4 tokens、无 crash、无 507018、无 HcclBroadcast err9**（t=483s，~120s/token 因每步 MoE 权重 copy）。
+> **剩余（纯数值，= 攻坚 3）**：生成 token 错误（text=""，finite 但不对；8000 vanilla 同 prompt 出连贯文本）。
+> 早先 sweep 只证「无 nan」用的是**合成随机 rope**，非正确性。下步 = 单层 paged-index 数值对拍 vLLM decode
+> dump，核 rope 提取（`_wd_rope_from_emb` 是否匹配 step3p5 whole-decode kernel）+ KV 读 + per-layer 权重流。
+> **⚠ 清理 hazard**：sidecar SIGTERM teardown 507018 → `force_reset_device(8)` **会 nuke 同卡 co-resident 8001**
+> → 停 sidecar 后必须 restart 8001 + 清 card8-15 zombie VLLMWorker。
+> **系统**：8001 restart 回 vanilla-serving，8000 oracle 全程 200。fix+复现器在 0162；文档 push。
+
 > **2026-07-12 (续⁴) G5b live A/B 二攻：HCCL broadcast timeout ✅ FIXED，遗留缩到 sidecar 间歇 507018 [攻坚 4]**：
 > 承续³。**遗留 A（数值）基本排除**：真权重+真 KV+合成 metadata 单层隔离 sweep（ctx=10/300/4090、block=0/5000/10、
 > 多 block）**active 行(row0) 全部 FINITE 无 nan**（27~161）；sidecar 报的「Lx nan」是 padded 行（decode 1 active
