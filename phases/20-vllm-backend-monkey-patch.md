@@ -443,3 +443,16 @@ num_kv_heads = max(1, 8//8) = 1`。→ **vLLM KV 每 rank 1 head（sharded），
 - **主难点 = int8 KV**：worker attention_full 现吃 bf16 k_cache；须加 int8 读取 + dequant scale（`_quantize_kv_to_int8`
   用的 scale，vLLM 另存），或改 attention 走 int8-KV 路径。scale 来源/布局下 session 从 vLLM int8-attn 路径（attention_v1.py
   :1224/:1353/:1538）确认。这是 G5b 的收敛主工程（比"TP 重设计"小得多）。
+
+### ✅ int8 KV bridge 完全 spec 死（2026-07-11，attention_v1.py:1353-1374 + :1538-1545）
+
+vLLM int8 KV 用 **static per-channel C8 scales**（layer 属性，来自 calibration）：
+- 量化：`k_int8 = clamp(round(K * layer._c8_k_inv_scale + layer._c8_k_offset), -128, 127)`；V 同（`_c8_v_*`）。
+- 反量化：`_dequant_paged_kv_to_dense(key,value,block_table,seq_lens,query.dtype=bf16,layer)`（gather paged int8 → dense bf16）。
+- → **反量化公式**：`dense_bf16 = (int8 - _c8_k_offset) / _c8_k_inv_scale`（per-channel，channel = head_dim=128；per layer）。
+- **worker int8-KV bridge（全 spec，无未知）**：(1) KvIpcMap import int8 KV `[2,nb,bs,1,128]`（kv[0]=K/kv[1]=V）；
+  (2) 取每层 4 个 C8 scale tensor（`_c8_{k,v}_{inv_scale,offset}`，从 checkpoint / vLLM layer 导出）；
+  (3) dequant int8→bf16（上式）；(4) reshape 到 worker `[1, nb*bs, 128]`；(5) MAX_SEQ_DEFAULT=nb*bs=1303808。
+  或 worker attention 直接走 int8-KV 路径（读 int8 + inline dequant）。
+- **offline 特性刻画到此彻底完整**：KV shape/dtype/heads/scale/dequant 全定死。G5b 剩 = 纯实现（int8 dequant bridge +
+  reshape + MAX_SEQ ABI）+ 对 running 8001 token-exact 验证（须 device 迭代 + 复核 worker attention 数值 vs vLLM 真 KV）。
