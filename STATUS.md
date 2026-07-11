@@ -5,6 +5,24 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 **最后更新**：2026-07-11
 
+> **2026-07-11 (续²) G5b socket 真 metadata 协议 device 验证 + swa const-fold 证伪 ✅ [NEXT-SESSION 攻坚 1+2]**：
+> ① **swa_moe const-fold 不再是 blocker**：当前工作树 canonical TP=8 编译 clean（attn_full/attn_swa/
+> full_dense/swa_dense/moe_block(swa L3/full L4/L43/L44) 全 COMPILE OK，含 `--kv-ipc-dir` config override）。
+> 原「blocker」是 `--smoke` 默认 `--tp 1` 走 `apply_tp1_patch`（unslice，违反铁律）撞 `moe.py:208` parity
+> assert，非 const-fold。复现器 `_probe_alllayers_compile.py`。
+> ② **socket 真 metadata 协议实装+验证**：把 sidecar 定长 hidden-only 协议换成 **self-describing
+> length-prefixed 协议**（`<I hlen>`+JSON header+raw blobs），随 hidden 发 forward_context 的
+> `seq_lens`/`block_table`(→BATCH×32 flat)/`slot_mapping` + 首请求发静态 rope（full[4096,64]+swa[4096,128]）。
+> 三处同步：sidecar `_WholeDecodeServer.recv_step`+decode-loop `_feed_meta`（每 step copy 进各 attn sh，rope
+> 按 full/swa 分流）、in-tree `vllm_monkey_patch.py`、容器后端 `pypto_whole_decode_backend.py`（自包含，已部署
+> /logs，备份 .bak-g5b）。提取逻辑镜像 proven per-op `pypto_attn_backend`（prefill→collective fallback）。
+> **验证**：offline 协议 round-trip PASS + 容器后端提取 E2E PASS；**device**：sidecar co-resident live 8001
+> （NO_HCCL, WD_RING_HEAP=1GB）import 8 真 KV 池（peer_base 0x12c1c0000000）+ 新协议喂 metadata → L0 full-attn
+> **active rows non-nan(27.6)**（padded 行 nan=预期，vLLM 只取 active）；8001/8000 全程 health=200，clean。
+> **剩 G5b**：step5 单层 paged-index 数值对拍（需真 metadata + decode-step golden）+ step6 live A/B token-exact
+> （8001 restart mode=full + 真权重全 45 层 sidecar）。代码在 0162 工作树 + NFS 备份
+> `workspace/g5b_*_20260711_231307`（push 阻塞：0162 fork SSH 无 key、PAT 在本地 box）。
+
 > **2026-07-11 (续) G5a LIVE 整网 plumbing device 验证 ✅ [tasks 5-7 大幅推进]**：在 G4 co-tenancy 解除
 > （`SIMPLER_COMM_NO_HCCL=1`）基础上，把 whole-decode 接进 live 8001 mode=full 并 device 验证 plumbing：
 > ① 自包含容器后端 `/logs/pypto_patch/pypto_whole_decode_backend.py`（内联 BATCH/HIDDEN，sitecustomize

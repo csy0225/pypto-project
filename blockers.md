@@ -26,8 +26,11 @@ Blocker 解决时，**删掉本文件里这一节**，到
   `imported 8 KV pools`、`L0 full_dense next_hidden max|abs|=30.8750`（真 KV 读入，非 nan）、rc=0。
   备份 `workspace/g5b_*_20260711_144753`。memory `g5b_import_ipc_facade_missing`。
 
-**G5b 剩余（import 已通）**：step3 socket 带真 block_table/slot_mapping/seq_lens；step5 paged-index
-数值对拍 vLLM dump；swa const-fold（30 swa-MoE 层）；step6 live A/B token-exact。
+**G5b 剩余（import 已通；socket metadata + swa const-fold 已解 2026-07-11 续²）**：step5 paged-index
+数值对拍 vLLM dump（需真 metadata + decode-step golden）；step6 live A/B token-exact（8001 restart mode=full
++ 新容器后端 + 真权重全 45 层 sidecar）。~~step3 socket 带真 block_table/slot_mapping/seq_lens~~ ✅ DONE
+（self-describing 协议，sidecar+in-tree client+容器后端三处，offline round-trip + **device 验证**：real KV
+import + metadata feed → L0 full-attn active rows non-nan co-resident live 8001）。~~swa const-fold~~ ✅（见下方 RESOLVED）。
 
 <details><summary>（原始症状/根因，供 post-mortem）</summary>
 
@@ -59,15 +62,21 @@ Phase-24 的 PROVEN zero-copy KV 走 chip 级 `attn_setup` op，**不是** `rt.i
 
 ---
 
-## 🟠 承前（pre-existing）— swa_moe const-fold：`attention_swa.py:480` Sub not ConstInt
+## ✅ RESOLVED 2026-07-11（续²）— swa_moe const-fold：当前 tree 已不复现
 
-**症状**：编译 swa MoE 层（standalone `_build_tp_attention_swa_program`）报 `tile.full shape element 0 must be
-ConstInt but got Sub`（`pl.full([SWA_Q_PAD_ALIGNED - Q_HEAD_BATCH_SWA, HEAD_DIM])`）。swa_dense（L1）编译 OK，
-只有 swa **MoE** wrapper 触发（融合 const-fold cascade）。HEAD 就有；与 G5b 无关。
-**MULTI-SITE cascade（2026-07-11 实测）**：把 :480 改成字面量 `[20, HEAD_DIM]` 后 :480 过，但级联到
-`:573 tile.create shape element 0 must be ConstInt but got Var`（还有更多站点）。**是多站点级联，非单行修复**。
-**解除**：skill §C DSV4-style 固定 const + fillpad/mask，需系统性重写 swa-moe program 的所有 shape 表达式
-（:480 Sub、:573 Var、…）。阻塞 30 个 SWA MoE 层（全 45 层 live A/B 所需）；dense/full 层不受影响。
+**结论**：swa standalone `_build_tp_attention_swa_program()` 在**当前 0162 stepfun/develop 工作树
+（47c260e3 + G5b WIP）canonical TP=8 编译 clean**，`attention_swa.py:480`
+`pl.full([SWA_Q_PAD_ALIGNED - Q_HEAD_BATCH_SWA, HEAD_DIM])` 的 `Sub` 正常折叠、无 `:573` 级联。
+device-path 验证（compile-only，`-p a2a3`，`DistributedConfig(device_ids=[8..15])`）：
+attn_full / attn_swa / full_dense(L0) / swa_dense(L1) / moe_block(swa L3 / full L4 / L43 swiglu7 /
+L44 swiglu16) **全部 COMPILE OK**，且在 `--kv-ipc-dir` config override（`KV_CACHE_ROWS_DYN=652032`
++ `KV_PER_LAYER=True`）下同样 OK。worker `--smoke --worker --tp 8 --layers 3,4` 也 clean。
+
+**原「blocker」的真相**：之前的复现走的是 `_stage_whole_decode_run.py --smoke`（默认 `--tp 1`）→
+`apply_tp1_patch()`（unslice 全宽，**违反单卡 ST/UT 铁律**）→ 在 module reload 阶段先撞
+`moe.py:208 assert SH_INTER_LOCAL == SHARED_SWIGLU_N_CHUNK*5`（纯 Python parity assert，与 const-fold
+无关，CLAUDE.md 早有记录）。**canonical TP=8（device 路径实际走的）不触发**。→ 全 45 层 live A/B 的
+swa-MoE 编译**不再是 blocker**（复现器 `_probe_alllayers_compile.py`）。
 
 ---
 
