@@ -417,3 +417,14 @@ model config：`num_attention_heads=64(full)/96(swa)`, `head_dim=128`, `torch_dt
   K/V 合一 + 可能 int8 dequant），或每 step re-layout。exact int8-vs-bf16 + num_kv_heads_local 下 session 对
   running 8001 的 `layer.kv_cache` tensor `.dtype/.shape` 一读即定（attention_v1.py get_kv_cache_shape 传入的
   num_kv_heads = model num_kv_heads // tp）。这是唯一剩余 device 待读量；桥接 kernel 是 G5b 主工程。
+
+**⭐⭐ int8 + 8-heads/rank 定死（2026-07-11，vLLM-ascend attention_v1.py 源码）**：
+- **KV cache = int8**：`_quantize_kv_to_int8`（:1353，`clamp().to(torch.int8)`）在 forward 调（:1224/:1269），
+  cache path `if key.dtype == torch.int8`（:1538）。→ itemsize=1 → num_kv_heads_local = 8（H×I=8）。
+- → **vLLM live KV = int8, 8 KV heads/rank, [2, 1273, 128, 8, 128], KV 未 shard 到 1/rank（8 heads 全留每 rank）**。
+- vs **worker = bf16, 1 KV head/rank, flat, KV-sharded**（KV_HEADS_LOCAL=1，假设 8 heads 跨 TP=8 各 1）。
+- **⚠ 这是比"布局不同"更深的问题**：worker 的 whole-decode attention **TP 并行模型（KV-sharded 1/rank + TP-reduce）
+  与 vLLM 的（KV-replicated 8/rank）根本不同**。worker 每 rank 只算 1 个 KV head 的 attention；vLLM 每 rank 有 8 个。
+  → **G5b 不是"接 KV import"，而是 worker attention 的 TP/KV 模型重设计**（每 rank 算全 8 KV heads + int8 dequant +
+  `[2,nb,bs,8,128]` combined-KV paged 读）。offline 特性刻画到此完整；G5b = 专门 device session 做 attention 重设计 +
+  token-exact 验证。**注**：也须复核 worker 现有 attention 数值（G1/G5a 对的是 worker 自洽 torch-ref，非 vLLM 真 KV 模型）。
