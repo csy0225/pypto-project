@@ -428,3 +428,18 @@ model config：`num_attention_heads=64(full)/96(swa)`, `head_dim=128`, `torch_dt
   → **G5b 不是"接 KV import"，而是 worker attention 的 TP/KV 模型重设计**（每 rank 算全 8 KV heads + int8 dequant +
   `[2,nb,bs,8,128]` combined-KV paged 读）。offline 特性刻画到此完整；G5b = 专门 device session 做 attention 重设计 +
   token-exact 验证。**注**：也须复核 worker 现有 attention 数值（G1/G5a 对的是 worker 自洽 torch-ref，非 vLLM 真 KV 模型）。
+
+### ✅ 修正（2026-07-11，读 vLLM step3p5.py 源码）—— num_kv_heads=1/rank，heads 与 worker 一致（上面"8 heads/TP 重设计"是错的）
+
+上面"8 heads/rank + TP 模型重设计"**判断错误**（把某次 boot 的 `162,944 tokens` 误当 num_blocks×block_size）。
+源码定死：`step3p5.py:178 num_heads = total(64)//tp(8) = 8`；`:180-188 total_num_kv_heads=num_attention_groups=8,
+num_kv_heads = max(1, 8//8) = 1`。→ **vLLM KV 每 rank 1 head（sharded），与 worker `KV_HEADS_LOCAL=1` 一致**。
+- 用 num_kv_heads=1 反推：per-K = 166887424 B = num_blocks×block_size × 1 × 128 × itemsize。map element_size=1
+  → **int8** → num_blocks×block_size = 1303808（nb=10186, bs=128）。（各 boot 的 KV size 随 gpu-mem-util 变，
+  故 token 数不同 boot 不可混用。）
+- **真实 gap（收敛、更可做）**：vLLM KV = **int8, 1 head/rank, `[2, nb, bs, 1, 128]`**；worker = **bf16, 1 head/rank,
+  `[1, MAX_SEQ, 128]` flat**。→ G5b = **int8 KV 处理（dequant + per-token/head scale）+ 布局 reshape（K/V 合一拆 kv[0]/kv[1]、
+  drop singleton head、flatten nb×bs）+ MAX_SEQ_DEFAULT=1303808**。**不是 TP/attention 重设计**（heads 已对齐）。
+- **主难点 = int8 KV**：worker attention_full 现吃 bf16 k_cache；须加 int8 读取 + dequant scale（`_quantize_kv_to_int8`
+  用的 scale，vLLM 另存），或改 attention 走 int8-KV 路径。scale 来源/布局下 session 从 vLLM int8-attn 路径（attention_v1.py
+  :1224/:1353/:1538）确认。这是 G5b 的收敛主工程（比"TP 重设计"小得多）。
