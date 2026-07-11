@@ -282,3 +282,28 @@ host_orch，`decode_layer.py:903-1140`）**泛化到 45 层 + tail**（~90 seque
 **Task② 下一步（net-new）**：为 N=1 program 建 DistributedWorker + 逐 rank 权重（forked-load 或 IPC）harness。权重桥 `weight_loader.KEY_*` → host_orch 位置参数 1:1 已 mapped，card-free layout smoke PASS（45 keys / 47.46 GiB/rank）。⚠ co-resident live A/B 仍 gate 在 gap-5（47GB BF16 池 + vLLM 24GB > 64GB）。
 
 **G-series（0162）现状复用价值**：`_stage_whole_decode_run.py --worker/--serve` 是成熟 Option-C sidecar（逐 rank forked-load 真实 W8A8、AF_UNIX socket、SIMPLER_COMM_NO_HCCL co-tenancy）+ 容器 backend `pypto_whole_decode_backend.py`（sitecustomize autoload，rank0 embed→socket→sidecar→broadcast，compute_logits 留 vLLM）。G5a 已 device-verified live plumbing（当前 4 层 + synthetic + dummy-KV → token garbage）。gate = G3 真实 KV-IPC + 全 45 层 + 真实权重（HBM/gap-5）。**N=1 live sidecar 可复用此 socket 协议/backend 模式。**
+
+### Step-3 决策（2026-07-11 再续）—— N=1 + 借用 import_ipc（不照搬 G-series Option-C）
+
+**用户拍板**：只**借用 0162 G-series 的 `import_ipc` feature**（纯 Python `_CTRL_IMPORT_IPC=16`，
+KV/weight 零拷贝导入），**不照搬其 Option-C 架构**；**继续支持 N=1 program `whole_decode_faithful_real`**。
+
+**为何 N=1 + import_ipc 是更优路径**：
+1. **N=1 已编过全 45 层**（含 swa-MoE，DISPATCH_CLEAN 285s dummy）——**绕开 G-series 最硬 gate
+   swa_moe const-fold 级联**（`attention_swa.py:480 Sub→:573 Var` 多站点，卡 30/45 层，多 session 未解）。
+   N=1 用 host-slice 单层 attn（`full/swa_attn_only_orch`），不触发那条 EP-lowering const-fold。
+2. **N=1 是单 program、一次 dispatch、45 层权重一次性喂进**——G-series 靠"逐层 host 权重 streaming"
+   避 OOM 的办法对 N=1 不适用（无法 per-layer stream）。**N=1 唯一不 OOM 的权重路 = import_ipc 零拷贝**
+   （每 rank 导入自己的 47GB 池，不 8× host stack；实测 self-load 8× stack = 752GB OOM exit137）。
+
+**借用的机制（mirror KV 路，apply 到 weight）**：
+- `import_ipc_all({dev:256B key})->{dev:peer_va}`（`distributed_runner.py:1086`，纯 Python broadcast，无需 C++ facade）。
+- 用法：per-rank key → `_dworker.import_ipc_all({dev_offset+r:key_r})` → per rank `WeightIpcMap(peer_base=va,map).device_tensor(KEY_*)` → `DeviceTensor(va+off,shape,dtype)` → `StackedDeviceTensor([rank shards],full_shape,ids)` 对上 host_orch `[tp,...]` 签名。（`pypto_kv_ipc.py` KvIpcMap/build_stacked_kv 是模板；`rt.run` 已证收 DeviceTensor。）
+
+**N=1 weight-IPC turnkey build（下一步，全在 0162 pypto-lib-n1 worktree + import_ipc-patched 运行时）**：
+1. **Exporter（per-rank，避 OOM）**：8 进程各 `WeightIpcExporter.export_from_checkpoint(ckpt, rank=r, out_dir, dev=8+r)`——每进程只 load rank-r 的 1 个 bundle（47GB host transient，H2D 后释放）+ malloc 47GB device 池（card 8+r）+ export 1 key，进程常驻持池。
+2. **改 `pypto_weight_ipc.py`**：`WeightIpcMap` 加 `import_ipc_all` 批量路径（replace 孤儿 `rt.import_ipc`）+ `build_stacked_weights(maps)->{host_orch_key: StackedDeviceTensor}`（KEY_*→位置参数 1:1，gate_r 合成 zeros/ones）。
+3. **N=1 worker harness**（新 `_stage_whole_faithful_real_ipc.py`）：compile `whole_decode_faithful_real` → `compiled.prepare()` → `rt`（DistributedWorker）→ `rt.import_ipc_all(weight_keys)` → 建 weight StackedDeviceTensor → `rt.run(compiled, *ordered)`（weight=DeviceTensor + KV/hidden 先 dummy host）→ 验 DISPATCH_CLEAN + finite logits（**证 import_ipc 解 N=1 real-weight OOM**）。
+4. 之后：KV import（同 import_ipc_all，真 KV）+ socket serve（复用 G5a 协议 + `pypto_whole_decode_backend.py`）+ live A/B vs 8000。
+
+**运行机**：**0162**（import_ipc 运行时改动在 0162 pypto 工作树未提交；建议 commit 进 csy0225/pypto stepfun/develop）。N=1 用 worktree `$WS/pypto-lib-n1`（branch n1-live），`PYTHONPATH=$WS/pypto/python:$WS/pypto-lib-n1`。co-tenancy 时 sidecar 设 `SIMPLER_COMM_NO_HCCL=1 WD_RING_HEAP=1073741824`。⚠ 0162 有 G5b 平行 thread 在 stepfun/develop 主 checkout 工作——用独立 worktree 不冲突，device 跑避免同卡并发。
