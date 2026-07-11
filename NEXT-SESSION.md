@@ -108,6 +108,13 @@ sweep（ctx=10/300/4090、block=0/5000/10、多 block）active 行(row0) **全 F
   段/第几个 forward 触发；(b) 查多 forward 复用 prepared rt 的资源累积（`WD_RING_HEAP`/ring 是否耗尽）；
   (c) 若确认是每步 MoE 权重 copy 相关，则做常驻权重（perf，与 G2 weight-IPC 重叠）顺带解。fix + 复现器在 0162。
 
+**⚠ 恢复 gotcha（本 session 踩到）**：sidecar 507018 crash 后 vLLM EngineCore 死但 **8 个 `VLLMWorker_TP`
+僵尸进程残留 cards 8-15（各 ~43GB）**，导致下次 8001 boot 报 `Engine core initialization failed`（WorkerProc
+init 抢不到卡）。解法：`npu-smi info | grep VLLMWorker_TP | sed 's/|/ /g' | awk '$1>=8&&$1<=15{print $3}'`
+拿 PID → `sudo kill -9`（**只杀 card 8-15 的，别碰 cards 0-7 的 327xxx = 8000 oracle**），再 restart 8001。
+`nerdctl exec vllm-8001 pkill -9 -f VLLMWorker_TP` 会 self-match（exec 自己的 bash 命令行含该字符串）→ 137，
+用显式 PID kill 更稳。禁 `npu-smi set -t reset`（netboot 重启全 16 卡）。
+
 ## 环境 / 铁律
 - 三件套：`source /usr/local/Ascend/cann/set_env.sh && source WS/activate.sh && export PTO_ISA_ROOT=WS/pto-isa`。
 - device 跑 sidecar：`SIMPLER_COMM_NO_HCCL=1 WD_RING_HEAP=1073741824 PTO2_RING_TASK_WINDOW=131072
