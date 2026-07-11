@@ -382,3 +382,18 @@ boot log：`GPU KV cache size: 162,944 tokens`（= 1273 blocks × 128 block_size
   不是简单换 DeviceTensor。这是 G5b 的真实工程量核心，须 live device 迭代对齐 + 数值验证。
 - 精确 num_kv_heads_local / dtype / block layout 须对 running 8001 的 KV tensor spec 定（KVPOOL backend
   的 copy 逻辑 + vLLM kv_cache spec）。**→ G5b 确认是 dedicated device session**（非纯装配）。
+
+### ⭐ G5b 核心 blocker 精确定性（2026-07-11，config + live 数字算死）—— KV-layout 根本不匹配
+
+- **worker attention**：`NUM_KV_HEADS=8, TP=8 → KV_HEADS_LOCAL=1`/rank（config.py:363），
+  `k_cache=[1, MAX_SEQ, 128] bf16` → **256 B/slot**（1 head×128×2B），TP-**sharded**、flat。
+- **vLLM live KV**：166887424 B / 162944 slots = **1024 B/slot** = num_kv_heads_local×128×itemsize = 8
+  → **8 heads/rank int8** 或 **4 heads/rank bf16**（1 head/rank 会得 itemsize=8，无效 → 排除）。即 vLLM KV
+  **未 shard 到 1 head/rank**（GQA KV 在 TP 下 replicate）+ 很可能 **int8**，paged
+  `[num_blocks, block_size, heads, head_dim]`。
+- **→ 根本不匹配**（head 数 1-vs-4/8 + dtype bf16-vs-int8 + flat-vs-paged + sharded-vs-replicated）。
+  **G5b 不是接线**，须二选一：(a) 改 worker attention kernel 直接吃 vLLM 多头 paged(int8) KV
+  （较大 kernel rework）；或 (b) 每 step KV re-layout（transpose/shard/dequant vLLM KV → worker 布局，
+  贵）。两者都须 device 迭代验证。**这是 G5b 的真实工程量核心，phase-24 级 dedicated session。**
+- 下 session 先做的事：读 KVPOOL backend copy 逻辑 + vLLM-ascend step3p5 kv_cache spec，确认 exact
+  head 数/dtype/paged 结构 → 定 (a) vs (b) → 实现 + token-exact 验证。
