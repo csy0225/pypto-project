@@ -1,8 +1,86 @@
-# 下个 session 集中攻关 —— G5b 收尾：swa_moe const-fold 级联 + 真 metadata + token-exact live A/B
+# 下个 session 集中攻关 —— G5b 最后一关：pypto+vLLM 端到端 token-exact（数值对齐）
 
-> 新 session 直接把下面 code block 当第一条消息粘贴。自包含。生成于 2026-07-11（续）。
-> **本 session 已攻破 G5b 最硬 blocker：KV/weight-IPC 零拷贝导入（import_ipc）device 打通（纯 Python，无需重编 C++）。**
-> 见 memory `g5b_import_ipc_facade_missing`(RESOLVED) + `g5b_kv_bridge_not_pure_reshape` + 本仓 `blockers.md`。
+> 新 session 直接把下面 code block 当第一条消息粘贴。自包含。生成于 2026-07-12（续⁵）。
+> **上个 session 攻破 G5b 全部结构性 blocker**：const-fold 证伪、socket 真 metadata 协议、import_ipc 真 KV 零拷贝、
+> **co-tenancy crash 彻底解决（file-based broadcast）** → 整条 live 45 层 single-handoff **HTTP 200 稳定跑通**。
+> **唯一剩余 = 数值正确性**（生成 token 错误）。见 STATUS.md 顶部 2026-07-12(续⁵) + 下方历史。
+
+```
+继续 pypto+vLLM 集成，攻最后一关：让 8001(pypto mode=full) 对 8000(vanilla) **token-exact**（整网端到端
+精度对齐）。全部在 0162（ssh 0162），repo /data/chensiyu/hw_project/pypto/workspace/pypto-lib 分支
+stepfun/develop。动手前读 skill pypto-project/.claude/skills/pypto-dev-constraints/SKILL.md +
+STATUS.md 顶部 2026-07-12(续⁵) + memory g5b_import_ipc_facade_missing / g5b_kv_bridge_not_pure_reshape /
+vllm_golden_dumps_are_prefill_not_decode。
+
+## ✅ 别重做（上个 session 全部 device 验证完成）
+- **攻坚 1 const-fold**：证伪，非 blocker。canonical TP=8 全 COMPILE OK（复现器 `_probe_alllayers_compile.py`）。
+- **攻坚 2 socket 真 metadata 协议**：self-describing length-prefixed 协议（`_wd_pack_fields`/`_wd_unpack_fields`）
+  实装三处（sidecar `_stage_whole_decode_run.py` `_WholeDecodeServer.recv_step`+`_feed_meta`、in-tree
+  `tools/step3p5/vllm_monkey_patch.py`、容器后端 `/logs/pypto_patch/pypto_whole_decode_backend.py` 已部署）。
+  随 hidden 发 seq_lens/block_table(→BATCH×32 flat)/slot_mapping + 首请求静态 rope(full[4096,64]+swa[4096,128])。
+- **import_ipc（真 KV 零拷贝）**：纯 Python `_CTRL_IMPORT_IPC=16`，已 device 验证 import 8 真 KV 池。
+- **⭐ co-tenancy crash 彻底解决（file-based broadcast）**：一攻 `HcclBroadcast err9` + 二攻 `507018` 同源 =
+  co-tenancy device 争用（rank-0 跑 sidecar 时 vLLM rank1-7 的 HcclBroadcast kernel 同卡自旋）。修法 = 容器后端
+  `_pypto_full_forward` 把 `tp_group.broadcast` 换成 file-based broadcast（rank-0 写 /logs，rank1-7 CPU-poll）。
+  **已部署 + device 验证：全 45 层 sidecar → prompt HTTP 200 完成、无 crash/507018/err9**。offline `--steps 4`
+  证 rt-reuse 无 507018（纯 co-tenancy）。→ **整条 live 45 层 single-handoff 基础设施稳定跑通，别再碰 crash。**
+
+## ⭐ 唯一剩余 = 数值正确性（本 session 主攻）
+现象：8001(pypto) 生成 token 错误（text=""，finite 但不对）；8000(vanilla) 同 prompt "北京是" 出连贯
+"中国的首都，也是世界上人口"。**注意**：上个 session 的 `_client_wd_sweep.py` 只用**合成随机 rope** 证「active
+行无 nan」，**不是正确性**。真 rope/KV/权重下数值错。
+
+## 攻坚顺序（每步 device 可验证）
+1. **拿 decode-step golden**：现有 vLLM dump 是 18-tok prefill（memory `vllm_golden_dumps_are_prefill_not_decode`），
+   BATCH=16 decode kernel 吃不下。需在 8000 或独立 vLLM eager 跑一个 decode-step dump（1 tok，batch≤16，每层
+   hidden/attn_out/moe_out），或直接 live 单层对拍。
+2. **单层 rope 核对（最可疑）**：`_wd_rope_from_emb`（容器后端 + in-tree，镜像 per-op `pypto_attn_backend
+   ._rope_tables_from_attn`，per-op path token-exact）—— 但 whole-decode 是**不同 kernel**（`attention_full/swa`），
+   核对它消费 rope 的 layout/convention 是否与 per-op 一致（cos=cat[cos_half,cos_half] tile、rotary_dim full=64/
+   swa=128、pos 索引）。单层 probe：sidecar --layers 0 + 真 rope（从 vLLM cos_sin_cache 抽）+ 真 KV + 真 metadata，
+   对 vLLM L0 attn 输出 active 行对拍。
+3. **真 KV 读核对**：consolidated pool per-layer offset（`build_stacked_kv` 用 map 的 L{i}.K/V offset）+ block_table
+   物理块 id → k_cache[pbid*128] 是否对齐 vLLM 该层 KV 布局（obstacle 3）。
+4. **per-layer 权重流核对**：`_load_moe_layer_weights` 每 step copy 是否喂对该层 W8A8（norm[45]abs / MoE[42]pos=li-3
+   / dense[3]，router_bias BF16-round，EPS=1e-5，swiglu_limit L43=7/L44=16）。
+5. **修好后 live A/B**：3-prompt 对 8000 token-exact。swiglu(L43/L44) 精度在此定论。
+6. **perf（后置，非门槛）**：现 ~120s/token（每步 MoE 权重 copy）→ 常驻权重（G2 weight-IPC 重叠）。
+
+## live A/B runbook（基础设施已就绪）
+(a) 停 8001：`sudo nerdctl --namespace k8s.io exec vllm-8001 bash -lc "pkill -9 -f '[V]LLM::EngineCore'"`；
+    **清 card8-15 zombie**：`npu-smi info|grep VLLMWorker_TP|sed 's/|/ /g'|awk '$1>=8&&$1<=15{print $3}'|xargs -r sudo kill -9`
+    （**别碰 cards 0-7 = 8000 oracle**）；`rm -f /mnt/nvme1/chensiyu/logs/step3p5_910b_w8a8_v001/{pypto_whole_decode.sock,pypto_wd_bcast.*}`。
+(b) 起 8001：`sudo nerdctl --namespace k8s.io exec -d vllm-8001 bash -lc 'bash /logs/start_8001_full.sh > /logs/vllm_8001_x.log 2>&1'`
+    （已含 HCCL_*_TIMEOUT=3600 + PYPTO_WHOLE_DECODE=1 + PYPTO_KVPOOL=1 + file-bcast 后端）→ 等 health=200 + KV keys 落 /logs。
+(c) 起真权重全 45 层 sidecar（host）：`SIMPLER_COMM_NO_HCCL=1 WD_RING_HEAP=1073741824 PTO2_RING_TASK_WINDOW=131072
+    PTO2_RING_DEP_POOL=131072 python _stage_whole_decode_run.py --worker --serve --serve-sock
+    /mnt/nvme1/chensiyu/logs/step3p5_910b_w8a8_v001/pypto_whole_decode.sock --tp 8 --dev-offset 8 -p a2a3
+    --ckpt /mnt/nvme1/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp
+    --kv-ipc-dir /mnt/nvme1/chensiyu/logs/step3p5_910b_w8a8_v001 --layers 0,1,...,44`（nohup 后台 + 监控 log 到
+    `serve: listening`）。容器 /logs = host /mnt/nvme1/chensiyu/logs/step3p5_910b_w8a8_v001。
+(d) A/B：curl 8001 vs 8000 同 prompt greedy(temperature=0) 比 text（pypto ~120s/token，用小 max_tokens）。
+
+## 铁律 / hazard
+- 三件套：`source /usr/local/Ascend/cann/set_env.sh && source WS/activate.sh && export PTO_ISA_ROOT=WS/pto-isa`。
+- **停 sidecar 用 SIGTERM**（非 -9）；但其 teardown 507018 → force_reset(8) **会 nuke 同卡 co-resident 8001**
+  → 停 sidecar 后必须 restart 8001 + 清 card8-15 zombie VLLMWorker。禁 `npu-smi set -t reset`。
+- 8000 oracle 在 cards 0-7 别碰；launch 前 `pgrep [c]hip_process` 空 + card8-15 无 zombie。
+- oracle = vLLM eager dump / live 8000（synthetic 会 stale）。debug 四板斧：DeepSeek → 上游 → 自写 kernel → dtype。
+- push：pypto-lib 在 0162 fork SSH 无 key、PAT 在本地 box → 沿用 NFS 备份 `workspace/g5b_*`（或让用户 push）；
+  pypto-project 文档在本地 box（PAT `/data/chensiyu/secrets/github.env`，HTTP/1.1）。
+
+## 可复用积木（0162）
+sidecar `_stage_whole_decode_run.py`；容器后端 `pypto_whole_decode_backend.py`（file-bcast 版已部署，备份 .bak-g5b
++ NFS `workspace/g5b_container_backend_filebcast_*`）；协议/提取/隔离复现器 `_test_wd_protocol.py`/
+`_test_container_backend.py`/`_client_wd_sweep.py`/`_client_wd_row0.py`；start_8001_full.sh（HCCL timeout + file-bcast）。
+
+先读 skill/STATUS/memory + ssh 0162 核对（8001/8000 健康、cards 干净），从「攻坚顺序 1（decode-step golden）」
+或直接单层 rope 对拍开始。可起 team 但 lead 直接跑 device，盯增量别让 agent 空转。
+```
+
+---
+
+# （以下为历史参考，上个 session 已完成的结构性工作）
 
 ---
 
