@@ -272,3 +272,13 @@ host_orch，`decode_layer.py:903-1140`）**泛化到 45 层 + tail**（~90 seque
 - live A/B：可复用 `/mnt/nvme1/chensiyu/logs/step3p5_910b_w8a8_v001/start_8001_cotenancy.sh`（8-15 @ util 0.5）pypto vs 8000 vanilla oracle。这就是 Task#4 逐层对齐的真正落点。
 
 **下个 session 的 punch-list**：(1) resident-worker + weight-IPC device run（Task② flavor-a，pypto 独占 8-15 + 47GB checkpoint-H2D，验证 IPC 机制）；(2) `_pypto_full_forward` body；(3) gap-5 in-kernel W8A8（co-resident HBM gate）；(4) live A/B。
+
+### Step-3 更新（2026-07-11 续）—— 0234 经 tmux 可达 + 真实权重 self-load OOM（确认 Task② 架构）
+
+**机器修正**：`ssh 0234` 裸主机名不解析（→0.0.0.156），但 **0234 经 tmux `pypto-ascend-0:0` 可达**（常驻 `root@0234` shell）。0234 = **8 卡（0-7）全空闲**、607GB free RAM、真实 W8A8 ckpt 已挂、**与编辑机 b-csy-develop 共享同一 NFS**（编辑即时可见，最优 dev loop）。0234 pypto-lib = `feat/whole-net-n1-fusion@d3f155b`（n1 原生）、SDMA=OFF、无 co-tenancy 补丁（0162 专有）。故 phase27 顶部"执行机 0234 / 不碰 0162"仍成立（0234 是 N=1 dev 机）；0162 是 live-A/B 机（co-tenancy runtime + 两个 vLLM 容器 + G5a live plumbing）。
+
+**关键发现：真实权重 self-load = 死路（OOM）**。在 0234 cards 0-7 跑 `_stage_whole_faithful_real_weights.py --ckpt <real> -d 0..7`：**compile OK**（`WholeDecodeFaithfulReal_20260711_034124`，45 perf hints），但 `compiled(*inputs)` dispatch 阶段被 **OOM-killer 杀（exit 137）**——harness 在单 driver 进程里 stack 全 8 rank bundle + `[tp,...]` 副本 ≈ 752GB > 607GB free。**这确认了文档 Task② 的架构决定**：真实权重必须**逐 rank**（绝不 8× stack 在一个 host），只能走 (a) 每 forked chip 内逐 rank load（`step3p5_decode.py:275-293` / `_stage_whole_decode_run.py --worker` 模式）或 (b) vLLM-IPC（`WeightIpcExporter.export_from_checkpoint` 逐 rank 1 bundle/进程 mem-safe → 1 key/rank → worker `import_ipc` child ctx → 逐 rank DeviceTensor）。两者都需 **DistributedWorker**（非 `ir.compile+compiled(*inputs)` auto-shard）。
+
+**Task② 下一步（net-new）**：为 N=1 program 建 DistributedWorker + 逐 rank 权重（forked-load 或 IPC）harness。权重桥 `weight_loader.KEY_*` → host_orch 位置参数 1:1 已 mapped，card-free layout smoke PASS（45 keys / 47.46 GiB/rank）。⚠ co-resident live A/B 仍 gate 在 gap-5（47GB BF16 池 + vLLM 24GB > 64GB）。
+
+**G-series（0162）现状复用价值**：`_stage_whole_decode_run.py --worker/--serve` 是成熟 Option-C sidecar（逐 rank forked-load 真实 W8A8、AF_UNIX socket、SIMPLER_COMM_NO_HCCL co-tenancy）+ 容器 backend `pypto_whole_decode_backend.py`（sitecustomize autoload，rank0 embed→socket→sidecar→broadcast，compute_logits 留 vLLM）。G5a 已 device-verified live plumbing（当前 4 层 + synthetic + dummy-KV → token garbage）。gate = G3 真实 KV-IPC + 全 45 层 + 真实权重（HBM/gap-5）。**N=1 live sidecar 可复用此 socket 协议/backend 模式。**
