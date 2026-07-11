@@ -404,3 +404,16 @@ boot log：`GPU KV cache size: 162,944 tokens`（= 1273 blocks × 128 block_size
 per-slot = 166887424/162944 = **1024 B** = heads×128×itemsize → 8 int8 heads 或 4 bf16 heads/rank。
 → **mismatch 已从导出代码坐实（非仅算术）**：worker 1-head/rank ≠ vLLM 4/8-head/rank。仍须读
 vLLM-ascend kv_cache spec 定 logical dtype（int8 native 还是 bf16-as-int8-bytes）+ paged 维序，才能选 (a)/(b)。
+
+**⭐ vLLM KV 精确 shape 已定（2026-07-11，vLLM-ascend `attention_v1.py:109`）**：
+`get_kv_cache_shape() → (2, num_blocks, block_size, num_kv_heads, head_size)`（leading 2 = K/V 合一，
+故 KVPOOL backend 用 `kv[0]`/`kv[1]` 拆）。所以每层 per-rank K = `[num_blocks=1273, block_size=128,
+num_kv_heads_local, head_dim=128]`，`num_kv_heads_local × itemsize = 8`（8 int8 或 4 bf16 heads/rank）。
+model config：`num_attention_heads=64(full)/96(swa)`, `head_dim=128`, `torch_dtype=bfloat16`；worker
+`NUM_KV_HEADS=8, KV_HEADS_LOCAL=1`。
+- **vLLM KV**：paged `[2, num_blocks, block_size, num_kv_heads, head_dim]`（block-结构、多头、K/V 合一，likely int8）。
+- **worker KV**：`[1, MAX_SEQ(=num_blocks×block_size), head_dim]`（单头、flat-over-blocks、K/V 分离、bf16）。
+- **G5b 桥接工作**：worker attention 须改成读 vLLM 的 `[2,nb,bs,heads,hd]` 布局（多头 + block/block_pos 维 +
+  K/V 合一 + 可能 int8 dequant），或每 step re-layout。exact int8-vs-bf16 + num_kv_heads_local 下 session 对
+  running 8001 的 `layer.kv_cache` tensor `.dtype/.shape` 一读即定（attention_v1.py get_kv_cache_shape 传入的
+  num_kv_heads = model num_kv_heads // tp）。这是唯一剩余 device 待读量；桥接 kernel 是 G5b 主工程。
