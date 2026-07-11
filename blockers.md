@@ -63,8 +63,11 @@ Phase-24 的 PROVEN zero-copy KV 走 chip 级 `attn_setup` op，**不是** `rt.i
 
 **症状**：编译 swa MoE 层（standalone `_build_tp_attention_swa_program`）报 `tile.full shape element 0 must be
 ConstInt but got Sub`（`pl.full([SWA_Q_PAD_ALIGNED - Q_HEAD_BATCH_SWA, HEAD_DIM])`）。swa_dense（L1）编译 OK，
-只有 swa **MoE** wrapper 触发（融合 const-fold cascade）。HEAD 就有；与 G5b 无关。**解除**：skill §C DSV4-style
-固定 const + fillpad/mask。阻塞 SWA MoE 层（全 45 层所需）；dense/full 层不受影响。
+只有 swa **MoE** wrapper 触发（融合 const-fold cascade）。HEAD 就有；与 G5b 无关。
+**MULTI-SITE cascade（2026-07-11 实测）**：把 :480 改成字面量 `[20, HEAD_DIM]` 后 :480 过，但级联到
+`:573 tile.create shape element 0 must be ConstInt but got Var`（还有更多站点）。**是多站点级联，非单行修复**。
+**解除**：skill §C DSV4-style 固定 const + fillpad/mask，需系统性重写 swa-moe program 的所有 shape 表达式
+（:480 Sub、:573 Var、…）。阻塞 30 个 SWA MoE 层（全 45 层 live A/B 所需）；dense/full 层不受影响。
 
 ---
 
