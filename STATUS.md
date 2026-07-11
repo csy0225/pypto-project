@@ -5,6 +5,35 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 **最后更新**：2026-07-12
 
+> **2026-07-12 (续⁷) ⭐ N=1 W8A8 INT8-native routed MoE kernel 移植完成 + standalone 编译验证通过 [Phase 27 / NEXT-SESSION-N-1]**：
+> 目标 = routed MoE 从 BF16-dequant（存 47GB）改成真 W8A8 INT8-native（存 ~24GB INT8 + 片上 W8A8，数学照抄 DeepSeek v4 `expert_routed.py`、与 vLLM W8A8 一致）。**用户确认走 dispatch-side 量化（Option A = DeepSeek 精确对齐 + a2a 半字节 + recv_x 预 fractal 化最强避 gap-5）**。
+> **已落地（pypto-lib `feat/whole-net-n1-fusion` @ `cd3ef0d`）**：
+> - `moe.py::_expert_routed` → INT8 权重 + per-output-channel FP32 scale；gate/up `matmul(...,out_dtype=INT32)`+`matmul_acc` → `col_expand_mul(row_expand_mul(acc, act_scale[T,1]), w_scale[1,N])` dequant；中间 `h_i8` 照抄 DeepSeek cast 链（FP32→INT32 rint→FP16 round→INT8 trunc，`pl.at(CORE_GROUP)`）；down INT8×INT8+dequant。保留 step3p5 `[K,N]`+b_trans=False（loader 已 transpose，数学等价）+ 逐层 swiglu_limit + routing-weight 在 combine 施加。
+> - dispatch-side 量化：`_quant_moe_input` → INT8 x + `[T,SCALE_W_PAD=8]` FP32 per-token scale；`_pack_send_payload`/`ep_all_to_all`/`dispatch_step` 携带并行 scale 窗口，**融进同一个 a2a barrier**。`chip_orch`/`host_orch` 穿 INT8 权重+scale+窗口，input-quant 改**无条件**（swiglu clamp 仍逐层 gated）。
+> - `weight_loader.py int8_routed=True`（loader 半）：INT8 routed 权重 + `moe_w_{gate,up,down}_r_scale` keys。
+> - codegen 坑修：`_quant_moe_input` = **scheduled InCore（`pl.range`）双输出 kernel**（绕 SplitIncoreOrch 嵌套-InCore + inline-splice 单返回）。
+> **验证**：`_compile_moe -p a2a3sim --layer-idx {3,44}` 均 **`[14.E] OK`**（silu + swiglu7/16 编译 clean，0162）。
+> **⚠ 关键架构发现（决定剩余工作量）**：N=1 程序 `whole_decode_faithful_real`（`decode_layer.py`）有**自己的 inlined routed-MoE 副本（BF16），与 moe.py 解耦**——`_gen_faithful_real.py` 只 text-transform 已存在的 `_build_whole_decode_faithful_program`，不从 moe.py 重新 inline。故 moe.py INT8 改动**不自动传到 N=1**。
+> **剩余（A5，gate Stage B/C）**：改 base `_build_whole_decode_faithful_program` inlined chip_orch(+inlined `_expert_routed`/`dispatch_step`/`_quant_moe_input`)→INT8（照抄 cd3ef0d）+ 改 `_gen_faithful_real.py`（`moe_w_*_r` INT8 decl + scale 参/窗口 + chip_orch call）→ 重生成 decode_layer.py → `_probe_whole_faithful_canonical` smoke-compile；再 harness `int8_routed=True`。之后 Stage B（8 卡 device，INT8 池~24GB 消 arena-OOM）+ Stage C（vs vLLM W8A8 精度）。
+> **环境**：0234 DOWN；device/编译移到 **0162**（b-csy NFS 无 python，rsync `models/step3p5/*.py` → 0162 `pypto-lib-n1` worktree 编译）。
+
+> **2026-07-12 (续⁶) ⭐ G5b 数值 bug 定位大幅推进：dense/attention/KV 路径 device 端已证正确，bug 缩到 MoE/INT8 [攻坚 3 结构性排除]**：
+> 用 **prefill dump 的 position 17** 构造 decode-step golden（1 token attend 18 KV，全 8 rank 齐），
+> 给 `_stage_whole_decode_run.py` 加 `--golden-decode-pos N`（feed layer_input[N] row0 + 逐 rank 注入
+> rope.k/qkv.v[0:N+1] 进 k_cache + seq=N+1/slot=N/block=0 + 对拍 device out row0 vs golden out[N]）。
+> **device 结果（cards 8-15，真 W8A8 BF16-dequant，SIMPLER_COMM_NO_HCCL=1）**：
+> - **L0 full_dense out row0 vs golden[17]：pass_rate=1.000000**（max|diff|=0.28，幅值 7.59 vs 7.88 匹配）
+>   → **dense 全路径 device 端正确**：input-RMSNorm/qkv/qk_norm/rope/flash-attn(真 18-entry KV)/head-gate/
+>   o_proj/dense-MLP 全对。**rope 之前是文档 #1 嫌疑，现证伪**（neox-64 partial，输入是 qk_norm(q) 非 qkv.q）。
+> - **DeepSeek 对齐**：DeepSeek v4 `decode_attention_swa.py:198` 做同样的 `kv_cache_flat = reshape(kv_cache,
+>   [B*BLOCKS*BLOCK_SIZE, HEAD_DIM])` + slot/block_table 索引；step3p5 whole-decode 的 flat `[num_slots,128]`
+>   与其 `[num_blocks,block_size,1,head_dim]` **字节等价** → KV-layout 与 DeepSeek 对齐，非 bug 嫌疑。
+> - head-gate 也已对（worker 算 gate_r，on-device N=16 matmul_acc 已删）。
+> **→ token-garbage 根因缩到：MoE 层（L3-44，42/45）/ INT8-vs-BF16 / 跨层累积**。正跑 **45 层 golden chain
+> bisect**（逐层注入 KV + 逐层 out row0 对拍）定位首个偏离层。复现器/patch 在 0162
+> `_stage_whole_decode_run.py`（`--golden-decode-pos`，备份 `/tmp/_stage_wd.bak_ml_*`）。**机器**：vanilla 8001
+> 已停以腾 cards 8-15 跑 offline golden；8000 oracle cards 0-7 全程 200。
+
 > **2026-07-12 (续⁵) ⭐ G5b co-tenancy crash 彻底解决（file-broadcast）— live 45 层路径 HTTP 200 稳定跑通；剩纯数值 [攻坚 4 结构性 blocker 清除]**：
 > **决定性隔离**：offline `--steps 4`（4 forward 复用 prepared rt，真 KV，**无 vLLM co-tenancy**）**全 clean rc=0
 > 无 507018** → rt-reuse/资源累积**排除**。→ 一攻的 HcclBroadcast timeout(err9) 和二攻的 507018 **同源** =
