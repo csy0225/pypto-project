@@ -5,6 +5,15 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 **最后更新**：2026-07-12
 
+> **2026-07-12 (续⁸) ⭐⭐ A5 达成：whole_decode_faithful_real 整网 INT8-native W8A8 编译通过（TP=8）[Phase 27 / NEXT-SESSION-N-1]**：
+> 承续⁷（moe.py standalone INT8 已过）。本轮把 INT8-native W8A8 传进 **N=1 整网程序** `whole_decode_faithful_real`（`decode_layer.py`，与 moe.py 解耦、自带 inlined 副本）。
+> **手法（agent 三次 600s stall → 改直接编辑）**：range-scoped transform 脚本 `tools/step3p5/_a5_int8_transform.py` 只改 base `_build_whole_decode_faithful_program` 内的 inlined MoE（其余 10+ 程序副本不动）：`_expert_routed`+`expert_routed_step`+`chip_orch` 签名/调用+`host_orch` decls+**全 42 个 per-layer chip_orch 调用**全部穿 INT8+scale（每处 exact-match 断言）。**用 in-kernel per-token 输入量化（照抄 DeepSeek cast 链 FP32→INT32 rint→FP16 round→INT8 trunc）**，不动整网 push-based dispatch（数值 == dispatch-side，见 `gap5_quant_after_dispatch_equiv`）。改 `_gen_faithful_real.py`（emit INT8 `moe_w_*_r` + FP32 `_scale` decls + interleaved chip_orch call）→ 删旧 real builder → 重生成 `decode_layer.py`。
+> **验证（0162, TP=8 canonical DistributedConfig）**：
+> - `_probe_whole_faithful_canonical --layer-name whole_decode_faithful` → **`COMPILE OK`**（base faithful INT8）
+> - `_probe_whole_faithful_canonical --layer-name whole_decode_faithful_real -d 0-7` → **`resolved program=WholeDecodeFaithfulReal` + `COMPILE OK`**（output `WholeDecodeFaithfulReal_20260712_072053`）
+> → **整网 INT8 W8A8 完整过 distributed codegen（45 层 + attn + MoE）**。提交 pypto-lib `a293fe7`。
+> **剩余（Stage B/C）**：Stage B = 8 卡 device e2e（harness `_stage_whole_faithful_real_ipc.py` 接 `int8_routed=True` exporter + args 加 scale 张量；INT8 池 ~24GB 消 arena-OOM；cards 8-15，真权重 load ~10min）；Stage C = vs vLLM W8A8 精度（需 decode-step golden 或 live A/B；纯 torch detail-compare 只验数学不验 kernel）。fractal-32 partial-tile（valid_shape<32 的 INT8 cube）精度风险留到 Stage B/C device 验证。
+
 > **2026-07-12 (续⁷) ⭐ N=1 W8A8 INT8-native routed MoE kernel 移植完成 + standalone 编译验证通过 [Phase 27 / NEXT-SESSION-N-1]**：
 > 目标 = routed MoE 从 BF16-dequant（存 47GB）改成真 W8A8 INT8-native（存 ~24GB INT8 + 片上 W8A8，数学照抄 DeepSeek v4 `expert_routed.py`、与 vLLM W8A8 一致）。**用户确认走 dispatch-side 量化（Option A = DeepSeek 精确对齐 + a2a 半字节 + recv_x 预 fractal 化最强避 gap-5）**。
 > **已落地（pypto-lib `feat/whole-net-n1-fusion` @ `cd3ef0d`）**：
@@ -33,6 +42,17 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 > bisect**（逐层注入 KV + 逐层 out row0 对拍）定位首个偏离层。复现器/patch 在 0162
 > `_stage_whole_decode_run.py`（`--golden-decode-pos`，备份 `/tmp/_stage_wd.bak_ml_*`）。**机器**：vanilla 8001
 > 已停以腾 cards 8-15 跑 offline golden；8000 oracle cards 0-7 全程 200。
+>
+> **续⁶补（root cause 已定位到 SWA，非 MoE）**：45 层 golden chain bisect（真 KV + **真 per-layer rope**
+> build_llama3_yarn/build_plain 注入后）结果：**L0 full_dense pass_rate=1.000000（max|diff|=0.007，真 rope）
+> → full attention 全对；L1 swa_dense = NaN（row0），并向后传播 → L2-44 全 NaN**。即**首个偏离层 = L1
+> （sliding-window attention），根因 = SWA 在 multi-entry KV（ctx>1）下 device 产 NaN**。**为何从未发现**：
+> `test_decode_layer_swa_dense_st.py:288` 用 `seq_lens=torch.ones`（ctx=1，只测 1-token self-attn），
+> **SWA multi-entry KV 路径从未 device 测过**；真 decode ctx 递增 → 33 个 SWA 层全 NaN → **就是 token-garbage
+> 根因**。已排除：rope/qk_norm/head-gate/KV-layout/full-attn/合成 rope 溢出（真 rope 仍 NaN）。**待定位**：
+> attention_swa.py Stage 1-4 里 SWA-specific（SWA_WIN_BLOCKS/SWA_Q_PAD_ALIGNED/eff_ctx/12-head）哪处产 NaN
+> —— 下步 L1-alone + attn 中间 dump 定位 + 对齐 DeepSeek v4 `decode_attention_swa.py`。memory:
+> `g5b_swa_multientry_kv_nan_root_cause`。
 
 > **2026-07-12 (续⁵) ⭐ G5b co-tenancy crash 彻底解决（file-broadcast）— live 45 层路径 HTTP 200 稳定跑通；剩纯数值 [攻坚 4 结构性 blocker 清除]**：
 > **决定性隔离**：offline `--steps 4`（4 forward 复用 prepared rt，真 KV，**无 vLLM co-tenancy**）**全 clean rc=0
