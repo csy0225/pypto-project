@@ -11,6 +11,43 @@ Blocker 解决时，**删掉本文件里这一节**，到
 
 ---
 
+## 🔴 NEW 2026-07-11 — G5b：`rt.import_ipc` facade 在 pypto runtime 中不存在（zero-copy KV import 阻塞）
+
+**症状**：`_stage_whole_decode_run.py --worker --kv-ipc-dir` 走到 `KvIpcMap.from_files(...).import_ipc(...)`
+在 device 报 `AttributeError: 'Orchestrator' object has no attribute 'import_ipc'`
+（`distributed_runner.py:1084` `self._orch().import_ipc(worker_id, key)`）。
+
+**根因**：`DistributedWorker.import_ipc` 只是 **orphaned Python wrapper**；C++ `Orchestrator` 没有
+`import_ipc` 方法。`worker_bind.h` 只 bind 了 `malloc/free/copy_to/copy_from/remote_malloc/remote_copy_to/alloc`，
+**没有 `import_ipc`**；built `_task_interface.so` 无此 symbol。`git log -S import_ipc` 为空，
+`pre-upgrade-20260709_180251` tag 也没有 → **从未 commit 进本 repo**。`pypto_kv_ipc.py`/`pypto_weight_ipc.py`
+（call `rt.import_ipc`）是 aspirational/未验证（`pypto_weight_ipc.py` 自述 "card-free, OPEN_DEVICE_QUESTION"）。
+Phase-24 的 PROVEN zero-copy KV 走 chip 级 `attn_setup` op，**不是** `rt.import_ipc`。
+
+**当前状态**：G5b 其余 wiring 全 DONE + device 验证（dense L0 full-attn 编译+运行 rc=0 co-resident @
+`KV_CACHE_ROWS_DYN=652032`、`layer_cache_base=0`、`WD_RING_HEAP=1GB`，无 OOM）。只差 IPC import runtime 支持。
+
+**解除条件**：加 `CTRL_IMPORT_IPC=12`（free slot）control-op — `Orchestrator::import_ipc` →
+`WorkerThread::control_import_ipc` → 子进程 control-loop handler → `ChipWorker::import_ipc`
+（`aclrtIpcMemImportByKey(&va, key, ENABLE_PEER_ACCESS)`，无需 SetImportPid，因 vLLM export 用
+`0x1=DISABLE_PID_VALIDATION`，与 runtime 自身 export 一致）+ `worker_bind.h` `.def("import_ipc")`（mirror
+`malloc` lambda :312）+ 重编 a2a3 runtime。256B key 经 mailbox args 区（或 POSIX shm，mirror
+`CTRL_ALLOC_DOMAIN` :698）传子进程。子进程 control 消费者位置待定位（不在 worker_manager.cpp/common/worker）。
+
+**链接**：memory `g5b_import_ipc_facade_missing` / `g5b_kv_bridge_not_pure_reshape`。备份
+`workspace/g5b_*_20260711_*.py`（5 文件）。
+
+---
+
+## 🟠 承前（pre-existing）— swa_moe const-fold：`attention_swa.py:480` Sub not ConstInt
+
+**症状**：编译 swa MoE 层（standalone `_build_tp_attention_swa_program`）报 `tile.full shape element 0 must be
+ConstInt but got Sub`（`pl.full([SWA_Q_PAD_ALIGNED - Q_HEAD_BATCH_SWA, HEAD_DIM])`）。swa_dense（L1）编译 OK，
+只有 swa **MoE** wrapper 触发（融合 const-fold cascade）。HEAD 就有；与 G5b 无关。**解除**：skill §C DSV4-style
+固定 const + fillpad/mask。阻塞 SWA MoE 层（全 45 层所需）；dense/full 层不受影响。
+
+---
+
 ## ✅ RESOLVED 2026-07-11 — G4 co-tenancy：whole-decode worker 的 HCCL comm world 与 vLLM 8001 同卡冲突
 
 **状态**：✅ **DISPATCH-RESOLVED**（mechanism 已解，device 验证）。修法 = env-gated `SIMPLER_COMM_NO_HCCL=1`
