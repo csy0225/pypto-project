@@ -5,6 +5,22 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 **最后更新**：2026-07-11
 
+> **2026-07-11 (续³) G5b live A/B 首次拉起：全 45 层真权重 pypto 路径 live 跑通(no-crash dispatch) + 两个精确遗留 [NEXT-SESSION 攻坚 4 首攻]**：
+> restart 8001 mode=full（新容器后端 G5b metadata 版）→ health=200 → 起**真权重全 45 层** sidecar
+> （`--ckpt` W8A8 + `--kv-ipc-dir` + `--serve` + `SIMPLER_COMM_NO_HCCL=1`, cards 8-15 co-resident 8001）：
+> **7 programs / 45 层 / 87 steps 编译 + PREPARE OK + import 8 真 KV 池(0x12c1c0000000) + serve listening，
+> 无 OOM、prepare/dispatch 阶段无 507018**。送 prompt → 容器后端路由 decode step 进 sidecar → **全 87 steps
+> dispatched 跑完**（= 整条 live single-handoff：embed→socket→metadata→真 KV→45 层→broadcast 机制全通）。
+> **遗留 A（数值，= 攻坚 3）**：sidecar per-layer torch-ref 从 L0 报 nan，但该 `max|abs|` 是 **16 行含 padded
+> 行**（decode 只 1 active seq，rows 1-15 ctx=0 → softmax 0/0 = nan，与早先 isolated 测试 active 行 non-nan
+> 一致）→ **active 行正确性未确认**，需单层 active-行 paged-index 数值对拍（真 KV 读 / block_table→consolidated
+> pool offset）。**遗留 B（co-tenancy 稳定性，= 攻坚 4）**：第 2 个请求时 8001 EngineCore 崩在
+> vLLM `c10d ProcessGroupHCCL::broadcast`（`_pypto_full_forward` 的 `tp_group.broadcast(next_hidden,src=0)`）
+> —— co-resident pypto sidecar 的 device stream 与 vLLM HCCL broadcast 同卡时序冲突（sidecar teardown 507018
+> → `aclrtResetDeviceForce(8)` 清 poison）。→ 需 sidecar 每 step 后 device 完全 sync/idle 再让 vLLM broadcast，
+> 或换 handoff 时序。**清理**：sidecar SIGTERM clean（force_reset 清卡）；8001 restart 回 vanilla-fallback serving。
+> 代码/日志：worker `/tmp/g5b_sidecar45.log`、backend 备份 .bak-g5b、NFS `workspace/g5b_*_20260711_231307`。
+
 > **2026-07-11 (续²) G5b socket 真 metadata 协议 device 验证 + swa const-fold 证伪 ✅ [NEXT-SESSION 攻坚 1+2]**：
 > ① **swa_moe const-fold 不再是 blocker**：当前工作树 canonical TP=8 编译 clean（attn_full/attn_swa/
 > full_dense/swa_dense/moe_block(swa L3/full L4/L43/L44) 全 COMPILE OK，含 `--kv-ipc-dir` config override）。

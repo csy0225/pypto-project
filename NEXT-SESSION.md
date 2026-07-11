@@ -82,6 +82,20 @@ g5b_kv_bridge_not_pure_reshape + 本文件顶部 ⭐⭐「可复用特性 import
    ⚠ 真权重全 45 层 sidecar 首跑可能撞 MoE/swa runtime（507018）—— 若卡，先 `--layers 0`（dense）跑通再
    逐段加层 bisect。
 
+**2026-07-11(续³) live A/B 首攻结果（重要，先读）**：runbook (a)-(d) 全跑通 —— 8001 restart mode=full
+（新后端）+ 真权重全 45 层 sidecar：**7 programs/45 层/87 steps + PREPARE OK + import 8 真 KV 池 + serve
+listening，无 OOM、无 prepare/dispatch 507018**；送 prompt → decode step 进 sidecar → **87 steps 全 dispatched
+跑完**（整条 live single-handoff 机制全通）。**但两个精确遗留 gate token-exact**：
+- **遗留 A（攻坚 3，数值）**：sidecar torch-ref 从 L0 nan，但 max|abs| 含 padded 行（decode 1 active seq，
+  rows1-15 ctx=0→softmax 0/0=nan，与 isolated 测试一致）→ **active 行正确性未确认**。下步：只取 active 行
+  （row 0）单层对拍 vLLM decode dump，查 block_table→consolidated-pool-offset 的 KV 读是否正确（早先 isolated
+  synthetic-metadata + 14:12 pool 的 active 行 non-nan 27.6，证 KV-read 机制本身通；此步查 live 真 metadata）。
+- **遗留 B（攻坚 4，co-tenancy 稳定性）**：第 2 请求 8001 EngineCore 崩在 vLLM `c10d ProcessGroupHCCL::
+  broadcast`（`_pypto_full_forward` 的 `tp_group.broadcast(next_hidden,src=0)`）—— co-resident pypto sidecar
+  device stream 与 vLLM HCCL broadcast 同卡时序冲突（sidecar teardown 507018 → force_reset card 8）。下步：
+  sidecar 每 step 后 device 完全 sync/idle 再返回（让 vLLM broadcast 时 pypto 卡 idle），或改 handoff 时序。
+  停机：sidecar SIGTERM（clean，force_reset 自清卡）；8001 crash 后 restart 回 vanilla-fallback serving。
+
 ## 环境 / 铁律
 - 三件套：`source /usr/local/Ascend/cann/set_env.sh && source WS/activate.sh && export PTO_ISA_ROOT=WS/pto-isa`。
 - device 跑 sidecar：`SIMPLER_COMM_NO_HCCL=1 WD_RING_HEAP=1073741824 PTO2_RING_TASK_WINDOW=131072
