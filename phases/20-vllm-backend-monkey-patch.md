@@ -397,3 +397,10 @@ boot log：`GPU KV cache size: 162,944 tokens`（= 1273 blocks × 128 block_size
   贵）。两者都须 device 迭代验证。**这是 G5b 的真实工程量核心，phase-24 级 dedicated session。**
 - 下 session 先做的事：读 KVPOOL backend copy 逻辑 + vLLM-ascend step3p5 kv_cache spec，确认 exact
   head 数/dtype/paged 结构 → 定 (a) vs (b) → 实现 + token-exact 验证。
+
+**ground-truth 确认（2026-07-11，读 KVPOOL backend copy 代码）**：`patched()` 存
+`"shape": list(k.shape)` + `nbytes = k.numel()*k.element_size()`。map 记录 `shape=[166887424]` == `nbytes`
+→ **element_size=1**，即 vLLM-ascend 把每层 per-rank KV 存成**扁平 int8 字节 buffer**（166887424 B/layer）。
+per-slot = 166887424/162944 = **1024 B** = heads×128×itemsize → 8 int8 heads 或 4 bf16 heads/rank。
+→ **mismatch 已从导出代码坐实（非仅算术）**：worker 1-head/rank ≠ vLLM 4/8-head/rank。仍须读
+vLLM-ascend kv_cache spec 定 logical dtype（int8 native 还是 bf16-as-int8-bytes）+ paged 维序，才能选 (a)/(b)。
