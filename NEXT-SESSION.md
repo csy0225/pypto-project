@@ -30,6 +30,15 @@ vllm_golden_dumps_are_prefill_not_decode。
 "中国的首都，也是世界上人口"。**注意**：上个 session 的 `_client_wd_sweep.py` 只用**合成随机 rope** 证「active
 行无 nan」，**不是正确性**。真 rope/KV/权重下数值错。
 
+**⚠ 关键量化口径（token-exact 前必读）**：当前集成用的是 **W8A8 checkpoint 但走 BF16-dequant 路径** ——
+sidecar `_load_real_weights` 把 W8A8 权重在 loader 里**反量化成 BF16** 再喂 kernel（`select_moe_block` 无
+`w8a8_native` 参数、torch-ref `routed_w8a8_dynamic=False`）。而 vLLM 8000/8001 是 **INT8-native W8A8** 计算。
+→ 两侧存在固有 INT8↔BF16 数值差（历史 dump 对比 ~0.9995，很接近但非 bit-identical），**可能影响个别 token 的
+greedy 选择 → 未必能真 token-exact**。策略二选一：(A) 接受 BF16-dequant，判据放宽到 top-1 ≥95% / cos≥0.999
+（Phase 21 口径），不强求逐 token 全等；(B) 打通 gap-5 的 **INT8-native in-kernel** 路径（memory
+`gap5_int8_cube_fractal_32_partial_tile` 等，尚未 device-work）做真 bit-level 对齐。建议先按 (A) 收尾拿到
+「数值基本对齐 + 连贯生成」，(B) 作为后续精度攻坚。
+
 ## 攻坚顺序（每步 device 可验证）
 1. **拿 decode-step golden**：现有 vLLM dump 是 18-tok prefill（memory `vllm_golden_dumps_are_prefill_not_decode`），
    BATCH=16 decode kernel 吃不下。需在 8000 或独立 vLLM eager 跑一个 decode-step dump（1 tok，batch≤16，每层
