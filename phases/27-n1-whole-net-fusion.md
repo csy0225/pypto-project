@@ -307,3 +307,21 @@ KV/weight 零拷贝导入），**不照搬其 Option-C 架构**；**继续支持
 4. 之后：KV import（同 import_ipc_all，真 KV）+ socket serve（复用 G5a 协议 + `pypto_whole_decode_backend.py`）+ live A/B vs 8000。
 
 **运行机**：**0162**（import_ipc 运行时改动在 0162 pypto 工作树未提交；建议 commit 进 csy0225/pypto stepfun/develop）。N=1 用 worktree `$WS/pypto-lib-n1`（branch n1-live），`PYTHONPATH=$WS/pypto/python:$WS/pypto-lib-n1`。co-tenancy 时 sidecar 设 `SIMPLER_COMM_NO_HCCL=1 WD_RING_HEAP=1073741824`。⚠ 0162 有 G5b 平行 thread 在 stepfun/develop 主 checkout 工作——用独立 worktree 不冲突，device 跑避免同卡并发。
+
+### Step-3 device 落地（2026-07-11 三续）—— N=1 real-weight import_ipc DEVICE-VALIDATED（核心复用坐实）
+
+**做了什么**：`tests/step3p5/_stage_whole_faithful_real_ipc.py`（pypto-lib commit `6d09e47`）+
+`pypto_weight_ipc.import_weights_all/build_stacked_weight`（`b2cf225`）—— N=1 `whole_decode_faithful_real`
+真实 W8A8 权重经**借用的 import_ipc**（8 exporter 各 hold 一 rank 47GB 池 → worker `compiled.prepare()`
+→ `import_ipc_all` → `build_stacked_weight` 零拷贝喂）。在 **0234 cards 0-7（8 卡空闲）** 跑。
+
+**device 验证（run #1）—— 核心复用全部坐实 ✅**：
+- 8 exporter 全部 export 真实 47.46 GiB 池 + key（`pool_base=0x12c1c0000000`，与 phase-16 probe2 VA 一致）。
+- `whole_decode_faithful_real` compile OK（`WholeDecodeFaithfulReal_20260711_142935`）。
+- **`import_ipc_all` 返回 8 个 real-weight peer_bases**（`0x12c1c0000000 ×8`）—— **N=1 真实权重零拷贝 IPC 导入 device 打通**（解 self-load 752GB OOM）。
+- built 42 args（权重全 DeviceTensor via IPC）。
+- ⛔ `rt.run` 报 `TypeError: host torch.Tensor 必须 .share_memory_() 且在 prepare() 前分配`（DistributedWorker 契约，G-series `sh[...].share_memory_()` 同款）——**小契约错，非机制错**。
+
+**修复**：dummy host 张量（current_hidden/KV/rope/gate_r/outputs/logits）改为 **prepare() 前 `.share_memory_()` 分配**；VOCAB_LOCAL 从 map json 读（prepare 前）。run #2 验证中。
+
+**意义**：借用 import_ipc（不照搬 Option-C）让 N=1 单 program 真实权重 device 可跑——Task② 的 device 机制坐实。剩：run #2 出 finite logits → 真 KV import（同 import_ipc_all）+ socket serve（复用 G5a backend）→ live A/B。co-resident live A/B 仍 gate 在 gap-5 HBM（0234 空闲卡跑 standalone 无此限）。
