@@ -3,7 +3,24 @@
 pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状态
 变化都更新这里**。历史细节查 [`archive/`](archive/)。
 
-**最后更新**：2026-07-11
+**最后更新**：2026-07-12
+
+> **2026-07-12 (续⁴) G5b live A/B 二攻：HCCL broadcast timeout ✅ FIXED，遗留缩到 sidecar 间歇 507018 [攻坚 4]**：
+> 承续³。**遗留 A（数值）基本排除**：真权重+真 KV+合成 metadata 单层隔离 sweep（ctx=10/300/4090、block=0/5000/10、
+> 多 block）**active 行(row0) 全部 FINITE 无 nan**（27~161）；sidecar 报的「Lx nan」是 padded 行（decode 1 active
+> seq，其余 15 行 ctx=0→softmax 0/0），vLLM/容器后端只取 active 行。→ 数值非 blocker（复现器 `_client_wd_sweep.py`）。
+> **遗留 B 精确定位为两个 crash mode，其一已修**：
+> ① **HCCL broadcast timeout（一攻的 crash）✅ FIXED**：`HcclBroadcast error code 9` = rank-0 在 sidecar 里跑
+> 45 层（被每步 MoE 权重 copy 拖慢，分钟级）而 rank1-7 阻塞 `tp_group.broadcast` 等 rank-0，超 HCCL 默认 120s
+> connect timeout。修法：`/logs/start_8001_full.sh` 加 `HCCL_CONNECT_TIMEOUT/EXEC_TIMEOUT/EVENT_TIMEOUT=3600`
+> （备份 .bak-g5b）→ 二攻 broadcast 不再是 crash 点。
+> ② **sidecar 间歇 507018（二攻新暴露的真遗留）**：timeout 修好后 sidecar 跑更远 —— **全 45 层 forward 至少完整
+> 完成一次（log 到 L44）**，但**后续 forward 命中 `507018`（chip dev=8 run failed，kernel runtime device fault）**→
+> 关 socket → vLLM `RuntimeError: 'sidecar closed connection (header)'` HTTP 500。非单一确定层（跑完 45 层才 fault），
+> 疑似多 forward 复用 prepared rt 的资源累积（ring heap？）或 co-tenancy 下间歇 device fault。**下步 = 层/step
+> bisect + ring-heap/co-tenancy 调查**（每轮 device ~15min）。
+> **系统状态**：sidecar SIGTERM clean（507018 teardown→force_reset 自清卡）；8001 restart 回 vanilla-fallback serving；
+> 8000 oracle 全程 200 未受影响。fix + 复现器在 0162；文档 push。
 
 > **2026-07-11 (续³) G5b live A/B 首次拉起：全 45 层真权重 pypto 路径 live 跑通(no-crash dispatch) + 两个精确遗留 [NEXT-SESSION 攻坚 4 首攻]**：
 > restart 8001 mode=full（新容器后端 G5b metadata 版）→ health=200 → 起**真权重全 45 层** sidecar

@@ -96,6 +96,18 @@ listening，无 OOM、无 prepare/dispatch 507018**；送 prompt → decode step
   sidecar 每 step 后 device 完全 sync/idle 再返回（让 vLLM broadcast 时 pypto 卡 idle），或改 handoff 时序。
   停机：sidecar SIGTERM（clean，force_reset 自清卡）；8001 crash 后 restart 回 vanilla-fallback serving。
 
+**2026-07-12(续⁴) live A/B 二攻结果**：遗留 A（数值）**基本排除** —— 真权重+真 KV+合成 metadata 单层
+sweep（ctx=10/300/4090、block=0/5000/10、多 block）active 行(row0) **全 FINITE**（`_client_wd_sweep.py`）；
+「Lx nan」是 padded 行。遗留 B 拆成两个 crash mode：
+- **① HCCL broadcast timeout ✅ FIXED**：`HcclBroadcast error 9` = rank-0 在 sidecar 跑 45 层（每步 MoE 权重
+  copy 拖慢）而 rank1-7 阻塞 broadcast 超 120s。修法：`/logs/start_8001_full.sh` 加
+  `HCCL_CONNECT_TIMEOUT/EXEC_TIMEOUT/EVENT_TIMEOUT=3600`（备份 .bak-g5b）→ broadcast 不再 crash。
+- **② sidecar 间歇 507018（当前真遗留，= 下步主攻）**：timeout 修好后**全 45 层 forward 至少完整跑完一次
+  （log 到 L44）**，但后续 forward 命中 `507018`（chip dev=8 run failed）→ 关 socket → vLLM 500。非单一确定
+  层（跑完 45 层才 fault）。**下步**：(a) `--layers` 逐段缩小 + 多 forward（`--steps N`）复现，bisect 是哪
+  段/第几个 forward 触发；(b) 查多 forward 复用 prepared rt 的资源累积（`WD_RING_HEAP`/ring 是否耗尽）；
+  (c) 若确认是每步 MoE 权重 copy 相关，则做常驻权重（perf，与 G2 weight-IPC 重叠）顺带解。fix + 复现器在 0162。
+
 ## 环境 / 铁律
 - 三件套：`source /usr/local/Ascend/cann/set_env.sh && source WS/activate.sh && export PTO_ISA_ROOT=WS/pto-isa`。
 - device 跑 sidecar：`SIMPLER_COMM_NO_HCCL=1 WD_RING_HEAP=1073741824 PTO2_RING_TASK_WINDOW=131072
