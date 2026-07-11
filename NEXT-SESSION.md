@@ -30,14 +30,30 @@ vllm_golden_dumps_are_prefill_not_decode。
 "中国的首都，也是世界上人口"。**注意**：上个 session 的 `_client_wd_sweep.py` 只用**合成随机 rope** 证「active
 行无 nan」，**不是正确性**。真 rope/KV/权重下数值错。
 
-**⚠ 关键量化口径（token-exact 前必读）**：当前集成用的是 **W8A8 checkpoint 但走 BF16-dequant 路径** ——
-sidecar `_load_real_weights` 把 W8A8 权重在 loader 里**反量化成 BF16** 再喂 kernel（`select_moe_block` 无
-`w8a8_native` 参数、torch-ref `routed_w8a8_dynamic=False`）。而 vLLM 8000/8001 是 **INT8-native W8A8** 计算。
-→ 两侧存在固有 INT8↔BF16 数值差（历史 dump 对比 ~0.9995，很接近但非 bit-identical），**可能影响个别 token 的
-greedy 选择 → 未必能真 token-exact**。策略二选一：(A) 接受 BF16-dequant，判据放宽到 top-1 ≥95% / cos≥0.999
-（Phase 21 口径），不强求逐 token 全等；(B) 打通 gap-5 的 **INT8-native in-kernel** 路径（memory
-`gap5_int8_cube_fractal_32_partial_tile` 等，尚未 device-work）做真 bit-level 对齐。建议先按 (A) 收尾拿到
-「数值基本对齐 + 连贯生成」，(B) 作为后续精度攻坚。
+**⚠ 关键量化口径（token-exact 前必读 — 方向已纠正 2026-07-12）**：当前 whole-decode 集成用的是
+**W8A8 checkpoint 但走 BF16-dequant 路径**（`_load_real_weights` 把 W8A8 反量化成 BF16 喂 kernel、
+`select_moe_block(layer_idx)` 无 `w8a8_native`、torch-ref `routed_w8a8_dynamic=False`），而 vLLM 8000/8001 是
+**INT8-native W8A8**。**这是错方向** —— BF16-dequant 与 INT8 有固有数值差（~0.9995，非 bit-identical），
+token-exact 不可靠。**正确方向 = 用 INT8-native 路径**（与 vLLM 同为 INT8 计算）。
+
+**INT8-native 之前已实现过（别从零写）**：`EpTpMoEW8A8` / `select_moe_block(w8a8_native=True)` + dispatch-side
+INT8 quant 的 WIP 在 **`git stash@{0}: gap5-wip+splitincore-20260709`**（当前 tree 已 grep 不到 = 被 stash 出去）。
+相关 memory：`gap5_int8_math_correct_pivot_dispatch_side`（INT8 数学 0.9998 cos 正确）、
+`gap5_int8_cube_fractal_32_partial_tile`（唯一剩余 84% 失败根因 = INT8 cube fractal=32 行 partial-tile，
+fix = zero A-operand padding 行）、`gap5_two_class_refactor_fixes_bf16_distcompile`（两 class 结构避免 span 冲突）、
+`upgrade_pypto_originmain_breaks_moe_splitincoreorch`（升级栈的 SplitIncoreOrch 回归）。
+
+**INT8-native 实现任务（下个 session 加入攻坚顺序，优先于/并行 rope 对拍）**：
+1. `git stash apply stash@{0}`（gap5-wip+splitincore）→ 核对与当前 stepfun/develop（47c260e3 基线 + G5b 795dc474）
+   的冲突，恢复 `EpTpMoEW8A8` + `select_moe_block(w8a8_native=True)` + dispatch-side INT8 quant。
+2. 解 gap-5 最后 blocker：INT8 cube fractal=32 行 partial-tile miscompile（`gap5_int8_cube_fractal_32_partial_tile`
+   fix = 对 A-operand（x0_i8/h0_i8）的 padding 行 zero-fill，使 garbage→0）；device 对拍 vLLM INT8 dump。
+3. 把 whole-decode sidecar 切到 INT8-native：`_stage_whole_decode_run.py` 的 `select_moe_block(li)` →
+   `select_moe_block(li, w8a8_native=True)`，`_load_real_weights` 保留 INT8 权重 + scale（不 dequant），
+   torch-ref `routed_w8a8_dynamic=True`。KV 仍 BF16（vLLM step3p5 只量化 weights 非 KV）。
+4. 再跑 live A/B → 与 vLLM INT8 token-exact。
+
+（若 INT8-native 短期打不通，可临时用 BF16-dequant 拿「连贯生成 + top-1≥95%」的中间结果，但 **INT8-native 才是准出口径**。）
 
 ## 攻坚顺序（每步 device 可验证）
 1. **拿 decode-step golden**：现有 vLLM dump 是 18-tok prefill（memory `vllm_golden_dumps_are_prefill_not_decode`），
