@@ -1,5 +1,18 @@
 # 下个 session 集中攻关 —— G5b 最后一关：pypto+vLLM 端到端 token-exact（数值对齐）
 
+> **⭐⭐ 2026-07-12(续⁹) ROOT CAUSE 已找到并 device 验证修复概念（见 STATUS 顶部 续⁹ + memory
+> `g5b_swa_multientry_kv_nan_root_cause`）**：token-garbage **不是** rope/KV/SWA/MoE/INT8 —— 全部 kernel 已证正确
+> （offline decode-step golden：full/swa/MoE 逐层 out-row0 vs vLLM golden 全 pass 1.0）。**真根因 = 未用的 decode
+> batch 行 seq_len=0**（whole-decode 编译 BATCH=16，单序列 decode 只 1 active 行，其余 15 行 seq_len=0 →
+> flash-attn `ctx_blocks=0` → Stage4 读未初始化 scratch → NaN → 跨层污染 active row0）。live 触发点 =
+> `vllm_monkey_patch.py:303 _wd_pad_i32` seq_lens pad 成 0。**修复已验证**：未用行 pad seq_len=1 + 非冲突 slot →
+> chain L0-L4 全 pass 1.0。**本 session 只剩**：(1) production 修复 = **kernel guard**（attention_full/swa 对
+> `fa_ctx_blocks==0` 输出 0，处理真 vLLM 空槽、不写 KV；推荐稳健版）**或** live client/sidecar/容器后端 pad
+> seq_len=1（轻量版，但需非冲突 dummy slot 避免污染 vLLM KV 池）；(2) restart 8001 mode=full + sidecar +
+> 3-prompt live A/B token-exact。复现器：`_stage_whole_decode_run.py --golden-decode-pos 17 [--golden-fill-batch]
+> --layers 0,1,...`（cards 8-15，`--golden-fill-batch`=无 pad 行对照组）。**下面 code block 的「唯一剩余=数值」
+> 已被本条取代 —— 数值路径已证正确，只需修 seq_len=0 pad-row + live A/B。**
+
 > 新 session 直接把下面 code block 当第一条消息粘贴。自包含。生成于 2026-07-12（续⁵）。
 > **上个 session 攻破 G5b 全部结构性 blocker**：const-fold 证伪、socket 真 metadata 协议、import_ipc 真 KV 零拷贝、
 > **co-tenancy crash 彻底解决（file-based broadcast）** → 整条 live 45 层 single-handoff **HTTP 200 稳定跑通**。

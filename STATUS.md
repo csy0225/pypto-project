@@ -5,6 +5,21 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 **最后更新**：2026-07-12
 
+> **2026-07-12 (续⁹) ⭐⭐ G5b token-garbage ROOT CAUSE 定论 + 修复已验证：seq_len=0 未用 batch 行 → NaN 污染 active row（非 SWA/MoE kernel bug）**：
+> 承续⁶补。用 offline decode-step golden（prefill dump pos-17 逐 rank 真 KV + 真 per-layer rope + 真 W8A8 BF16-dequant，
+> `_stage_whole_decode_run.py --golden-decode-pos 17`，cards 8-15）逐层 out-row0 对拍 vLLM golden，**决定性排除 SWA/MoE kernel bug**：
+> - **L1-alone**（直接喂 golden layer_input[1] row0）→ **pass_rate=1.0 max|diff|=0.005** ⇒ SWA kernel 本身正确。
+> - **`--golden-fill-batch`**（16 行全填 active token，无 seq_len=0 pad 行）跑 chain → **L0-L4 全 pass 1.0**（full/swa/MoE 全对，真 KV+rope+W8A8）。
+> **⇒ 所有 kernel 正确；真根因 = 未用的 decode batch 行 seq_len=0**：whole-decode 编译成 BATCH=16 但单序列 decode 只 1 active 行，
+> 其余 15 行 seq_len=0 → flash-attn `fa_ctx_blocks=ceil(0/128)=0` → Stage1-3 空循环不写、Stage4 读**未初始化 scratch** →
+> `ctx=oi/li=NaN` → 该行 attn_out=NaN → 传入下一层 input → **跨层污染 active row0** → token garbage。
+> **live 触发点** = `vllm_monkey_patch.py:303 _wd_pad_i32` 把 seq_lens pad 成 **0**。**为何从未发现** = swa ST（`test_decode_layer_swa_dense_st.py:288`）用 `seq_lens=torch.ones` 全 ctx=1 从不触发。
+> **修复已 device 验证**：未用行 pad 成 **seq_len=1 + 非冲突 dummy slot（N+1+i，被 row0 valid_len 屏蔽）**→ chain **L0-L4 全 pass 1.0**（无 NaN）。
+> **已排除**：rope/qk_norm/head-gate/KV-layout（DeepSeek 对齐）/full-attn/SWA/MoE kernel/合成 rope。
+> **下步（task 8）**：production 修复 —— 稳健版 kernel guard（attention_full/swa 对 `fa_ctx_blocks==0` 输出 0）或轻量版 live client/sidecar/容器后端 pad seq_len=1；再 restart 8001 mode=full + sidecar + 3-prompt live A/B token-exact
+> （现 whole-decode BF16-dequant ~0.9995 vs INT8 vLLM；INT8-native 严格出口在 N=1 track / gap-5，见续⁷/续⁸）。
+> memory `g5b_swa_multientry_kv_nan_root_cause`（已修正为 seq_len=0 pad-row 结论）。机器：8001 停以腾 cards 8-15；8000 oracle cards 0-7 全程 200。
+
 > **2026-07-12 (续⁸) ⭐⭐ A5 达成：whole_decode_faithful_real 整网 INT8-native W8A8 编译通过（TP=8）[Phase 27 / NEXT-SESSION-N-1]**：
 > 承续⁷（moe.py standalone INT8 已过）。本轮把 INT8-native W8A8 传进 **N=1 整网程序** `whole_decode_faithful_real`（`decode_layer.py`，与 moe.py 解耦、自带 inlined 副本）。
 > **手法（agent 三次 600s stall → 改直接编辑）**：range-scoped transform 脚本 `tools/step3p5/_a5_int8_transform.py` 只改 base `_build_whole_decode_faithful_program` 内的 inlined MoE（其余 10+ 程序副本不动）：`_expert_routed`+`expert_routed_step`+`chip_orch` 签名/调用+`host_orch` decls+**全 42 个 per-layer chip_orch 调用**全部穿 INT8+scale（每处 exact-match 断言）。**用 in-kernel per-token 输入量化（照抄 DeepSeek cast 链 FP32→INT32 rint→FP16 round→INT8 trunc）**，不动整网 push-based dispatch（数值 == dispatch-side，见 `gap5_quant_after_dispatch_equiv`）。改 `_gen_faithful_real.py`（emit INT8 `moe_w_*_r` + FP32 `_scale` decls + interleaved chip_orch call）→ 删旧 real builder → 重生成 `decode_layer.py`。
