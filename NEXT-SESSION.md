@@ -1,4 +1,87 @@
-# 下个 session 集中攻关 —— G5b：把 vLLM 真 KV（bf16 纯 reshape）接进 whole-decode sidecar → token-exact live A/B
+# 下个 session 集中攻关 —— G5b 收尾：swa_moe const-fold 级联 + 真 metadata + token-exact live A/B
+
+> 新 session 直接把下面 code block 当第一条消息粘贴。自包含。生成于 2026-07-11（续）。
+> **本 session 已攻破 G5b 最硬 blocker：KV/weight-IPC 零拷贝导入（import_ipc）device 打通（纯 Python，无需重编 C++）。**
+> 见 memory `g5b_import_ipc_facade_missing`(RESOLVED) + `g5b_kv_bridge_not_pure_reshape` + 本仓 `blockers.md`。
+
+---
+
+## ⭐⭐ 通用可复用特性：device-IPC 零拷贝导入 `import_ipc`（KV + weight 都用；凡需把 vLLM 已驻显存零拷贝喂进 pypto worker 的 session 都要它）
+
+**背景**：pypto runtime C++ `Orchestrator` **没有** `import_ipc` facade（`DistributedWorker.import_ipc`
+是孤儿 wrapper，调会 `AttributeError: 'Orchestrator' object has no attribute 'import_ipc'`；worker_bind.h 只 bind
+malloc/copy_to/remote_*；current + pre-upgrade tag 都没有）。所以 `pypto_kv_ipc.py`/`pypto_weight_ipc.py` 里
+`rt.import_ipc(...)` 的写法**在当前栈上不能用**（aspirational 未验证）。
+
+**本 session 解法（纯 Python，无需重编 C++，已 device 验证）**：chip child 经 **Python loop**
+（`pypto/runtime/python/simpler/worker.py::_run_chip_main_loop`）消费 control op，`broadcast_control_all` 对
+Python 可见 → 新增 control-op **`_CTRL_IMPORT_IPC = 16`**：
+- `simpler/worker.py`：child `_handle_ctrl_import_ipc(buf, device_id)`（读 staged payload
+  `<H rlen> reply_name <I count> count*(<I dev, 256B key)`，按 device_id 取本 rank key，ctypes
+  `aclrtIpcMemImportByKey(&va, key, 0x1=ENABLE_PEER_ACCESS)` —— 导出侧用 `0x1=DISABLE_PID_VALIDATION` 故**无需
+  SetImportPid**，VA 经 **reply-shm** 回传因 `ControlResult` 无 value 字段）+ dispatch elif + host
+  `Worker.import_ipc_all(device_key_map:{dev:256B key})->{dev:va}`（建 reply-shm+payload→broadcast→读 reply-shm）。
+- `pypto/python/pypto/runtime/distributed_runner.py`：`DistributedWorker.import_ipc_all` 委托 `self._w`(simpler Worker)。
+- **用法**：`vas = dworker.import_ipc_all({dev_offset+r: key_bytes_r})` → 每 rank peer VA → `DeviceTensor(peer_base=va,...)`
+  零拷贝喂 rt.run。**weight IPC 同理**（`pypto_weight_ipc.py` 的 47GiB 权重驻留把 `rt.import_ipc`→`import_ipc_all` 即可）。
+- **device 实证**：dense L0 import vLLM KV（`peer_bases=[0x12c1c0000000 ×8]`，与 phase-16 probe2 VA 一致）+ attention
+  读真 KV → `next_hidden 30.875` 非 nan、rc=0、co-resident live 8001。
+- ⚠ **runtime 改动未提交**（0162 工作树）：`simpler/worker.py` + `distributed_runner.py`；备份
+  `workspace/g5b_simpler_worker_import_ipc_20260711_144753.py` / `g5b_distributed_runner_import_ipc_*` /
+  `g5b_worker_batchimport_*`。**重装/重编 runtime 后要 re-apply**；建议 commit 进 csy0225/**pypto**(非 pypto-lib) stepfun/develop。
+
+---
+
+```
+继续 pypto+vLLM 集成，收尾 G5b：让 8001(pypto mode=full) 对 8000(vanilla) token-exact。全部在 0162
+（ssh 0162），repo /data/chensiyu/hw_project/pypto/workspace/pypto-lib 分支 stepfun/develop。动手前读 skill
+pypto-project/.claude/skills/pypto-dev-constraints/SKILL.md + memory g5b_import_ipc_facade_missing +
+g5b_kv_bridge_not_pure_reshape + 本文件顶部 ⭐⭐「可复用特性 import_ipc」。
+
+## ✅ 别重做（本 session device 验证）
+- **import_ipc 已解**（纯 Python `_CTRL_IMPORT_IPC=16`，无需重编 C++）—— 详见顶部 ⭐⭐ 段。零拷贝导入 vLLM 显存
+  （KV 或 weight）用 `dworker.import_ipc_all({dev:key})->{dev:va}`。改动未提交，重编 runtime 后要 re-apply。
+- **KV bridge 不是纯 reshape**（纠正旧 memory）：MAX_SEQ_DEFAULT=nb×bs 撑爆 flash-attn scratch(667GB)。正确 =
+  `KV_CACHE_ROWS_DYN=651904/652032`（=per-K nbytes/2/128，随 boot 变，worker 从 map 自动算）+ 逐层 feed
+  `layer_cache_base=0`（attention_full.py:220 / attention_swa.py:228 已改 0）。dense L0 已 device 验证。
+- **co-tenancy HBM**：8001 util 0.5 占 47GB/卡（util 0.3 起不来 "No available memory"）；sidecar 必设
+  `WD_RING_HEAP=1073741824`(1GB) 才不 OOM（默认 4GB ring 撞 2.57GB static arena 分配失败）。
+
+## 攻坚顺序（每步 device 可验证）
+1. **swa_moe const-fold 级联**（compile-only，先做，不需 live 8001）：standalone `_build_tp_attention_swa_program`
+   编 swa-MoE 报 `tile.* shape must be ConstInt` 级联 `attention_swa.py:480`(Sub)→`:573`(Var)→更多。根因 = fn-local
+   `SWA_Q_PAD_ALIGNED=32`(L397)/`SWA_WIN_BLOCKS`(L500) 在 moe-ctx 被 tracer 当 Var/Sub 不折叠。⚠ 两条死路已试：
+   (a) 字面量 `[20,HEAD_DIM]` 只推进到 :573；(b) 提 module-const 报 `Undefined variable`（tracer 不解析新 module const）。
+   → 需 skill §C DSV4-style 系统重写（对照 models/deepseek/v4）；full-attn standalone 可能同病。目标
+   `--smoke --layers 3`(swa-moe)+`--layers 5`(full-moe) COMPILE PASS。
+2. **socket 带真 metadata**：`--serve` + 容器后端随 hidden 发 forward_context 的 block_table/slot_mapping/seq_lens，
+   sidecar 每 step copy 进 sh（现是 dummy）。KV 已零拷贝进 sh（import_ipc_all）。
+3. **单层 paged-index 数值对拍** vLLM eager decode dump（须真 metadata）。
+4. **live A/B**：8001 mode=full(PYPTO_WHOLE_DECODE=1 + PYPTO_KVPOOL=1 + sidecar --kv-ipc-dir,
+   SIMPLER_COMM_NO_HCCL=1) → 3-prompt 对 8000 token-exact；swiglu(L43/L44) 精度在此定论。
+
+## 环境 / 铁律
+- 三件套：`source /usr/local/Ascend/cann/set_env.sh && source WS/activate.sh && export PTO_ISA_ROOT=WS/pto-isa`。
+- device 跑 sidecar：`SIMPLER_COMM_NO_HCCL=1 WD_RING_HEAP=1073741824 PTO2_RING_TASK_WINDOW=131072
+  PTO2_RING_DEP_POOL=131072 python _stage_whole_decode_run.py --worker --tp 8 --dev-offset 8 -p a2a3
+  --kv-ipc-dir <dir> ...`（cards 8-15；必须 `--worker` 才走 import_ipc 路径）。
+- KV key/map 在容器 /logs（`pypto_kvpool.{key,map}.rank0..7`），`nerdctl exec vllm-8001 cat` 拷到 host dir
+  （8001 必须活着）。8000 oracle cards 0-7 别碰；launch 前 `pgrep [c]hip_process` 空 + `rm /dev/shm/torch_*`。
+- 停 8001：`nerdctl exec vllm-8001 bash -lc "pkill -9 -f '[V]LLM::EngineCore'"`；sidecar SIGTERM(非-9)；禁 `npu-smi set -t reset`。
+  起 8001 util0.5：`bash /logs/start_8001_full.sh`。push：HTTP/1.1 + PAT /data/chensiyu/secrets/github.env（本仓在本地 box）。
+
+## 机器状态（session 结束时）
+- 8001 mode=full(util0.5) 仍在 cards 8-15、KV export 活着（容器 /logs + host /tmp/g5b_kvtest）。8000 oracle cards 0-7。
+- attention_{full,swa}.py 含 G5b `layer_cache_base=0`（swa 已恢复 documented-blocker 原状，无 partial 改）；
+  worker/importer/runtime 改动在 0162 工作树 + 备份 g5b_*_20260711_144753。
+
+先读 skill/memory + ssh 0162 核对（8001 活否、/tmp/g5b_kvtest 在否），从「攻坚顺序 1」(swa 级联) 开始。
+可起 team 但 lead 直接跑 device，盯增量别让 agent 空转。
+```
+
+---
+
+# （已被上面取代 / 历史）G5b：把 vLLM 真 KV（bf16 纯 reshape）接进 whole-decode sidecar → token-exact live A/B
 
 > 新 session 直接把下面 code block 当第一条消息粘贴。自包含。
 > 生成于 2026-07-11。承接：G4 co-tenancy ✅、G2 sidecar+wiring ✅、G5a live plumbing ✅（8001 mode=full 经
