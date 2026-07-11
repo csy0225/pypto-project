@@ -463,3 +463,20 @@ vLLM int8 KV 用 **static per-channel C8 scales**（layer 属性，来自 calibr
 仿 KVPOOL 加一个 `PYPTO_KVSCALE` backend 导出 `layer._c8_*`）。→ int8-KV bridge 全部输入齐：
 (1) KV pool export（KVPOOL，已验证）；(2) C8 scale export（小 new backend，下 session 写）；(3) worker import 两者 +
 dequant + reshape + MAX_SEQ ABI。**G5b offline 侧全 spec 完成，剩 = device 实现 + token-exact 验证（专门 session）。**
+
+### ⭐⭐ FINAL device-verified 定论（2026-07-11，pypto_kvscale_backend probe on live 8001）—— KV 是 bf16，桥接=纯 reshape（int8/C8 分析作废）
+
+跑 `pypto_kvscale_backend`（compute_logits hook 扫所有 module）on live 8001，dump `model.layers.0.self_attn.attn::Attention`：
+- **`kv_cache.dtype = torch.bfloat16`**、`kv_cache_dtype = auto`、`_k_scale_float = _v_scale_float = 1.0`（identity 未量化）、
+  `calculate_kv_scales = False`、`num_kv_heads = 1`（`qkv_proj.num_kv_head_replicas=1`, `total_num_kv_heads=8` → shard 1/rank）。
+- → **vLLM KV = bf16, 1 head/rank，与 worker（bf16, KV_HEADS_LOCAL=1）dtype + head 全对齐**。
+- 上文"int8 + C8 scales + 需 dequant/scale export"**全部作废**：int8 是 KVPOOL 的 `torch.zeros(total, int8)` **字节容器**误导；
+  bf16 + nb×bs=651904 → 651904×128×2 = 166887424 B/K，与 map nbytes 一致（num_blocks=5093, bs=128）。
+- **✅ G5b KV bridge = 纯 layout reshape（无 dequant/scale/TP 重设计）**：import vLLM KV `[2,nb,bs,1,128]` bf16 →
+  拆 kv[0]/kv[1]、drop singleton head、flatten → worker `[1, nb×bs, 128]` bf16；`MAX_SEQ_DEFAULT = nb×bs`（随 boot 的
+  gpu-mem-util 变，用 KvIpcMap 从 map nbytes/(128×2) 算）。**这是最可做的情形。**
+- **G5b 剩（收敛到纯装配）**：(1) KVPOOL export（✅）；(2) KvIpcMap 建 bf16 `[1,nb×bs,128]` per-rank DeviceTensor（importer 已写，
+  改 dtype=bf16 + shape）；(3) StackedDeviceTensor per-rank feed（✅ 机制）；(4) MAX_SEQ_DEFAULT=nb×bs 重编；(5) socket 带
+  block_table/slot_mapping/seq_lens；(6) sidecar 45 层 + token-exact A/B vs 8000。**无 int8/scale 复杂度**。**注**：仍须复核
+  worker attention 的 paged 索引（block_table/slot_mapping）与 vLLM 语义一致（worker 现用 [MAX_SEQ,128] flat + block_table，
+  vLLM 用 [nb,bs,1,128]；flatten nb×bs 后 block_table 索引应等价，device 验证确认）。
