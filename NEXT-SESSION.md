@@ -1,8 +1,79 @@
-# 下一阶段启动提示词 —— G2-G5 live wiring（tasks 5-7）集中攻克
+# 下个 session 集中攻关 —— G5b：把 vLLM 真 KV（bf16 纯 reshape）接进 whole-decode sidecar → token-exact live A/B
 
-> 新 session 直接把下面 code block 作为第一条消息粘贴即可。自包含，不依赖记忆。
-> 生成于 2026-07-11，承接本 session G1 offline 全线打通（tasks 1-4 ✅）。
-> 详细里程碑见 `archive/milestones-2026-Q2.md` 2026-07-10 (续²~续⁵)。
+> 新 session 直接把下面 code block 当第一条消息粘贴。自包含。
+> 生成于 2026-07-11。承接：G4 co-tenancy ✅、G2 sidecar+wiring ✅、G5a live plumbing ✅（8001 mode=full 经
+> sidecar 出 token，device 验证）、G3 KV export ✅ + importer 已写；**只剩 G5b：真 KV 接进去出 token-exact**。
+> 关键 device-verified 结论 + 两个已推翻的错误判断见 memory `g5b_kv_is_bf16_not_int8` + 本仓
+> `phases/20-vllm-backend-monkey-patch.md` §"FINAL device-verified 定论"。下面「历史 tasks 1-5」是背景参考。
+
+```
+继续 pypto+vLLM 集成，集中攻关 G5b：把 vLLM 的真 KV 接进 pypto whole-decode sidecar，跑完整 45 层，
+8001(pypto mode=full) 对 8000(vanilla) token-exact。全部在 0162（ssh 0162），repo
+/data/chensiyu/hw_project/pypto/workspace/pypto-lib 分支 stepfun/develop。动手前读 skill
+pypto-project/.claude/skills/pypto-dev-constraints/SKILL.md + memory g5b_kv_is_bf16_not_int8。
+
+## 别重做（已 device 验证，见 pypto-project STATUS/phases/20）
+- G4 co-tenancy 已解：simpler a2a3 comm_hccl.cpp env-gate `SIMPLER_COMM_NO_HCCL=1`（commit 878f3742，
+  已重编 a2a3 runtime）→ pypto worker 与 vLLM 同卡共存 rc=0。sidecar 进程必设此 env。
+- G2 sidecar：`_stage_whole_decode_run.py --serve --serve-sock <sock>` 常驻 rt + socket 服务
+  （收 full hidden [BATCH=16,HIDDEN=4096] bf16 → 45 层 decode → 回 next hidden）。
+- G5a live plumbing 通：容器自包含后端 /logs/pypto_patch/pypto_whole_decode_backend.py（PYPTO_WHOLE_DECODE=1
+  autoload，install Step3p5Model.forward→sidecar，collective fallback 保 startup profiling）→ 8001 mode=full
+  送 prompt 出 token（pypto forward #1，8 rank，0 fallback）。现 token 是 garbage（dummy KV + 4 层）。
+- G3 KV export：/logs/pypto_patch/pypto_kvpool_backend.py（PYPTO_KVPOOL=1）→ 每 rank 一 key + offset map
+  （pypto_kvpool.key.rankR + pypto_kvpool_map.json.rankR，45 层，L{i}.K/L{i}.V offset）。importer 已写：
+  pypto-lib tools/step3p5/pypto_kv_ipc.py（KvIpcMap + build_stacked_kv，已改 bf16 默认）。
+
+## ⭐ 核心 device-verified 事实（别再走弯路）
+vLLM step3p5 W8A8 的 **KV cache 是 bf16、1 KV head/rank**（attn::Attention.kv_cache.dtype=bfloat16，
+_k/v_scale=1.0 identity，calculate_kv_scales=False，num_kv_heads=1，total=8/tp=8/replicas=1），**与 worker
+（bf16, KV_HEADS_LOCAL=1）完全对齐**。W8A8 只量化 weights（moe w8a8_dynamic），NOT KV。
+→ **G5b 的 KV bridge = 纯 layout reshape，无 int8/dequant/scale/TP 重设计**：
+vLLM KV `[2, nb, bs, 1, 128]` bf16 → 拆 kv[0]/kv[1] + drop 单 head + flatten → worker `[1, nb×bs, 128]` bf16。
+⚠ 两个已推翻的错误判断（别重犯）：(1) KVPOOL 的 torch.zeros(total,int8) 只是字节容器，别据此判 KV 是 int8；
+(2) 别拿某次 boot 的 "GPU KV cache: N tokens"（随 gpu-mem-util 变）当 nb×bs。用 map 的 per-K nbytes/(128×2) 算 nb×bs。
+
+## 实现步骤（每步 device 可验证）
+1. **改 KvIpcMap 产 worker 布局 bf16 DeviceTensor**：per-rank `import_ipc(worker_id=r)` → 每层 K/V
+   `DeviceTensor(peer_base + L{i}.{K,V}.offset, [1, nb×bs, 128], bf16)`（nb×bs = nbytes/(128*2)）。
+   build_stacked_kv → per-layer (k,v) StackedDeviceTensor(worker_ids=range(8))。
+2. **worker 加 --kv-ipc-dir**：build 前设 config.MAX_SEQ_DEFAULT = nb×bs（重编 k_cache 形状）；prepare 后
+   建 8 个 KvIpcMap；decode step 里 `sh["k_cache"]=stacked_k[layer]; sh["v_cache"]=stacked_v[layer]` 替 dummy。
+   （_ordered_args 按 param name 取 sh；per-op attn_setup 已证 rt.run 收 DeviceTensor。）
+3. **socket 协议扩 length-prefixed**：client（_pypto_full_forward / whole_decode_backend）随 hidden 发
+   forward_context 的 block_table/slot_mapping/seq_lens；sidecar 每 step copy 进 sh。
+4. **先 offline 验证**：sidecar --kv-ipc-dir 用一次导出的 key/map（8001 需在跑，KV buffer 活着）跑 dense L0，
+   对 worker torch-ref / 或直接看 attention 出 non-nan（真 KV 进来）。
+5. **复核 paged 索引等价**：worker 现用 [MAX_SEQ,128] flat + block_table/slot_mapping；vLLM [nb,bs,1,128]
+   flatten nb×bs 后 block_id*bs+pos 索引应等价 —— device 验证一层 attention 数值对 vLLM dump。
+6. **live A/B**：8001 mode=full（PYPTO_WHOLE_DECODE=1 + sidecar --kv-ipc-dir + PYPTO_KVPOOL=1 导出 KV，
+   顺序：先起 8001 profiling 走 fallback → ready → 起 sidecar SIMPLER_COMM_NO_HCCL=1 → 送 prompt）→ 3-prompt
+   对 8000 token-exact。swiglu(L43/L44) 精度也在此定论。
+
+## 环境 / 铁律
+- 三件套：`source /usr/local/Ascend/cann/set_env.sh && source WS/activate.sh && export PTO_ISA_ROOT=WS/pto-isa`。
+- device：`PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072`；sidecar `-p a2a3`
+  `--tp 8 --dev-offset 8`（cards 8-15）；sidecar 进程 `SIMPLER_COMM_NO_HCCL=1`。
+- 8000 oracle 在 cards 0-7（别碰）。socket 必须在 /logs（容器 /tmp 不共享）。launch 前 `pgrep [c]hip_process` 空。
+- 停 8001：`sudo nerdctl --namespace k8s.io exec vllm-8001 bash -lc "pkill -9 -f '[V]LLM::EngineCore'"`
+  （不只 vllm serve，否则孤儿 EngineCore 抢卡）；sidecar 用 SIGTERM（非 -9）；禁 `npu-smi set -t reset`。
+- 起 8001：`sudo nerdctl --namespace k8s.io exec -d vllm-8001 bash -lc "bash /logs/start_8001_full.sh ..."`。
+- push：HTTP/1.1 + PAT /data/chensiyu/secrets/github.env（本仓在本地 box，非 0162）；同步协议见 CLAUDE.md。
+- hazard：pypto AICore timeout → aclrtResetDeviceForce 卡级会 nuke vLLM；live 前确保 vLLM stream idle + pypto 不 timeout。
+
+## 可复用积木（备份都在 workspace/g5*、g3*、g5b*）
+KvIpcMap+build_stacked_kv（bf16 已改）、pypto_kvpool_backend（KV export）、pypto_whole_decode_backend
+（mode=full + collective fallback）、pypto_kvscale_backend（探 attn.kv_cache.dtype 的 probe）、
+start_8001_full.sh / start_sidecar.sh。sidecar worker = _stage_whole_decode_run.py（in-tree）。
+
+先起 team（reverse-review/hw-analyst/sw-analyst/upstream-scout）+ 读 skill/memory + ssh 0162 核对现状，
+从「实现步骤 1」开始。lead 直接跑 device，盯增量别让 agent 空转。
+```
+
+---
+
+# （历史参考）G2-G5 live wiring（tasks 5-7）—— 本 session 已推进到 G5b（上面是聚焦提示词）
+
 
 ## G1 offline 已完成（tasks 1-4，别重做，已 device 验证 + 独立复核 + push）
 
