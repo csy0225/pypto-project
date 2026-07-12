@@ -43,6 +43,16 @@
 > attn-vs-moe（resid1 vs golden post_attn_residual[17]）；查 moe idx14 权重/router_bias BF16-round；chain 溢出用
 > INT8-native 收敛解（N=1 track 续¹¹ 已证 INT8 MoE 精度）。均 offline 可复现快调。已排除 L17 内在 NaN/KV/live。
 
+> **⭐ 续¹¹f 决定性 split（2026-07-12）**：offline L17-alone attn-vs-moe 拆分 → **`[gcmp-attn] L17 resid1 vs
+> golden post_attn[17] pass_rate=0.25 max|diff|=0.6`**（attn）、out=0.22（attn+moe）→ **L17 的 0.22 主要在
+> ATTENTION（resid1 0.25），MoE 加一点**。关键推理（回答"为何 DeepSeek 不遇到"）：offline L0-L4 fill-batch
+> **过 1.0（含 L3 swa_moe，输入幅值 ~11）**，而 L17-alone（swa_moe，**输入幅值 ~58**）attn=0.25 → 疑
+> **BF16-dequant 在大残差幅值(58)下精度退化**（残差 6→58 逐层增长）→ L17 attn 0.25，chain 累积输入再触发溢出→NaN。
+> **vLLM/DeepSeek 不遇到 = 用 INT8-native W8A8 + FP32 累加；step3p5 whole-decode 用 BF16-dequant**。**FIX =
+> INT8-native 收敛**（N=1 track 续¹¹ 已证 INT8 MoE 精度 PASS，与 vLLM W8A8 对齐）；临时验证可把残差流保持 FP32。
+> **两条 track 在 INT8-native 汇合**。⚠ 待补控制实验：L15/L16-alone attn 对拍确认是幅值驱动还是 L17-index。
+> 复现器 `_stage_whole_decode_run.py --golden-decode-pos 17 --golden-fill-batch --layers 17` + gcmp-attn。
+
 > 新 session 直接把下面 code block 当第一条消息粘贴。自包含。生成于 2026-07-12（续⁵）。
 > **上个 session 攻破 G5b 全部结构性 blocker**：const-fold 证伪、socket 真 metadata 协议、import_ipc 真 KV 零拷贝、
 > **co-tenancy crash 彻底解决（file-based broadcast）** → 整条 live 45 层 single-handoff **HTTP 200 稳定跑通**。
