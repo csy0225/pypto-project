@@ -35,6 +35,14 @@
 > `_stage_whole_decode_run.py --golden-decode-pos 17 --golden-fill-batch` + 逐层 row0 日志。**已排除**：seq_len=0
 > pad-row（已修 NaN 消除）、prefill 路由（已修）、KV 池 offset/布局（regular 已验）、KV-data/live。
 
+> **⭐ 续¹¹e L17-alone 精化（2026-07-12）**：offline `--layers 17`（喂干净 golden layer_input[17]，非 chain）→
+> **resid1=58.0 有限（不 NaN）、out row0 pass_rate=0.22**（幅值对 55.25 vs 58.0，78% 元素错）。⇒ (1) L17 不
+> 内在 NaN → chain 的 NaN/3.7e28 是**累积触发**（L16 累积发散输出在 L17 溢出）；(2) 但 L17-alone=0.22（vs
+> L1-alone=1.0）→ **L17 clean-input 有确定性精度 bug**。L1=swa_dense(过) vs L17=swa_moe → 0.22 疑在 L17 的 MoE
+> (idx=14)/routing 或 swa_moe attention；moe_out 相对残差(58)小故 0.22 主要在 attn 残差。**下步**：分离 L17
+> attn-vs-moe（resid1 vs golden post_attn_residual[17]）；查 moe idx14 权重/router_bias BF16-round；chain 溢出用
+> INT8-native 收敛解（N=1 track 续¹¹ 已证 INT8 MoE 精度）。均 offline 可复现快调。已排除 L17 内在 NaN/KV/live。
+
 > 新 session 直接把下面 code block 当第一条消息粘贴。自包含。生成于 2026-07-12（续⁵）。
 > **上个 session 攻破 G5b 全部结构性 blocker**：const-fold 证伪、socket 真 metadata 协议、import_ipc 真 KV 零拷贝、
 > **co-tenancy crash 彻底解决（file-based broadcast）** → 整条 live 45 层 single-handoff **HTTP 200 稳定跑通**。
