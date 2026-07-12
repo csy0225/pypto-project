@@ -19,8 +19,8 @@
 | M0 单算子 probe | matmul_acc N=16 / head-gate / gate_topk vs torch | ✅ PASS |
 | M1 功能 bring-up | 42 MoE 真 W8A8 + 权重+KV 双 IPC 8 卡 dispatch-clean | ✅（Blocker B 解） |
 | M2 per-layer gate_r | monolithic 整网自算逐层 head-gate（on-device，token-exact-capable） | ✅（路径 a，本 session） |
-| **M3 单层 MoE 数值正确** | **NaN 修掉 → finite** | **✅（2026-07-13：根因=attn_only_orch 的 Out 未写回，非 MoE/INT8）** |
-| **M3b 单层 MoE 幅值正确** | **next_hidden 1e12 → 合理幅值**（chip_orch 读到被别名的 huge h_mid） | **⛔ 当前卡这里** |
+| **M3 单层 MoE 数值正确** | **NaN 修掉 → finite** | **⚠（2026-07-13 续2 复诊：NaN 消，但 MoE 层 nondeterministic ~1e11，未真正正确）** |
+| **M3b 单层 MoE 幅值正确** | **next_hidden 合理幅值** | **⛔ 当前卡这里 —— 见「本 session（2026-07-13 续2）」：FUSE 引入 intra-orch 别名（错方向），真源=MoE 层 nondeterministic 1e11；下一步回退 split + per-layer handoff** |
 | M4 L1 ctx=1 token-exact | 全 42 层放开，`--hidden-token 6127` → **argmax=303** vs vLLM | ⏸ gated on M3 |
 | M5 L2 多 token / decode-step | vLLM→whole-net KV bridge 或 live A/B（8001 vs 8000），多 token token-exact | ⏸（需 port G5b 机器） |
 | M6 整网 decode 集成落地 | 接入 serving 路径（live single-handoff），端到端精度双过准出 | ⏸ |
@@ -54,6 +54,29 @@
 - **对比**：dense 层内 attention+MLP 在**一个** `swa/full_chip_orch` 里做（无层内 split），所以 dense L1→L2 的 h_mid handoff 正常（P=0→502）。MoE 层被拆成 attn_only+chip_orch 两个 orch，跨-orch 依赖 pypto 没排上序。**这正是 SKILL H 说的 N=1 inline 墙**（"whole-decode worker 用 multi-program + resident DeviceTensor，不 inline 45 层 body"）。
 - **正解（下 session）= FUSE：把 attention 塞进 MoE chip_orch**（chip_orch 对 current_hidden 调 attention_inline → resid1 局部 → post_norm+MoE；镜像 dense full_chip_orch），消掉层内 handoff。需两个 fused 变体（full/swa，因 11 full + 31 swa MoE 层）+ generator 重写 + regen；有编译墙风险（attention+全 MoE 一个 orch 可能过大）。**或**转 SKILL 推荐的 multi-program resident-DeviceTensor（非本 N=1 track）。
 - **当前最佳工作态 = attn_only assemble-writeback 修复（finite ~1e12，NaN 已消）；C1 已回退。** decode_layer.py 工作区仍带诊断旋钮 + merged-loop/capture-pass pos=0，commit 前清。
+
+### ⭐⭐ 本 session（2026-07-13 续2）— FUSE 落地 + device 复诊：推翻 M3b「handoff/resid1」定位，真相是 MoE 层 nondeterministic ~1e11 + FUSE 引入 intra-orch 别名
+
+> 详见 memory `n1_m3b_fuse_handoff_fixed_residual_clobbered`。本段以 device 实测为准，**覆盖上面 M3/M3b/UPDATE1-10 的定位**（多为 truncated-orch 或不可靠旋钮所致的误判）。
+
+- **实现了 FUSE（正解路径 1）**：generator `tools/step3p5/_gen_faithful_real.py` 把 attention 折进 MoE orch（`full_moe_chip_orch`/`swa_moe_chip_orch` = `attention_{full,swa}_inline→resid1` 局部 + MoE body B/C/D），`_host_orch` 层间 `next_hidden`↔`h_mid` ping-pong + parity lm_head。**P=1 与 P=42 都 a2a3sim COMPILE OK（无编译墙）**——推翻文档「FUSE 可能过大撞编译墙」的担忧（orchestration 级融合，InCore kernel 不变，buffer 不爆）。
+- **可靠 device 基线（host 级 `P_FAITHFUL_MOE_LAYERS` gate，可信）**：
+  - **P=0（3 dense 层）CLEAN + 确定**：`next_hidden=448 h_mid=294 argmax=27527`。dense 路径（含 on-device head-gate）正确。
+  - **P=1（+1 MoE 层）nondeterministic ~1e11–1e12**（跨 run 1.7e11/4.5e11/3.2e11/2.9e11）。MoE 层是 garbage 源。
+- **FUSE 有问题（SKILL 应验）**：complete orch 上连 `P_FUSE_ATTN_ONLY`（只 attention 提前 return）都 =1.39e12，而 dense attention（L1/L2 同 `attention_swa_inline`）干净 → **MoE InCore kernels 无视 Python 提前 return 仍被排进 DAG，经 intra-orch 别名污染 attention/输出 buffer**。正是 SKILL §H「别把 TP-attn+EP-MoE 塞一个 chip_orch」。**强证据 FUSE 是错方向。**
+- **两个陷阱（记下勿再踩）**：
+  1. **generator `_be` truncation bug（已修）**：`GEN_STRIP_KNOBS=0` 保留旋钮时，`index("            return next_hidden_out\n")` 会 substring-命中 16-空格的 `NORM_ONLY` return（offset 4）而非 D 的 12-空格 return → moe_body 被截断在 NORM_ONLY，丢掉 shared/dispatch/routed/combine/D。**我这 session 所有带旋钮的 bisect（attn=502/norm=1.42/shared=0）跑在 truncated 坏 orch 上 → 全部作废。** 已改用 `name_hint="moe_residual_add"` 锚定。
+  2. **orch 内 `if X>0: return` 旋钮不可靠**：pypto orchestration 仍会排掉 return 之后的 InCore kernels（建整张 DAG），所以 `P_FUSE_ATTN_ONLY`/`P_MOE_NORM_ONLY`/`P_MOE_SHARED_ONLY` 无法干净隔离 stage。**只有 host 级 `P_FAITHFUL_MOE_LAYERS`（`if pos<N` 门整层）可信。**
+- **本 session 试过但没解决 ~1e11 的两个修复**（原理可能仍对，但非充分）：`_zero_routed_y_buf`（InCore，对齐 moe.py，data window 非自动清零 → combine gather 读 garbage；保留）；residual-protection（stash `resid1→next_hidden_out` Out + D 读它，基于已作废的 resid1-corruption 说，**回退候选**）。
+- **代码状态**：`feat/whole-net-n1-fusion` 工作区**未 commit**，含 FUSE + generator `_be` 修复 + zero-init + residual-stash + 诊断旋钮。**FUSE 状态存疑，未 push。**
+
+### ⛔ 修正后的下一步（按优先级）
+
+1. **[首选] 回退 FUSE → 保 SKILL 对齐的 SPLIT**（attn_only_orch + chip_orch，attention 与 MoE 分两个 orch，无 intra-orch 别名）+ **per-layer distinct handoff buffer 修 handoff**（不复用跨 42 层共享的 program-Out `h_mid_out`），靠上个 session 定位的 **pypto DCE `CommDomainScopeStmt` 修复**（`dead_code_elimination.cpp`，已定位未 commit，见 UPDATE7）解锁 computed-offset Out 写。
+2. **[若 split 仍 1e11]** = MoE-collective 未初始化读/race（dispatch pub_counts/count_done、shared tp_all_reduce、combine）→ 用 **op 级 copied-back `Out` dump**（不是 orch 内 return 旋钮）逐 stage 找谁先 garbage；对齐 validated moe.py 的 collective init/barrier。
+3. 权重/scale 前 session 已验有限，非源头。
+
+
 
 
 
