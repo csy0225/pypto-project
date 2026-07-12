@@ -149,44 +149,73 @@
 
 ## 本 session commits
 
-pypto-lib `feat/whole-net-n1-fusion`：`f07da3b`（on-device head-gate 恢复 + `_probe_matmul_acc_n16`/`_probe_head_gate_full`/`_l1_ab_vllm` + harness 填 block-diag R + 清 stale 注释）。
-pypto-project `main`：`4b045b8`/`b7e8986`/`e05b59d`/`612a830`/`fe8750c`（STATUS pin + blockers §1 + NEXT-SESSION：gate 解除 + L1 NaN bisect + A-operand disproven）。
+pypto-lib `feat/whole-net-n1-fusion`：**无新 commit**（本 session 所有修复尝试 hchain/87-param/gate-bypass 均 revert 回 clean `f07da3b`；`git diff` 空）。
+pypto (`src/ir/transforms/utils/dead_code_elimination.cpp`)：**未 commit 的真 bug 修复**（补 `CommDomainScopeStmt` case 两处；inert 未 rebuild）—— 值得单独 commit + 上游。
+pypto-project `main`：`e75d59e`/`ee510d7`/`a94e968`（M3 定位到 MoE→gate/aliasing/rmsnorm 三假设 REFUTED + DCE bug + 嫌疑收窄）。
 
 ---
 
 ```
-继续 step3p5 **N=1 整网 decode 集成 + 端到端精度对齐 vs vLLM**（总目标；不是只修一个 bug）。当前挡路的一步 =
-单层 INT8 routed-MoE 有效行 NaN，修完立刻推进：全 42 层 L1 token-exact → L2 多 token（KV bridge / live A/B）→ 整网 decode 集成落地。
-本 track = whole_decode_faithful_real（45 层内联一个 @pl.program，真 W8A8 权重+KV 经 IPC，harness
-tests/step3p5/_stage_whole_faithful_real_ipc.py，分支 feat/whole-net-n1-fusion，pypto-lib HEAD f07da3b）。
-⚠ 别和 NEXT-SESSION.md 的 G5b/per-layer track 搞混（但 L2/live 可复用其 KV-bridge/co-tenancy 机器）。
-用户硬约束：IPC(KV+权重)+真实权重、遇问题只解不绕、correctness 和 speed 都要、不能只盯单步（总目标是整网 decode 集成+端到端精度）、
-对齐 DeepSeek、架构优先、严格遵守 pypto-dev-constraints SKILL、历史文档可能 stale 先核对代码。
+继续 step3p5 **N=1 整网 decode 集成 + 端到端精度对齐 vs vLLM**（总目标；不是只修一个 bug）。当前挡路 = M3
+单层 MoE(chip_orch) 数值 NaN；修完立刻推进 M4 全 42 层 L1 token-exact（tid 6127 → argmax=303）→ M5 多 token
+（KV bridge / live A/B）→ M6 整网 decode 集成落地。本 track = whole_decode_faithful_real（45 层内联一个
+@pl.program，真 W8A8 权重+KV 经 IPC，harness tests/step3p5/_stage_whole_faithful_real_ipc.py，分支
+feat/whole-net-n1-fusion，pypto-lib HEAD f07da3b clean）。⚠ 别和 NEXT-SESSION.md 的 G5b/per-layer track 混。
 
-里程碑：M0 单算子 probe ✅ / M1 功能 bring-up（42 MoE+双 IPC 8 卡 dispatch-clean，Blocker B 解）✅ /
-M2 per-layer gate_r（on-device head-gate 路径 a：matmul_acc N=16 bug 现栈已修 probe PASS，attention_full/swa Scope 1.f
-gate_logits=normed_all@w_g(K-chunk)→sigmoid→gate_exp=gate_score@R(N-chunk)，gate_r 槽承载 layer-independent block-diag R
-→ 整网自算逐层 gate → token-exact-capable，TP=8 COMPILE OK）✅ / M3 单层 MoE 数值正确 ⛔当前 / M4 L1 token-exact ⏸ /
-M5 L2 多 token（KV bridge/live A/B）⏸ / M6 整网 decode 集成落地 ⏸。
+【硬约束】IPC(KV+权重)+真实权重、遇问题只解不绕(诊断脚手架不进产品路径)、correctness+speed、不只盯单步、
+对齐 DeepSeek/Qwen、架构优先、严格遵守 pypto-dev-constraints SKILL、历史文档可能 stale 先核对代码、
+**不要走弯路/不需要定位的别定位**（本 session 教训：过度 device 定位烧了太多 cycle）、遇难点可开 agent 从别角度看。
 
-⭐ M3 = 单层 INT8 MoE 有效行 NaN：L1 ctx=1（--hidden-token 6127，vLLM golden next=303）RUN_CLEAN 但 logits=nan。
-bisect P_FAITHFUL_MOE_LAYERS=0（仅 attention）→FINITE(argmax=27527)；=1（+1 MoE 层）→NaN → 单个 INT8 MoE 层就复现。
-已排除：gate/head-gate（MoE=0 干净）、A-operand fractal-32 padding（gap-5 经典 fix 试过无效已 revert）、
-stale 权重格式（INT8 pool、w_g zero-pad、KV zeroed）。关键：whole-net 内联 MoE 是旧 in-expert INT8 quant，
-与 standalone-validated moe.py（_quant_moe_input dispatch-side，count decode_layer.py=0 vs moe.py=2）DECOUPLED；
-只 2 处 routed_x_quant（base+real builder），routed body 共享 inline（非 42 份）→ 单点定位。剩余嫌疑（有效行）：
-routed INT8 gate/up/down dequant（查 moe_w_*_r_scale IPC 值 finite）/ combine routing weight / shared expert / dispatch。
-攻克：(A 推荐) 真 IPC INT8 权重喂 standalone moe.py MoE-block harness 隔离 权重-vs-代码；(B) real builder routed expert 加
-per-stage Out dump 逐段看谁先 NaN；(C 根治) 用 moe.py dispatch-side quant 经 _gen_faithful_real.py regen 替换内联旧 MoE。
-修完 P_FAITHFUL_MOE_LAYERS=1 finite → 放开 42 → 全量 L1（argmax=303）→ 进 M5。
+【里程碑】M0 单算子 probe ✅ / M1 双 IPC 8 卡 dispatch-clean ✅ / M2 on-device head-gate ✅ /
+**M3 单层 MoE NaN ⛔当前** / M4 L1 token-exact ⏸ / M5 L2 多 token ⏸ / M6 集成落地 ⏸。
 
-环境：0234 tmux pypto-ascend-0:0（8 卡）；三件套 source cann/set_env.sh+activate.sh+PTO_ISA_ROOT+PYTHONPATH。
-⚠ /tmp 每机独立——查 ready keys / curl vLLM 必须在 tmux 0234（b-csy-develop 的 localhost:8000 命中自己 nginx→404）。
-vLLM oracle：unset PYTHONPATH 再 source cann/set_env.sh（否则 import acl 失败），vllm serve <W8A8ckpt> --quantization ascend
---tensor-parallel-size 8 --enable-expert-parallel --enforce-eager --trust-remote-code --port 8000（占 8 卡，先出 golden 再 kill）。
-bisect 高效：先起 8 hold-mode exporter（--export-rank r --dev r --kv-ipc，一次 15min 冷载），再多次 --reuse-exporters worker
-（P_FAITHFUL_MOE_LAYERS=N 变体，每次 ~5min）；收尾 touch /tmp/n1_weight_ipc/STOP 释放卡。
-debug：数字 error 先查 wiki Device-Error-Codes_zh；stall 快照 setLevel(15)+ASCEND_GLOBAL_LOG_LEVEL=1+ASCEND_PROCESS_LOG_PATH；
-NaN bisect 用 P_FAITHFUL_MOE_LAYERS 层数二分。禁 -9/npu-smi reset。push 走 HTTP/1.1+PAT，从 b-csy-develop 直连 github
-（0234 连不通），pypto-lib commit 走 tmux root。全部读上面 🎯/⛔/✅/🖥/🐞/铁律。每完成关键节点更新 pypto-project STATUS/blockers/NEXT-SESSION + push（同 session）。
+⭐【M3 本 session 已验证 / 已排除 —— 别重复】
+- NaN 是真的（logits=nan 是最终输出、确 copy-back），在 chip_orch 内、gate 下游。
+- bisect P_FAITHFUL_MOE_LAYERS=0（仅 3 attention 层）→ FINITE(argmax 27527)；=1（+1 MoE 层）→ NaN。
+- **数据全 finite**：36288 routed INT8 scale（_diag_check_w8a8_scales.py，min1.6e-4/max1.5e-2）；shared BF16 finite；
+  layer-3 attn q/k/v/o_proj BF16 finite（与 finite 的 layer-1 同构）。
+- **GATE REFUTED**：P_GATE_BYPASS 写死路由(experts0-7/均权)绕过真 gate sort/mrgsort → device P=1 仍 logits=nan。
+- **ALIASING(hidden 乒乓) REFUTED**：P=0 用同一 2-buffer 乒乓却 finite；h_mid=0 非别名症状(别名给 stale~502)。
+  ⇒ **放弃 87-参数/hchain buffer 重写**（且 hchain 单参数 runtime-offset 写会撞 pypto DCE 墙，见下）。
+- **rmsnorm-eps REFUTED**：post_norm rmsnorm 确加 EPS=1e-5（decode_layer.py:25237）→ rmsnorm(0)=0 finite。
+- **A-operand fractal-32 padding fix**（zero x_i8/h_i8 quant 之后）：UPDATE4 试过无效已 revert。
+- **附带修了真 pypto bug**（DCE 缺 CommDomainScopeStmt case，dead_code_elimination.cpp ~L290+~L462，已补未commit/未rebuild）。
+
+【M3 未破的矛盾 —— 下 session 要害】P_L3_ATTN_ONLY（编译期跳 chip_orch、lm_head 读 attn 输出）→ logits=0.0000
+（finite 且为 0）→ attention 输出 ≈ 0（device 可靠，经 lm_head 非 host readback）。但解析上 MoE(0-输入)=0 应 finite，
+不该 NaN。⇒ 要么 (a) attention 确输出~0（zeroed-KV ctx=1；dense L1/L2 非零只因 dense-MLP 加幅值）而 MoE(~0)
+撞 codegen/未初始化-读 NaN；要么 (b) h_mid=0 仍误导、真 attn 输出是非零 garbage。**先破这个矛盾再谈修。**
+
+【下一阶段任务（按优先级）】
+1. **[最优先] 试 gap-5 partial-tile 正解**：ctx=1 下每 expert <32 token（tile_valid<RECV_TILE=32），
+   routed_x_quant 的 amax/matmul 读**未初始化的 local_routed_x padding 行[tile_valid:32]**（GM 垃圾/NaN）。
+   修法 = **zero-init `local_routed_x` recv buffer**（或 fillpad padding 行）让 amax 读 0 非垃圾
+   （区别于 UPDATE4 只 zero 了 quant 之后的 x_i8/h_i8）。改 decode_layer.py real-builder `_dispatch_stage`/
+   `local_routed_x` create_tensor 或 `_expert_routed` 入口 fillpad。P=1 跑，看 logits 是否 finite。
+2. **[干净拆分] gate-bypass 下重跑 routed-off vs shared-off**（device-if 已证 runtime-select 可靠）：
+   加 P_MOE_ROUTED_OFF（combine 跳 routed 读，moe_out=sh_y）/ P_MOE_SHARED_OFF（moe_out=routed，acc 从
+   routed_y[0]×0 起，避 pl.full Tensor-vs-Tile 冲突）；配 P_GATE_BYPASS=1 排除 gate 干扰。定位 shared vs routed。
+3. **[破矛盾] 确认 attention 是否真输出 0**：swa_attn_only_orch(layer3) vs swa_chip_orch(L1/L2) 都调同一
+   attention_swa_inline；查 L3 attn 输入 current_hidden（=L2 输出，应 ~502）是否被正确读到、残差是否保留。
+4. 修完 P=1 finite → 放开 P_FAITHFUL_MOE_LAYERS=42 全量 → L1 A/B（tid 6127 期望 argmax=303）→ 进 M5。
+
+【debug 方法 / confounds（本 session 血泪）】
+- **可靠 gating = HOST-orch 层 或 编译期 `if X > 0:`**（像 _FAITHFUL_MOE_LAYERS）；`@pl.function` 体内对 module-int
+  的裸 `if X:` 会被当 device-if(INDEX)拒；三元 IfExp 被拒；`_lm_in = out_param` 别名被 SSA 拒。
+- **device-if（两分支都 trace）会 runtime-select**（gate-bypass 已证），所以 combine 的 routed-off/shared-off 结果可信。
+- **chip_orch 读且覆写 h_mid_out** → MoE 一跑读不到干净 attn 输出，必须编译期跳 MoE(P_L3_ATTN_ONLY)才能读。
+- **单参数 runtime-offset Out 写（hchain[r*N+slot]）撞 pypto DCE**（Unhandled CommDomainScopeStmt）；
+  DCE-safe 只有裸 `[r]` 索引的独立参数（已补 pypto DCE case，未 rebuild）。
+- 数字 device error 先查 wiki Device-Error-Codes_zh；stall 快照 setLevel(15)+ASCEND_GLOBAL_LOG_LEVEL=1；
+  NaN bisect 用 P_FAITHFUL_MOE_LAYERS 层数二分；禁 -9 / npu-smi reset。
+
+【环境】0234 tmux pypto-ascend-0:0（8 卡）；三件套 `source /usr/local/Ascend/cann/set_env.sh && source $WS/activate.sh
+&& export PTO_ISA_ROOT=$WS/pto-isa && export PYTHONPATH=$WS/pypto/python:$WS/pypto-lib:$PYTHONPATH`（PYTHONPATH 要
+**append** 否则丢 acl）。8 卡 env `PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072`。
+W8A8 ckpt=/mnt/hw910test-jfs/models/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp。
+bisect 高效：8 hold-mode exporter（--export-rank r --dev r --kv-ipc，一次~15min 冷载 或秒级若已在）+ 多次
+`--reuse-exporters` worker（改 models 后先 `find models/step3p5 -name '*.pyc' -delete`；每次 compile+run ~2-5min）。
+⚠ /tmp 每机独立（查 ready keys 在 tmux 0234）。push 走 b-csy-develop（0234 连不通 github）+ HTTP/1.1 + PAT
+`/data/chensiyu/secrets/github.env`；pypto/pypto-lib .git objects root-owned → commit 走 tmux(root)。
+全部细节读上面 🎯/⛔/✅ 段 + memory n1_head_gate_ondevice_restored_l1_nan（UPDATE5-8）。
 ```
