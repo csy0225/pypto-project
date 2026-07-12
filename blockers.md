@@ -361,6 +361,8 @@ attention 用 original（fused 重写非所需，存 /tmp 备 fused 若未来修
 
 **解除条件（NaN）**：per-layer bisect 定位 → 修 attention/decode NaN → 重跑 L1（tid 6127 → 期望 303）。
 
+**2026-07-12 bisect 结果 — NaN 定位到 MoE 路径（attention 干净）**：`P_FAITHFUL_MOE_LAYERS=0`（decode_layer.py:19182，emit 0/42 MoE 层 → 仅 3 dense/swa attention 层）跑出 `next_hidden=502.0 / logits=9.03 / argmax=27527` **FINITE 无 NaN**。→ **attention 路径（含恢复的 on-device head-gate）干净**；full-run NaN 源在 **42 层 INT8 W8A8 routed-MoE**（gap-5 territory：in-kernel per-token INT8 quant/dequant/cast 链）。head-gate 改动确认正确。下一步 bisect：`P_FAITHFUL_MOE_LAYERS=1,2,4,…` 定位首个 NaN MoE 层 → 再定位算子（疑 routed grouped-GEMM INT8 dequant 或 shared-expert）。
+
 **Owner**：TASK-L 上游；项目侧决策待定。
 
 ---
