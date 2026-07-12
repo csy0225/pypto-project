@@ -5,6 +5,14 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 **最后更新**：2026-07-12
 
+> **2026-07-12 (续¹⁰) ⭐ Stage B device dispatch 到达 + INT8 集成正确性坐实；full-e2e 卡 pre-existing Blocker B；Stage C 缺 oracle dump [Phase 27]**：
+> 承 A5（whole_decode_faithful_real INT8 编译通过）。机器 **0234**（经本地 tmux `pypto-ascend-0:0`，与 b-csy NFS 共享 → 我的 INT8 commit 直接可见；8 卡空闲；0162 被两个 vLLM 占满不可用）。
+> **Stage B（`_stage_whole_faithful_real_ipc -d0-7`, INT8, heap=4GB）device 结果**：8 exporter 导 **INT8 池 25.35 GiB/rank**（vs 47GB BF16，**存储减半达成**）→ **compile OK** → 8 chip ready → **import_ipc_all OK** → rt.run 到达 device → **前 4 chip 执行完成**（`completed=4/32`：full_dense+2×swa_dense+swa_attn）→ **507018 scheduler-stall @ `stuck_task_id=0x100000003`（scope-1 task3）= 首个 MoE 层跨卡 dispatch collective**。= **pre-existing Blocker B**（MoE collective × IPC 池 VA 0x12c1c0000000 冲突），memory 已预言 INT8 不解此（与 INT8 正交：BF16 IPC 同样 stall）。cards force-reset 干净。
+> **INT8 集成正确性坐实**：host loader INT8+scale load PASS（verify_bundle_shapes PASS）；device 到 rt.run + 4 chip 执行；修了 3 个真 bug——(1) scale `[..,N,1]`→squeeze `[..,N]`；(2) exporter map dtype + `_torch_dtype` 不认 int8（池字节对但元数据错→rt.run TypeError）→ 加 int8/fp16；(3) harness int8_routed + scale args。commits pypto-lib `32b59d3`/`6404385`。
+> **剩余（均为环境阻塞，非 INT8 代码）**：① **full IPC e2e = Blocker B**（深度 runtime，需 VA-overlap 调查 / dispatch-cut bisect；H2D 替代不可行：200GB host RAM + 40min serial load，harness 已 deprecated）；② **Stage C 精度 = 0234 无 vLLM W8A8 dump**（旧 dump 在老 pod；需重生成 oracle 或 synthetic torch-INT8-golden 跑 `_stage_moe_block_precision`——harness 已 INT8-ready `6404385`）。
+> **可跑的下一步**：Stage C 用 `_stage_moe_block_precision --torch-golden` + synthetic 输入（device INT8 MoE-block vs torch W8A8，验 kernel codegen/fractal-32，无需 dump）；或提上游/调查 Blocker B VA-overlap 解 full e2e。
+
+
 > **2026-07-12 (续⁹) ⭐⭐ G5b token-garbage ROOT CAUSE 定论 + 修复已验证：seq_len=0 未用 batch 行 → NaN 污染 active row（非 SWA/MoE kernel bug）**：
 > 承续⁶补。用 offline decode-step golden（prefill dump pos-17 逐 rank 真 KV + 真 per-layer rope + 真 W8A8 BF16-dequant，
 > `_stage_whole_decode_run.py --golden-decode-pos 17`，cards 8-15）逐层 out-row0 对拍 vLLM golden，**决定性排除 SWA/MoE kernel bug**：
