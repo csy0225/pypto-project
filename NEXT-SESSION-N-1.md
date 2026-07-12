@@ -1,6 +1,6 @@
 # NEXT SESSION — N=1 整网 decode 集成 + 端到端精度对齐 vs vLLM
 
-> 直接把最底部 code block 当第一条消息粘贴。自包含。更新于 2026-07-12（本 session 尾）。
+> 直接把最底部 code block 当第一条消息粘贴。自包含。更新于 2026-07-13（M3 NaN 已修，当前卡 M3b）。
 > **运行环境：0234 机器，通过本地 tmux `pypto-ascend-0:0` 登陆**（8 卡 0-7；781GB RAM；driver 25.5.2 / firmware 7.8.0.7.220 / CANN 9.0.0-beta.1）。
 > 编辑机 `b-csy-develop`（**无 python，有 npu-smi，能直连 github**；NFS 与 0234 共享，编辑即时可见）。分支 `pypto-lib feat/whole-net-n1-fusion`。
 
@@ -79,6 +79,8 @@
   - memory `n1_head_gate_ondevice_restored_l1_nan` / `step3p5_head_gate_uses_normed_hidden`。
 
 ## ⛔ M3 当前阻塞：单层 INT8 W8A8 routed-MoE 的**有效行**计算产生 NaN
+
+> ⚠ **本节已 SUPERSEDED（2026-07-13）**：M3 NaN 已修，真根因是 `attn_only_orch` 的 Out 未写回（非 INT8/gap-5）——见顶部「本 session（2026-07-13）」段。本节保留作历史 bisect 记录，勿再据此往 INT8 方向查。当前阻塞是 M3b（幅值）。
 
 **L1 ctx=1 A/B 现状**：pypto worker `--hidden-token 6127 --kv-ipc` **RUN_CLEAN ~3.6s 但 `next_hidden=nan / logits=nan / argmax=0`**（vLLM golden：tid=6127「北京」→ next=**303**「，」）。
 
@@ -180,73 +182,70 @@
 
 ## 本 session commits
 
-pypto-lib `feat/whole-net-n1-fusion`：**无新 commit**（本 session 所有修复尝试 hchain/87-param/gate-bypass 均 revert 回 clean `f07da3b`；`git diff` 空）。
-pypto (`src/ir/transforms/utils/dead_code_elimination.cpp`)：**未 commit 的真 bug 修复**（补 `CommDomainScopeStmt` case 两处；inert 未 rebuild）—— 值得单独 commit + 上游。
-pypto-project `main`：`e75d59e`/`ee510d7`/`a94e968`（M3 定位到 MoE→gate/aliasing/rmsnorm 三假设 REFUTED + DCE bug + 嫌疑收窄）。
+pypto-lib `feat/whole-net-n1-fusion`：**未 commit**，工作区含真修复 + 诊断脚手架。
+- **真修复（保留）**：`attn_only_orch`(full+swa) 把 attention 结果 assemble 进 `resid3_out` Out（修 NaN，两 orch 定义 + generator `_gen_faithful_real.py` FRESH_*_ATTN_ONLY）；`_expert_routed` in-expert INT8 quant 的 amax/quant 循环把未初始化 RECV_TILE padding 行 mask 到 tile_valid（对 partial tile 正确，非 NaN 根因）；harness `_stage_whole_faithful_real_ipc.py` +1 行 `max|h_mid|` 打印。
+- **诊断脚手架（commit 前清）**：3 个 module global + `if _MOE_{SHARED_ONLY,PASSTHROUGH,NORM_ONLY} > 0:` gated 提前 return（10 份 chip_orch copy 各一，默认 0 inert）；host_orch pos=0 merged-loop + capture-pass（`hmid_L0`，未修好）；generator `_host_orch` 也含 merged+capture-pass。
+pypto-project `main`：`6f5256d`（M3 NaN 根因修复 + M3b 定位）/`c28b7ac`（M3b 三个 ordering 修法失败 + FUSE 正解）。
+memory `n1_head_gate_ondevice_restored_l1_nan`：UPDATE9（根因修复，推翻 UPDATE1-8 的 INT8 判断）+ UPDATE10（M3b 跨-orch 依赖墙 + FUSE 正解）。
 
 ---
 
 ```
-继续 step3p5 **N=1 整网 decode 集成 + 端到端精度对齐 vs vLLM**（总目标；不是只修一个 bug）。当前挡路 = M3
-单层 MoE(chip_orch) 数值 NaN；修完立刻推进 M4 全 42 层 L1 token-exact（tid 6127 → argmax=303）→ M5 多 token
-（KV bridge / live A/B）→ M6 整网 decode 集成落地。本 track = whole_decode_faithful_real（45 层内联一个
-@pl.program，真 W8A8 权重+KV 经 IPC，harness tests/step3p5/_stage_whole_faithful_real_ipc.py，分支
-feat/whole-net-n1-fusion，pypto-lib HEAD f07da3b clean）。⚠ 别和 NEXT-SESSION.md 的 G5b/per-layer track 混。
+继续 step3p5 **N=1 整网 decode 集成 + 端到端精度对齐 vs vLLM**（总目标；不是只修一个 bug）。当前挡路 = M3b
+单层 MoE(chip_orch) 输出幅值爆炸（~1e12，跨 run 跳=未初始化读）；修完立刻推进 M4 全 42 层 L1 token-exact
+（tid 6127 → argmax=303）→ M5 多 token（KV bridge / live A/B）→ M6 整网 decode 集成落地。本 track =
+whole_decode_faithful_real（45 层内联一个 @pl.program，真 W8A8 权重+KV 经 IPC，harness
+tests/step3p5/_stage_whole_faithful_real_ipc.py，分支 feat/whole-net-n1-fusion）。⚠ 别和 NEXT-SESSION.md
+的 G5b/per-layer track 混。
 
 【硬约束】IPC(KV+权重)+真实权重、遇问题只解不绕(诊断脚手架不进产品路径)、correctness+speed、不只盯单步、
 对齐 DeepSeek/Qwen、架构优先、严格遵守 pypto-dev-constraints SKILL、历史文档可能 stale 先核对代码、
-**不要走弯路/不需要定位的别定位**（本 session 教训：过度 device 定位烧了太多 cycle）、遇难点可开 agent 从别角度看。
+**不要走弯路/不需要定位的别定位**（过度 device 定位烧 cycle）、遇难点可开 agent 从别角度看。
 
 【里程碑】M0 单算子 probe ✅ / M1 双 IPC 8 卡 dispatch-clean ✅ / M2 on-device head-gate ✅ /
-**M3 单层 MoE NaN ⛔当前** / M4 L1 token-exact ⏸ / M5 L2 多 token ⏸ / M6 集成落地 ⏸。
+**M3 单层 MoE NaN ✅（2026-07-13 修复）** / **M3b 单层 MoE 幅值 ⛔当前** / M4 L1 token-exact ⏸ /
+M5 L2 多 token ⏸ / M6 集成落地 ⏸。
 
-⭐【M3 本 session 已验证 / 已排除 —— 别重复】
-- NaN 是真的（logits=nan 是最终输出、确 copy-back），在 chip_orch 内、gate 下游。
-- bisect P_FAITHFUL_MOE_LAYERS=0（仅 3 attention 层）→ FINITE(argmax 27527)；=1（+1 MoE 层）→ NaN。
-- **数据全 finite**：36288 routed INT8 scale（_diag_check_w8a8_scales.py，min1.6e-4/max1.5e-2）；shared BF16 finite；
-  layer-3 attn q/k/v/o_proj BF16 finite（与 finite 的 layer-1 同构）。
-- **GATE REFUTED**：P_GATE_BYPASS 写死路由(experts0-7/均权)绕过真 gate sort/mrgsort → device P=1 仍 logits=nan。
-- **ALIASING(hidden 乒乓) REFUTED**：P=0 用同一 2-buffer 乒乓却 finite；h_mid=0 非别名症状(别名给 stale~502)。
-  ⇒ **放弃 87-参数/hchain buffer 重写**（且 hchain 单参数 runtime-offset 写会撞 pypto DCE 墙，见下）。
-- **rmsnorm-eps REFUTED**：post_norm rmsnorm 确加 EPS=1e-5（decode_layer.py:25237）→ rmsnorm(0)=0 finite。
-- **A-operand fractal-32 padding fix**（zero x_i8/h_i8 quant 之后）：UPDATE4 试过无效已 revert。
-- **附带修了真 pypto bug**（DCE 缺 CommDomainScopeStmt case，dead_code_elimination.cpp ~L290+~L462，已补未commit/未rebuild）。
+⭐【M3 已解 —— 别再往 INT8/gap-5 方向查】NaN 真根因 = full/swa_attn_only_orch 里
+resid3_out = pl.create_tensor(...) 遮蔽了 pl.Out 参数 → attention 写局部 tensor、h_mid_out[rd] 从没写 →
+chip_orch 读未初始化 → NaN（dummy-0 权重一直掩盖）。修法=attention 结果 assemble 进 resid3_out Out
+（已落 real-builder 两 orch 定义 + generator）。device P=1：NaN→finite（h_mid 0→~450）。前 8 次 UPDATE 的
+MoE-INT8/gap-5 判断全错。工作区 git status 有此修复 + 诊断脚手架（未 commit）。
 
-【M3 未破的矛盾 —— 下 session 要害】P_L3_ATTN_ONLY（编译期跳 chip_orch、lm_head 读 attn 输出）→ logits=0.0000
-（finite 且为 0）→ attention 输出 ≈ 0（device 可靠，经 lm_head 非 host readback）。但解析上 MoE(0-输入)=0 应 finite，
-不该 NaN。⇒ 要么 (a) attention 确输出~0（zeroed-KV ctx=1；dense L1/L2 非零只因 dense-MLP 加幅值）而 MoE(~0)
-撞 codegen/未初始化-读 NaN；要么 (b) h_mid=0 仍误导、真 attn 输出是非零 garbage。**先破这个矛盾再谈修。**
+⭐【M3b 已定位 / 三修法已失败 —— 别重复】NaN 消除后 next_hidden≈1e11-1e12（有限但错，跨 run 跳动=未初始化读）。
+根因 = chip_orch 在 attn_only 写 h_mid_out 之前就读它（读未初始化：NaN 或巨值）；pypto 没给这两个独立
+orchestration 排跨-orch 依赖序。**已试且全失败（别再试）**：(1) 合并两 per-rank 循环成一个 → 仍 1.99e11；
+(2) 捕获 attn_only 返回值传 chip_orch 当 current_hidden（强 data-dep）→ PASSTHROUGH 仍 3.05e11（harness h_mid=394）；
+(3) attn_only 把 Out 直接传 inline attention（对齐 dense dense_mlp_inline(h0_out)，"C1"）→ 回退成 nan。
+对比：dense 层内 attention+MLP 在**一个** swa/full_chip_orch 里（无层内 split），dense L1→L2 handoff 正常（P=0→502）。
+**这是 SKILL H 记载的 N=1-inline 跨-orch 依赖墙。**
 
 【下一阶段任务（按优先级）】
-1. **[最优先] 试 gap-5 partial-tile 正解**：ctx=1 下每 expert <32 token（tile_valid<RECV_TILE=32），
-   routed_x_quant 的 amax/matmul 读**未初始化的 local_routed_x padding 行[tile_valid:32]**（GM 垃圾/NaN）。
-   修法 = **zero-init `local_routed_x` recv buffer**（或 fillpad padding 行）让 amax 读 0 非垃圾
-   （区别于 UPDATE4 只 zero 了 quant 之后的 x_i8/h_i8）。改 decode_layer.py real-builder `_dispatch_stage`/
-   `local_routed_x` create_tensor 或 `_expert_routed` 入口 fillpad。P=1 跑，看 logits 是否 finite。
-2. **[干净拆分] gate-bypass 下重跑 routed-off vs shared-off**（device-if 已证 runtime-select 可靠）：
-   加 P_MOE_ROUTED_OFF（combine 跳 routed 读，moe_out=sh_y）/ P_MOE_SHARED_OFF（moe_out=routed，acc 从
-   routed_y[0]×0 起，避 pl.full Tensor-vs-Tile 冲突）；配 P_GATE_BYPASS=1 排除 gate 干扰。定位 shared vs routed。
-3. **[破矛盾] 确认 attention 是否真输出 0**：swa_attn_only_orch(layer3) vs swa_chip_orch(L1/L2) 都调同一
-   attention_swa_inline；查 L3 attn 输入 current_hidden（=L2 输出，应 ~502）是否被正确读到、残差是否保留。
-4. 修完 P=1 finite → 放开 P_FAITHFUL_MOE_LAYERS=42 全量 → L1 A/B（tid 6127 期望 argmax=303）→ 进 M5。
+1. **[正解] FUSE：把 attention 融进 MoE chip_orch** —— chip_orch 对 current_hidden 调 attention_inline → resid1
+   局部 → 现有 post_norm+MoE+residual（镜像 dense full_chip_orch），消掉 attn_only→chip_orch 层内 handoff。
+   需 full/swa 两 fused 变体（11 full + 31 swa MoE 层）+ generator _host_orch 重写（去 attn_only 调用、直接
+   fused chip_orch）+ regen（先删现有 real builder 再跑 _gen_faithful_real.py）。⚠ 编译墙风险（attention+全 MoE
+   一个 orch 可能过大——可能正是当初拆分的原因；若真撞墙，转下条）。
+2. **[备选] 转 SKILL 推荐的 multi-program + resident-DeviceTensor**（不 inline 45 层 body）—— 偏离 N=1 track，需与用户确认。
+3. 修好 M3b → P=1 幅值合理（~几百）→ 放开 P_FAITHFUL_MOE_LAYERS=42 → L1 A/B（tid 6127 期望 argmax=303）→ M4→M5。
+4. commit 前清诊断脚手架（3 旋钮 + merged-loop/capture-pass），保留 attn_only writeback + padding-mask 真修复。
 
-【debug 方法 / confounds（本 session 血泪）】
-- **可靠 gating = HOST-orch 层 或 编译期 `if X > 0:`**（像 _FAITHFUL_MOE_LAYERS）；`@pl.function` 体内对 module-int
-  的裸 `if X:` 会被当 device-if(INDEX)拒；三元 IfExp 被拒；`_lm_in = out_param` 别名被 SSA 拒。
-- **device-if（两分支都 trace）会 runtime-select**（gate-bypass 已证），所以 combine 的 routed-off/shared-off 结果可信。
-- **chip_orch 读且覆写 h_mid_out** → MoE 一跑读不到干净 attn 输出，必须编译期跳 MoE(P_L3_ATTN_ONLY)才能读。
-- **单参数 runtime-offset Out 写（hchain[r*N+slot]）撞 pypto DCE**（Unhandled CommDomainScopeStmt）；
-  DCE-safe 只有裸 `[r]` 索引的独立参数（已补 pypto DCE case，未 rebuild）。
-- 数字 device error 先查 wiki Device-Error-Codes_zh；stall 快照 setLevel(15)+ASCEND_GLOBAL_LOG_LEVEL=1；
-  NaN bisect 用 P_FAITHFUL_MOE_LAYERS 层数二分；禁 -9 / npu-smi reset。
+【debug 方法 / confounds】
+- **可靠 gating = 编译期 if X > 0:**（closure/module int，像 _FAITHFUL_MOE_LAYERS）；@pl.function 体内
+  int(__import__('os')...) 被 tracer 拒（要 module-global 常量）；裸 if module_int: 变 device-if。
+- 定位手法（有用）：harness 打印 max|h_mid|（attn_only 输出，chip_orch 不覆写）+ P_MOE_PASSTHROUGH（chip_orch
+  直接返回 resid1=其 h_mid 输入）→ 对比 harness h_mid vs PASSTHROUGH 看 handoff 是否错。
+- 跨 run 值跳动 = 未初始化内存读的信号（本 session 靠这个反推出是 ordering，非 INT8 数学）。
+- 数字 device error 先查 wiki Device-Error-Codes_zh；NaN/幅值 bisect 用 P_FAITHFUL_MOE_LAYERS 层数二分；禁 -9 / npu-smi reset。
 
-【环境】0234 tmux pypto-ascend-0:0（8 卡）；三件套 `source /usr/local/Ascend/cann/set_env.sh && source $WS/activate.sh
-&& export PTO_ISA_ROOT=$WS/pto-isa && export PYTHONPATH=$WS/pypto/python:$WS/pypto-lib:$PYTHONPATH`（PYTHONPATH 要
-**append** 否则丢 acl）。8 卡 env `PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072`。
+【环境】0234 tmux pypto-ascend-0:0（8 卡）；三件套 source /usr/local/Ascend/cann/set_env.sh && source $WS/activate.sh
+&& export PTO_ISA_ROOT=$WS/pto-isa && export PYTHONPATH=$WS/pypto/python:$WS/pypto-lib:$PYTHONPATH（PYTHONPATH 要
+**append** 否则丢 acl）。8 卡 env PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072。
 W8A8 ckpt=/mnt/hw910test-jfs/models/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp。
-bisect 高效：8 hold-mode exporter（--export-rank r --dev r --kv-ipc，一次~15min 冷载 或秒级若已在）+ 多次
-`--reuse-exporters` worker（改 models 后先 `find models/step3p5 -name '*.pyc' -delete`；每次 compile+run ~2-5min）。
-⚠ /tmp 每机独立（查 ready keys 在 tmux 0234）。push 走 b-csy-develop（0234 连不通 github）+ HTTP/1.1 + PAT
-`/data/chensiyu/secrets/github.env`；pypto/pypto-lib .git objects root-owned → commit 走 tmux(root)。
-全部细节读上面 🎯/⛔/✅ 段 + memory n1_head_gate_ondevice_restored_l1_nan（UPDATE5-8）。
+bisect 高效：8 hold-mode exporter（--export-rank r --dev r --kv-ipc，一次~15min 冷载）+ 多次 --reuse-exporters
+worker（改 models 后先 find models/step3p5 -name '*.pyc' -delete；每次 compile+run ~3min）。⚠ /tmp 每机独立
+（查 ready keys 在 tmux 0234：ls /tmp/n1_weight_ipc/ready.rank* | wc -l）；收尾 touch /tmp/n1_weight_ipc/STOP
++ pkill -f export-rank 释放卡。push 走 b-csy-develop（0234 连不通 github）+ HTTP/1.1 + PAT
+/data/chensiyu/secrets/github.env；pypto/pypto-lib .git objects root-owned → commit 走 tmux(root)。
+全部细节读上面 🎯/⛔/✅ 段 + 本 session（2026-07-13）段 + memory n1_head_gate_ondevice_restored_l1_nan（UPDATE9-10）。
 ```
