@@ -24,6 +24,17 @@
 > **下步**：(a) kernel guard（seq_len≤0 输出 0、跳读写）真隔离行；或 (b) 核对 live KV 读（IPC KV 字节 vs
 > vLLM dump / row0 逐层 log）。8001+sidecar 在 cards 8-15 运行中。memory `g5b_swa_multientry_kv_nan_root_cause` 续¹⁰。
 
+> **⭐ 续¹¹ 决定性定位（2026-07-12）**：sidecar 加逐层 row0 magnitude 日志 → live decode row0 **L0-16 全正常**
+> （6.1→74.5 渐长，MoE moe_out 非零 → **MoE L3-16 live 正常**）+ **L17 swa_moe attention 突然爆 3.7e28**（→ L17+
+> moe_out=0，残差携带到 L44）。**offline `--golden-decode-pos 17 --golden-fill-batch --layers 0..17`（注入干净
+> golden KV + 真 rope）复现：L0-16 pass（L15=0.9998,L16=0.9939）、L17 attn=NaN** → **L17 爆是确定性
+> kernel/weight/数值 bug，OFFLINE 可复现，非 vLLM KV-data/live/KV 池布局**（golden L15-17 KV/输入已验证干净）。
+> pass_rate 递减 L15→16→17 → 疑似 BF16-dequant 累积发散在 L17 触发 qk_norm(near-0 RMS→inf)/rope 溢出；N=1 track
+> 续¹¹ 已证 INT8-native MoE 精度 PASS → 切 INT8-native 是候选修法。**下步（offline 快）**：bisect L17 attn
+> Q/K/V/scores + qk_norm inv_rms 找 inf 源；试 qk_norm eps clamp；长期收敛到 INT8-native。复现器
+> `_stage_whole_decode_run.py --golden-decode-pos 17 --golden-fill-batch` + 逐层 row0 日志。**已排除**：seq_len=0
+> pad-row（已修 NaN 消除）、prefill 路由（已修）、KV 池 offset/布局（regular 已验）、KV-data/live。
+
 > 新 session 直接把下面 code block 当第一条消息粘贴。自包含。生成于 2026-07-12（续⁵）。
 > **上个 session 攻破 G5b 全部结构性 blocker**：const-fold 证伪、socket 真 metadata 协议、import_ipc 真 KV 零拷贝、
 > **co-tenancy crash 彻底解决（file-based broadcast）** → 整条 live 45 层 single-handoff **HTTP 200 稳定跑通**。
