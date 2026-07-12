@@ -349,20 +349,13 @@ attention 用 original（fused 重写非所需，存 /tmp 备 fused 若未来修
 
 ---
 
-## 1. head_gate × 1 旁路 —— 跟 vLLM 原生精度对齐
+## 1. head_gate —— ✅ 旁路已解除（gate landed via gate_r-slot）；剩余 = 整网 per-layer gate_r 喂入
 
-**严重度**：🟡 精度 —— gate Phase 21 L1（per-layer hidden_states）严格
-对齐。**不**阻塞 v0.1 / v0.2 功能 bring-up；只是"精度验证全绿"准出条件
-的一部分。
+**严重度**：🟡 精度（已从"旁路"降级）。
 
-**症状**：`attention_full.py:658-690` 和 `attention_swa.py` mirror 用
-`attn_out_gated = attn_out`（× 1 identity），不是
-`attn_out_gated = attn_out * sigmoid(head_gate_logits)`。每层 attention
-输出大致是上游期望值的 2 倍（`sigmoid` 平均输出 ~0.5）。
+**2026-07-12 更正（旧内容 stale）**：head_gate **不再是 ×1 旁路**。`attention_full.py` Scope 3.a（o_proj）现在把 `attn_out * gate_r` inline 相乘，`gate_r`（= gate_exp）由 **worker 端预算** `expand_per_head(sigmoid(RMSNorm(current_hidden) @ w_g))` `[BATCH, HIDDEN_Q]` 经 `gate_r` 槽喂入（BATCH==NH_PAD==16 正好装下）——即当年 TASK-30 "cube-matmul R 预扩展"的等价实现，32B-aligned 宽 mul 规避 `[N,1]` row_expand_mul 的 pto-isa TLOAD 限制。Scope 2.5 "Phase 15 BYPASS (still active)" 注释是 **stale**（已加 STALE-NOTE）；memory `step3p5_head_gate_matmul_acc_n16`(2026-07-03) live A/B `bad_ratio 0.97→~0` 对齐 vanilla。
 
-**根因**：pypto kernel 没法表达 head_gate 操作而不触发
-`pl.row_expand_mul([N, K], [N, 1])` 在 1 列 FP32 操作数上 — 这会撞 AIV
-32-byte 行对齐限制。这是 pto-isa 硬限制，model 侧无干净绕路。
+**新的真精度 gate（整网 monolithic）**：`gate_r` **逐层 activation-dependent**（`gate_exp_L=f(hidden_L)`，hidden_L=第 L 层内部残差输入）。`whole_decode_faithful_real`（45 层内联进**一个** dispatch）里 caller 只能预算 **layer-0** 的正确 gate_r（hidden_0=输入 embed）；L1-44 依赖内部 hidden，caller 看不到 → **monolithic 单-dispatch 整网除 L0 外 head-gate 不正确**，当前 harness 喂 dummy gate_r 每层都错。**整网 token-exact 需要 per-layer gate_r 喂入**（resident-DeviceTensor/per-layer dispatch，SKILL 推荐的 whole-decode-worker，逐层从 resident hidden 算 gate_r）或 on-device gate（因 N=16 matmul_acc bug 被移除）。这是 N=1 monolithic 撞的墙之一。
 
 分类参考：`pypto-lib/docs/known-pypto-pitfalls.md` §1。
 
