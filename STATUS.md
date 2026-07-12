@@ -5,6 +5,15 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 **最后更新**：2026-07-12
 
+> **2026-07-12 (续¹²) ✅✅✅ Blocker B 解除：N=1 整网 42 层真 W8A8 IPC device 跑通干净（3.48s）[Phase 27]**：
+> **文档假设（Blocker B = IPC VA 冲突）被 device 证伪，真根因 = gate_topk mrgsort 级联 bug。**
+> - **VA 证伪**：在真正的 MoE 路径 `comm_hccl.cpp:703 domain_alloc_via_ipc` 加 VA 诊断（旧诊断加错在 `:431` 未走路径 + `LOG_INFO_V0` 被默认 `info_v=5` 压掉；`logging.getLogger("simpler").setLevel(15)` 放开）→ device 实测：42 层仅 1 个 MoE comm domain window 在 `0x12c041600000`+396MB，8 卡一致，**整段在池 `0x12c1c0000000` 下方无重叠**。IPC 映射表（`pypto_weight_map.rank0.json`）48 key 全 512 对齐/无重叠/`max_end==pool 25.35GiB`/都在池内——VA 表正确。
+> - **真根因**：device stall 快照（`ASCEND_GLOBAL_LOG_LEVEL=1`+`ASCEND_PROCESS_LOG_PATH`）= `task_id=3 state=RUNNING kernels=[aiv0:3] core=28 fanin 3/3` 永不完成 = **`gate_topk` AIV kernel 挂死**（`orch_error=8` TENSOR_WAIT_TIMEOUT + S1 running-stalled）。gate.py SCORE_PAD=512 级联 `sort32→16×64 → mrgsort(block_len=64)→4×256 → mrgsort(srt[:,0:512],srt[:,512:1024])`——最后 format2 二路归并被喂两个"各含 2 段"的半块（非单段），违反 format2 前置 = SKILL "format2 半块未排序→状态机不终止→挂死"。**N≤2 clean / N=42 hang**（编译规模触发）。
+> - **修复（对齐 DeepSeek v4 gate.py 渐进 format1 链，scale 到 512）**：format2 二路 → `mrgsort(block_len=256)`（4×256→1×1024 全排序）。gate.py + decode_layer.py 10 处去重内联 MoE gate 全改。commit pypto-lib **`4bede85`**（feat/whole-net-n1-fusion）。
+> - **验证**：`_stage_whole_faithful_real_ipc -d0-7`（真 W8A8 INT8 IPC 池 25.35GiB/rank，全 42 MoE 层）→ **`REAL_WEIGHT_IPC_RUN_CLEAN` 3.48s，无 stall**。（输出为 0 因 harness 喂 dummy hidden/KV——device 执行路径已干净。）
+> - **工具**：harness `--reuse-exporters`（8 exporter 常驻、survive force-reset、bisect 秒级 attach）。
+> **剩余**：① KV cache 也走 IPC（用户硬约束，当前 dummy）；② 整网精度 vs vLLM（gate 修复的数值正确性需 gate-exercising 验证 + decode-step golden 或 live A/B）。
+>
 > **2026-07-12 (续¹¹) ⭐⭐⭐ Stage C 达成：INT8-native W8A8 MoE-block device 精度 PASS vs torch W8A8（ccec 修复后）[Phase 27]**：
 > 承续¹⁰（Stage B 到 device dispatch + 发现 ccec scale bug）。**修复 gap5_stagec ccec + device 精度验证通过**：
 > - **ccec 修复**：dispatch-side `local_routed_x_scale` 从 `[LOCAL_RECV_MAX, SCALE_W_PAD=8]` 改**非 padded contiguous `[1, LOCAL_RECV_MAX]`**；`_expert_routed` 读 `[1,RECV_TILE]` ND2ND row-slice+reshape（DeepSeek recv_scale_dq 模式）；`dispatch_step` repack 用 scalar col-0 read un-pad（a2a 窗口仍 `[.,SCALE_W_PAD]` 保 32B）；`chip_orch` create `[1,LOCAL_RECV_MAX]`。a2a3sim `[14.E] OK`。commit pypto-lib `1379ce2`。
