@@ -11,7 +11,7 @@
 - **必须用 IPC 共享显存机制**做端到端，**KV cache 和权重都走 IPC**。**不许 H2D 绕路**、不许换非-IPC 方案。（权重+KV IPC 已 device 跑通，见下。）
 - **必须用真实权重加载**（真 W8A8 checkpoint，非 dummy）。**真权重调试，不走其他弯路。**
 - 遇到问题只能**解决它**，不能绕开（work-around）。诊断脚手架只能定位、不能进产品路径。
-- **correctness > speed**：宁可诚实交接，不产出可能错误的精度数字（别为了"完成"硬造 A/B 结果）。
+- **correctness 和 speed 都要**：既要跑出正确结果、也要推进到底完成目标；别用"correctness"当借口停在半路，也别为"快"造出错误的精度数字。
 - **对齐 DeepSeek/Qwen**：遇问题先看 DeepSeek v4/Qwen 实现 + 历史开发文档，尽量对齐；step3p5-vs-DeepSeek 差异必须论证（只在"性能更好"时保留）。
 - **架构优先**：coding 前先系统分析 + 整体设计。**严格遵守 SKILL.md**（`pypto-project/.claude/skills/pypto-dev-constraints/SKILL.md`）；不满足约束可能是设计不合理需重设计。
 - **⚠ 历史文档可能 stale，先核对当前代码再下结论**（本 session 就踩过：attention_full.py "Phase 15 BYPASS" 注释已 stale，实际 head-gate 已 landed）。
@@ -28,14 +28,15 @@
 
 **⭐ 现在进入：整网 token-exact 精度对齐 vs vLLM。头号阻塞见下。**
 
-## ⛔ 头号精度阻塞：monolithic 整网的 per-layer gate_r（结构性）
+## ✅ 头号精度阻塞已解（2026-07-12）：monolithic 整网 per-layer gate_r —— on-device head-gate（路径 a）
 
-head-gate 靠 worker 预算的 `gate_r = expand_per_head(sigmoid(RMSNorm(hidden_L) @ w_g_L))` `[BATCH, HIDDEN_Q]` 经 `gate_r` 槽喂入（`attention_full.py` Scope 3.a：`attn_out * gate_r` inline 宽 mul）。**`gate_r` 逐层 activation-dependent**（依赖第 L 层内部残差 `hidden_L`）。
-`whole_decode_faithful_real` 把 45 层塞进**一个 dispatch**，caller 只能算对 **layer-0** 的 gate_r（`hidden_0 = 输入 embed`），**L1-44 拿不到内部 hidden → 当前 harness 喂 dummy gate_r，除 L0 外每层 head-gate 都错 → monolithic 单-dispatch 不可能 token-exact。**
+**已解**：`matmul_acc N=16` 丢 K 累加的 codegen bug（当年把 head-gate 移 worker 的原因）**现栈已修**（device probe `_probe_matmul_acc_n16` PASS + full-chain `_probe_head_gate_full` PASS）。据此在 `attention_full.py` + `attention_swa.py` **Scope 1.f 恢复 on-device head-gate**：`gate_logits = normed_all @ w_g`（K-chunk matmul_acc, N=16）→ `sigmoid` → `gate_exp = gate_score @ R`（N-chunk）；Scope 3.a o_proj 乘 `gate_exp`。`gate_r` 槽改承载 **block-diag R 常量**（`R[h,h*HEAD_DIM+d]=1` 实头，**layer-independent → 喂一次全 45 层通用**），每层从自己 `normed_all` 自算 gate → **monolithic 整网可 token-exact**（不再需 per-layer dispatch / resident-DeviceTensor 喂 gate_r）。对齐 vLLM `modeling_step3p5` L489 + L527-531。harness 填 R（实头=HQ//HEAD_DIM：full=8/swa=12）。`whole_decode_faithful_real` **TP=8 COMPILE OK**（attention inline 从 `._func` 重导，无需 regen）。memory `n1_head_gate_ondevice_restored_l1_nan` / `step3p5_head_gate_uses_normed_hidden`。
 
-**两条解法（下 session 攻，先做架构分析）：**
-- **路径 (a)【最贴合 N=1 目标，优先验证】恢复 on-device head-gate 计算**：当年因 `pl.matmul_acc` **小 N=16 丢 K 累加**的 codegen bug（gate_logits = normed @ w_g 输出 N=NUM_HEADS=16，结果 ~20× 偏小）才把 gate 移到 worker。**第一步：验证该 bug 现栈是否还在**（写个 N=16 matmul_acc probe vs torch，模型 `gate.py` Stage-1 的 K-chunk matmul_acc 写法，见 gate.py:138-149）。若已修 → 把 on-device gate_logits+sigmoid+block-diag-expand 加回 attention（+swa），monolithic 整网即可**自算 per-layer gate_r → token-exact**。若还在 → 上游 pypto 修 matmul_acc（N=16），或换避开小-N 的写法（如 pad N 到更大 + slice）。参 memory `moe_gate_topk_tail_precision` / `step3p5_head_gate_matmul_acc_n16`、`deployment/troubleshooting-8001-pypto-bridge.md §head-gate`。
-- **路径 (b) per-layer dispatch 架构**：resident-DeviceTensor 逐层 dispatch，每层从 resident hidden 算 gate_r（SKILL §H 推荐的 whole-decode-worker，`DistributedWorker #1706` + resident DeviceTensor 串 residual/KV）。放弃纯 monolithic 单-dispatch。这是 G5b track 的路子（`NEXT-SESSION.md`）。
+## ⛔ 新头号阻塞（L1 暴露）：整网 attention/decode 的 pre-existing NaN
+
+L1 ctx=1 A/B 首跑：pypto worker `--hidden-token 6127 --kv-ipc` **RUN_CLEAN 3.59s 但 `next_hidden=nan / logits=nan / argmax=0`**（vLLM golden：tid=6127「北京」→ next=**303**「，」）。**NaN 不是 gate**——`w_g` padding 已 zero-pad（`weight_loader._slice_g_proj` L594）→ sigmoid(0)=0.5 finite；KV pool `torch.zeros`（`pypto_weight_ipc.export_from_checkpoint` L394）。**真相**：旧代码 dummy `gate_r=0` 让 `attn_out*0=0` **静默屏蔽了 attention 里 pre-existing 的 NaN**（SKILL 禁止的 silent-mask）；恢复真 gate 后 NaN 流出。疑似 `g5b_swa_multientry_kv_nan_root_cause` 同族，但本 harness seq_lens=ones（16 行全 ctx=1），那条 seq_len=0 路径不应触发。
+
+**下一步**：per-layer golden bisect 定位首个 NaN 层/算子（faithful 单-dispatch 无逐层输出 → 加逐层 dump 旋钮，或用 G5b `_stage_whole_decode_run.py --golden-decode-pos` 另一 harness）→ 修 → 重跑 L1（tid 6127 期望 303）。
 
 ## 🎯 精度对齐方式（三档，从易到难）
 

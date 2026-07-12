@@ -349,34 +349,17 @@ attention 用 original（fused 重写非所需，存 /tmp 备 fused 若未来修
 
 ---
 
-## 1. head_gate —— ✅ 旁路已解除（gate landed via gate_r-slot）；剩余 = 整网 per-layer gate_r 喂入
+## 1. head_gate —— ✅ 整网 per-layer gate_r 已解（on-device gate, 路径 a）；剩余 = L1 暴露的整网 attention/decode NaN
 
-**严重度**：🟡 精度（已从"旁路"降级）。
+**严重度**：🟡 精度。**per-layer gate_r 结构性阻塞已解除**；新暴露一个 pre-existing NaN。
 
-**2026-07-12 更正（旧内容 stale）**：head_gate **不再是 ×1 旁路**。`attention_full.py` Scope 3.a（o_proj）现在把 `attn_out * gate_r` inline 相乘，`gate_r`（= gate_exp）由 **worker 端预算** `expand_per_head(sigmoid(RMSNorm(current_hidden) @ w_g))` `[BATCH, HIDDEN_Q]` 经 `gate_r` 槽喂入（BATCH==NH_PAD==16 正好装下）——即当年 TASK-30 "cube-matmul R 预扩展"的等价实现，32B-aligned 宽 mul 规避 `[N,1]` row_expand_mul 的 pto-isa TLOAD 限制。Scope 2.5 "Phase 15 BYPASS (still active)" 注释是 **stale**（已加 STALE-NOTE）；memory `step3p5_head_gate_matmul_acc_n16`(2026-07-03) live A/B `bad_ratio 0.97→~0` 对齐 vanilla。
+**2026-07-12 解除（路径 a 落地）**：`matmul_acc N=16` 丢 K 累加的 codegen bug（当年把 head-gate 移 worker 的原因）**现栈已修**（device probe `_probe_matmul_acc_n16` PASS + full-chain `_probe_head_gate_full` PASS）。据此在 `attention_full.py` + `attention_swa.py` **Scope 1.f 恢复 on-device head-gate**：`gate_logits = normed_all @ w_g`（K-chunk matmul_acc, N=16）→ `sigmoid` → `gate_exp = gate_score @ R`（N-chunk）；Scope 3.a o_proj 乘 `gate_exp`。`gate_r` 槽改承载 **block-diag R 常量** `[NHF_PAD, HQ_LOCAL]`（R[h,h*HEAD_DIM+d]=1 实头），**layer-independent → 喂一次全 45 层通用**，每层从自己的 `normed_all` 自算 gate → **monolithic 整网可 token-exact**（不再需 per-layer dispatch / resident-DeviceTensor 喂 gate_r）。数学对齐 vLLM `modeling_step3p5` L489（g_proj on input_layernorm-normed hidden）+ L527-531（`attn_out * gate.sigmoid()` before o_proj）。harness `_stage_whole_faithful_real_ipc.py` 填 R（实头 = HQ//HEAD_DIM：full=8/swa=12）。`whole_decode_faithful_real` **TP=8 COMPILE OK**（attention inline 从 `._func` 重导，无需 regen）。
 
-**新的真精度 gate（整网 monolithic）**：`gate_r` **逐层 activation-dependent**（`gate_exp_L=f(hidden_L)`，hidden_L=第 L 层内部残差输入）。`whole_decode_faithful_real`（45 层内联进**一个** dispatch）里 caller 只能预算 **layer-0** 的正确 gate_r（hidden_0=输入 embed）；L1-44 依赖内部 hidden，caller 看不到 → **monolithic 单-dispatch 整网除 L0 外 head-gate 不正确**，当前 harness 喂 dummy gate_r 每层都错。**整网 token-exact 需要 per-layer gate_r 喂入**（resident-DeviceTensor/per-layer dispatch，SKILL 推荐的 whole-decode-worker，逐层从 resident hidden 算 gate_r）或 on-device gate（因 N=16 matmul_acc bug 被移除）。这是 N=1 monolithic 撞的墙之一。
+**新暴露的阻塞（L1 ctx=1 A/B）**：pypto worker `--hidden-token 6127 --kv-ipc` **RUN_CLEAN 3.59s 但 `next_hidden=nan / logits=nan / argmax=0`**（vLLM golden：tid=6127「北京」→ next=303「，」）。**NaN 不是 gate 引入**——`w_g` padding 列已 zero-pad（`weight_loader._slice_g_proj` L594 `torch.cat([...,zeros])`）→ sigmoid(0)=0.5 finite；KV pool `torch.zeros`（`pypto_weight_ipc.export_from_checkpoint` L394）。**真相**：旧代码 dummy `gate_r=0` 让 `attn_out*0=0`，**静默屏蔽了 attention 里 pre-existing 的 NaN**（正是 SKILL 禁止的 silent-mask）；恢复真 gate 后 NaN 流出。疑似 [[g5b_swa_multientry_kv_nan_root_cause]] 同族，但本 harness seq_lens=ones（16 行全 ctx=1），那条 seq_len=0 uninit-scratch 路径不应触发 → 需 **per-layer golden bisect** 定位首个 NaN 层/算子（faithful 单-dispatch 无逐层输出 → 加逐层 dump 旋钮，或用 G5b `_stage_whole_decode_run.py --golden-decode-pos` 另一 harness）。
 
-分类参考：`pypto-lib/docs/known-pypto-pitfalls.md` §1。
+分类参考：`pypto-lib/docs/known-pypto-pitfalls.md` §1。memory：`n1_head_gate_ondevice_restored_l1_nan` / `step3p5_head_gate_uses_normed_hidden`。
 
-**跟踪**：TASK-L（pto-isa 上游 — 用 cube-matmul 配 block-diag R 矩阵
-构造）。在 backlog 里跟踪。
-
-**解除条件**（任一，按优先级）：
-
-A. 上游 pto-isa 落 `[N, 1]` slice 32-byte 静态对齐 reject（§1 doc 提到）
-   **同时**我们在 attention_full / attention_swa 用 cube-matmul × block-
-   diag R 构造表达 head_gate，避免 intra-UB `[N, 1]` Vec tile。
-B. Phase 21 §2.7 标定 —— patch 上游 vLLM `Step3p5Attention` 也走 × 1
-   identity（语义上丢掉 gate）。失去 ~2× attention scaling 对生产意义不
-   利，但允许 L1 ratio_allclose 在两个（同样降级的）实现之间通过。
-C. 拓宽 Phase 21 L1 容忍区间，吸收 attention-output-only 路径 ~50%
-   magnitude 差。less rigorous；记录差距即可。
-
-**估时**：
-- 路径 A：周（上游 gate）
-- 路径 B：1-2 天（vLLM 侧 patch + 重跑）
-- 路径 C：0.5 天（tolerance 配置改 + 重 baseline）
+**解除条件（NaN）**：per-layer bisect 定位 → 修 attention/decode NaN → 重跑 L1（tid 6127 → 期望 303）。
 
 **Owner**：TASK-L 上游；项目侧决策待定。
 

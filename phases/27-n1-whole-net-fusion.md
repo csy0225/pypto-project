@@ -346,3 +346,90 @@ StackedDeviceTensor + 改 host_orch/harness 只索引 `[r]`（需改 _gen_faithf
 
 **结论**：N=1 real-weight import_ipc 距 finite logits 只差这一个 runtime slicing 增强；Task② device 落地
 在下 session 一步之遥。co-resident live A/B 仍另 gate 在 gap-5 HBM。
+
+### Step-3 run#4/#5/#6（2026-07-11 五续）—— getitem gate 解决；连暴两个 device blocker（arena-OOM → collective-stall）
+
+**① `StackedDeviceTensor.__getitem__` `[r,k]` gate 已修（推荐方案 a）✅**：`pypto/python/pypto/runtime/device_tensor.py`
+`__getitem__` 现对 partial trailing 选择 delegate 给 shard 自己的 `DeviceTensor.__getitem__`（连续 sub-view，
+算 `base + k*layer_stride*elem`，非连续则 loud `NotImplementedError`）。whole-shard 形式（`x[r]`/`x[r,...]`/
+`x[r,0:N,0:M]`）行为不变仍返回整 shard。对齐 host_orch 全部索引形式（4D 权重 `[r,k,0:N,0:M]`、MoE 5D
+`[r,k,0:36,0:1280,0:4096]`、router_bias 2D `[r,k,0:288]`、whole-shard norm `[r,0:45,0:4096]`）。CPU 逻辑
+校验全过（offset/shape/identity/非连续 reject）。UT `test_device_tensor.py` 的 `test_partial_tail_slice_rejected`
+（断言旧 loud-reject 契约）已按新契约替换为 per-layer-plane + contiguous-partial + noncontiguous-reject 三例。
+**run#4 device 验证：getitem gate 通过**——8 exporter export 真 47.46GiB 池 → compile OK → 8 chip ready →
+`import_ipc_all` 8 peer_bases → 42 args → 进 host_orch，**不再报 whole-shard ValueError**，走到真正的 device
+dispatch。Task① 完成。
+
+**② 新 device blocker A — 静态 arena OOM（`rtMalloc 207001 size≈16GB`）**：run#4 越过 getitem 后在
+`ensure_static_arenas` 报 `rtMalloc failed: 207001 (size=17179870207)` / `Failed to setup pooled static arena`。
+根因：静态 arena `total_heap = Σ heap_sizes[r]`（`runtime_maker.cpp:501 derive_arena_static_sizes`），
+`PTO2_MAX_RING_DEPTH=4`（`pto_runtime2_types.h:70`）× `PTO2_RING_HEAP=4GB` = **16GB arena**。单卡预算：
+3.34GiB baseline + 47.46GiB 权重池 + 16GiB arena ≈ 66.9GiB > 64GiB（65536 MiB）→ OOM。**非泄漏**（kill 后
+各卡 3413-3416 MiB baseline，~61GiB free）。这也修正了 memory `n1_live_integration` 中「standalone 47GB 池
+fits」的乐观估计——漏算了 16GB runtime arena。**缓解**：降 `PTO2_RING_HEAP` 缩 arena（现有 env 旋钮，非新
+gate）。max-fit = 3GB（arena 12GiB，总 ~64.3GiB，margin ~0.86GiB）。
+
+**③ 新 device blocker B — 首个 collective running-stalled（507018 / sched=100）**：run#5（`PTO2_RING_HEAP=2GB`，
+arena 8GiB，越过 OOM）allocate + **实际执行 45.4s** 后报 `orch_error_code=8 sched_error_code=100
+S1:running-stalled completed=4/32 running=1 waiting=3 stuck_task_id=0x100000003 stuck_core=24/26/28`。
+**8 卡对称**卡在同一 task（scope-level 1, task 3）——典型**首个 tp_all_reduce/EP barrier collective 不完成**。
+非 heap-alloc deadlock（无 `Task Allocator Deadlock`），非 OOM。已知 `whole_decode_faithful_real` 曾
+dummy-weight DISPATCH_CLEAN（collective 本身能通），故 delta = (a) heap 降到 2GB 或 (b) 真 47GB IPC 权重池与
+comm-domain IPC window 共存干扰。**run#6（`PTO2_RING_HEAP=3GB` = max-fit）验证中**：若清除 = heap-starvation
+（2GB 太小饿死 comm path）；若同样 4/32 stall = IPC 权重池干扰 collective，需查 comm-domain window 与 47GB 池
+共存（deeper）。
+
+**当前净结论**：Task① getitem 已 device 落地；Task② finite-logits 被两个新 device blocker 阻（arena-OOM 已解，
+collective-stall 待 run#6 判定）。Task③（真 KV + live A/B）仍 gate 在 gap-5 HBM（需 live 8001 co-resident，
+0234 standalone 无 8001）。
+
+### Step-3 run#7 + 隔离实验（2026-07-11 六续）—— Blocker B 定性：stall = IPC child_memory 权重 × collective，非 heap/非 runtime-path
+
+**run#6（heap=3GB）**：不 fit——12GiB heap-arena 分配后，另一个 **~2.5GiB 固定 arena 组件**（tensormap/sm，
+`rtMalloc size=2571110271`）顶爆。故 `PTO2_RING_HEAP` fit 天花板 ≈ 2.6GB（arena = 4×heap + ~2.5GiB 固定）。
+
+**run#7（heap=2GB + `ASCEND_PROCESS_LOG_PATH` capture）**：与 run#5 **逐字复现** stall（8 卡对称
+`completed=4/32 stuck_task_id=0x100000003`），确定性、非 flaky。默认 log level 不落 AICPU per-core stall dump
+（只有 host summary）。
+
+**决定性隔离 —— dummy 权重 + heap=2GB → `DISPATCH_CLEAN` 269s ✅**：`_stage_whole_faithful_real_device.py`
+跑**同一 program `whole_decode_faithful_real`**、**同样 full-size 权重 shape（zeros）**、**同 heap=2GB**，但权重经
+`compiled(*inputs)` 正常 H2D-staged device 内存（非 IPC）→ **全 45 层跑完无 stall**。证明：(a) heap=2GB 不是 stall
+根因；(b) 47GB/卡 device 权重 + collective 本身能通。
+
+**deconfound（读码，非跑机）**：`compiled(*inputs)`（device.py 干净路径）与 `prepare()+rt.run()`（IPC stall 路径）
+**共用同一 `_dispatch`**（`distributed_runner.py:611`；`execute_distributed@742` 与 `_run_compiled@1395` 都调它），
+prepared-vs-oneshot 只差 dep_gen 开销、不差 execution。故 runtime-path 非 confound。
+
+**Blocker B 定性结论**：同 program、同 `_dispatch`、同 heap、同（零）activation——唯一 execution-relevant 差异 =
+**权重内存种类**：normal H2D-staged device（干净）vs **IPC `child_memory` peer-mapped 池**（stall layer-0 task 3）。
+**根因：whole-decode layer-0 首个吃权重的 kernel/collective 在权重驻留 IPC child_memory 池时 stall**。offset 已验证
+（pool 是 `[L,N,M]` layer-major 连续，getitem `base+k*layer_stride` 正确），故非 wrong-address。G5b 曾 device 读
+IPC KV 成功（小池、0162），故非「AICore 完全不能读 IPC」——差异在 47GB 权重池规模 / peer-access flag 是否覆盖
+AICore MTE / 与 comm-domain window 的 peer-access 地址空间共存。
+
+**下 session 攻坚方向**（不再盲跑 12min run）：(1) dispatch-cut bisect（加 task-limit / `P_FAITHFUL_MOE_LAYERS`）
+精确 pin task 3-4 是 matmul 还是 collective；(2) 核对 weight-IPC import flag = ENABLE_PEER_ACCESS 是否让 AICore MTE
+可达该池（对比能通的 KV 池 import 路径）；(3) 查 comm-domain window 与 47GB 权重池 peer-access 地址空间是否冲突。
+
+**当前净结论（更新）**：Task① getitem **DONE + device-proven**；Task② finite-logits 被 **Blocker B（IPC 权重×
+collective 共存）** 阻——已 deconfound 定性（非 heap/非 runtime-path），是真 device blocker，需 bisect + IPC
+peer-access 核对（下 session）。Task③（真 KV + live A/B）仍 gate 在 gap-5 HBM。arena-OOM（Blocker A）已解
+（`PTO2_RING_HEAP≤2.6GB` fit）。
+
+### Step-3 run#8 —— ⭐⭐ IPC 路径 device 证实（非 MoE 部分端到端 CLEAN），Blocker B 定案 = MoE `ep_all_to_all`
+
+**run#8（`P_FAITHFUL_MOE_LAYERS=0`，IPC 真权重，heap=2GB）→ `RESULT=REAL_WEIGHT_IPC_RUN_CLEAN` 2.17s ✅**：
+MoE body 全跳过时，**N=1 IPC 全链（真 W8A8 权重 import_ipc + getitem fix + rt.run + attention/dense 的
+tp_all_reduce collective）attention+dense 端到端跑通**（非只过 gate，是完整 RUN 到 RESULT=CLEAN）。
+
+**Blocker B 定案（device 证实）**：`P_FAITHFUL_MOE_LAYERS=0` clean / ≥1 stall（MoE `chip_orch` task3）→ **Blocker B
+= MoE block `ep_all_to_all`（首个 all-to-all）× IPC 权重池共存**，与 attention/dense 的 tp_all_reduce（all-reduce，
+已证 IPC-兼容）不同。**IPC 权重机制本身 OK**（attn+dense 用真 IPC 权重跑通），gap 纯在 MoE EP all-to-all。
+`_ta_4`=MoE chip_orch 内序 gate→shared+tp_all_reduce→dispatch(EP a2a≈task3)→routed matmul(task4+)，stall 在
+routed matmul **之前** → 大概率 a2a、非权重读。
+
+**下 session（精确起点）**：(1) `P_FAITHFUL_MOE_LAYERS=1` 最小 MoE repro + MoE chip_orch 内 a2a-vs-matmul bisect；
+(2) 查 `ep_all_to_all` comm-domain window / peer-access 与 47GB(→INT8 24GB) IPC 池共存冲突；(3) INT8-native
+（routed MoE→INT8，scope=仅 3 个 matmul=整池，gap-5）同时解 Blocker A + heap 压缩，且腾 HBM 可能顺带解 Blocker B
+的 a2a comm-window 挤压。Task③ 仍 gate 在 gap-5 HBM + live 8001 co-resident。
