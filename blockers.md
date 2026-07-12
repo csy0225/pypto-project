@@ -361,7 +361,9 @@ attention 用 original（fused 重写非所需，存 /tmp 备 fused 若未来修
 
 **解除条件（NaN）**：per-layer bisect 定位 → 修 attention/decode NaN → 重跑 L1（tid 6127 → 期望 303）。
 
-**2026-07-12 bisect 结果 — NaN 定位到 MoE 路径（attention 干净）**：`P_FAITHFUL_MOE_LAYERS=0`（decode_layer.py:19182，emit 0/42 MoE 层 → 仅 3 dense/swa attention 层）跑出 `next_hidden=502.0 / logits=9.03 / argmax=27527` **FINITE 无 NaN**。→ **attention 路径（含恢复的 on-device head-gate）干净**；full-run NaN 源在 **42 层 INT8 W8A8 routed-MoE**（gap-5 territory：in-kernel per-token INT8 quant/dequant/cast 链）。head-gate 改动确认正确。下一步 bisect：`P_FAITHFUL_MOE_LAYERS=1,2,4,…` 定位首个 NaN MoE 层 → 再定位算子（疑 routed grouped-GEMM INT8 dequant 或 shared-expert）。
+**2026-07-12 bisect 结果 — NaN 定位到 MoE 路径（attention 干净）**：`P_FAITHFUL_MOE_LAYERS=0`（decode_layer.py:19182，emit 0/42 MoE 层 → 仅 3 dense/swa attention 层）跑出 `next_hidden=502.0 / logits=9.03 / argmax=27527` **FINITE 无 NaN**。→ **attention 路径（含恢复的 on-device head-gate）干净**；full-run NaN 源在 **42 层 INT8 W8A8 routed-MoE**（gap-5 territory：in-kernel per-token INT8 quant/dequant/cast 链）。head-gate 改动确认正确。
+
+**2026-07-12 bisect 二 — 单层 MoE 即复现 NaN**：`P_FAITHFUL_MOE_LAYERS=1`（3 attention + 1 MoE）→ `next_hidden=nan / argmax=0`。→ **单个 INT8 MoE 层就 NaN**，非跨层累积；MoE 输入是 post_attention_layernorm 归一化的（O(1)，非 502），所以是 INT8 routed-expert 计算本身（gap-5）。exporter `int8_routed=True` → pool 25.35GiB INT8；whole-net 内联 MoE 是 INT8-native（且与 standalone-validated moe.py INT8 kernel **decoupled**，内联副本可能带 gap-5 miscompile）。**下一步**：MoE 内部 dump 定位算子（routed grouped-GEMM INT8 dequant vs shared-expert vs input per-token quant，疑 gap-5 cast→INT8→cube 链）→ 修 → 重跑 L1（期望 argmax=303）。**高效 bisect 设置**：8 hold-mode exporter + `--reuse-exporters` 快速 attach（免 15min 重载），每次 reduced-layer worker compile+run ~5min。
 
 **Owner**：TASK-L 上游；项目侧决策待定。
 
