@@ -12,7 +12,8 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 > - **修复（对齐 DeepSeek v4 gate.py 渐进 format1 链，scale 到 512）**：format2 二路 → `mrgsort(block_len=256)`（4×256→1×1024 全排序）。gate.py + decode_layer.py 10 处去重内联 MoE gate 全改。commit pypto-lib **`4bede85`**（feat/whole-net-n1-fusion）。
 > - **验证**：`_stage_whole_faithful_real_ipc -d0-7`（真 W8A8 INT8 IPC 池 25.35GiB/rank，全 42 MoE 层）→ **`REAL_WEIGHT_IPC_RUN_CLEAN` 3.48s，无 stall**。（输出为 0 因 harness 喂 dummy hidden/KV——device 执行路径已干净。）
 > - **工具**：harness `--reuse-exporters`（8 exporter 常驻、survive force-reset、bisect 秒级 attach）。
-> **剩余**：① KV cache 也走 IPC（用户硬约束，当前 dummy）；② 整网精度 vs vLLM（gate 修复的数值正确性需 gate-exercising 验证 + decode-step golden 或 live A/B）。
+> - **✅ KV cache 也走 IPC 已完成（commit `c61046b`，`--kv-ipc`）**：exporter 把 per-rank `k_cache`/`v_cache` `[4096,128]` bf16 carve 进同一 IPC 池；worker 把它们绑成 `add_inout` StackedDeviceTensor（attention 读 context + 写新 K/V 进共享 peer 内存），替换 dummy host tensor。验证：全 42 层真 W8A8，**权重 + KV 双双走 IPC**，8 卡 → `REAL_WEIGHT_IPC_RUN_CLEAN` 3.39s。**用户"KV+权重都走 IPC"硬约束达成。**
+> **剩余**：整网精度 vs vLLM —— gate 修复数值正确性 + 整网 token-exact。**环境阻塞**：0234 无 vLLM W8A8 server（8000/8001 down，`VLLM_PROC=0`），decode-step W8A8 golden 不在 0234（0162 上的是 18-token PREFILL dump，非 decode-step）。需在 0234 起 W8A8 vLLM oracle（+ co-tenancy `SIMPLER_COMM_NO_HCCL=1`）或用 G5b track（0162 有 oracle infra）的 live A/B。gate 修复本身 = 完整 merge-sort，与 DeepSeek v4 gate.py 一致（analytically correct）。
 >
 > **2026-07-12 (续¹¹) ⭐⭐⭐ Stage C 达成：INT8-native W8A8 MoE-block device 精度 PASS vs torch W8A8（ccec 修复后）[Phase 27]**：
 > 承续¹⁰（Stage B 到 device dispatch + 发现 ccec scale bug）。**修复 gap5_stagec ccec + device 精度验证通过**：
