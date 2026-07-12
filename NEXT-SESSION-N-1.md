@@ -42,6 +42,8 @@ L1 ctx=1 A/B 首跑：pypto worker `--hidden-token 6127 --kv-ipc` **RUN_CLEAN 3.
 
 **下 session 从这里继续**：8 hold-mode exporter + `--reuse-exporters`（免 15min 重载，每次 ~5min）；对单层 MoE 加内部 dump 定位算子（routed grouped-GEMM INT8 dequant / shared-expert / input per-token quant，疑 cast→INT8→cube gap-5 链）→ 修 → 重跑 L1（tid 6127 期望 argmax=303）。
 
+**A-operand padding 假设已 DISPROVEN（2026-07-12）**：试了 gap-5 fix（routed_x_quant/routed_h_quant 的 `x_i8`/`h_i8` padding 行置零，fillpad(set_validshape(cast_tile))）→ 编译+跑通仍 NaN → NaN 在**有效行计算**（amax per-row，有效行 scale 干净），非 fractal padding。已 revert。**剩余嫌疑**：routed INT8 dequant（`w_*_r_scale` IPC 值）/ gate routing weights / dispatch a2a / combine / shared expert。**下一步需 per-op dump 仪表化**（monolithic 无中间输出）或用 standalone moe.py MoE-block harness 喂真 IPC 权重看是否也 NaN（隔离 inlined-copy-bug vs 权重）。
+
 ## 🎯 精度对齐方式（三档，从易到难）
 
 **L0 单卡算子（已做）**：`_probe_gate_sort`（gate_topk sort vs torch.topk，PASS）。gate_matmul 单卡 unsliced 会 Mat/Vec 溢出（`test_gate.py`，pre-existing，单卡 shape 铁律），验 gate 用 sort-only probe。
