@@ -13,6 +13,17 @@
 > --layers 0,1,...`（cards 8-15，`--golden-fill-batch`=无 pad 行对照组）。**下面 code block 的「唯一剩余=数值」
 > 已被本条取代 —— 数值路径已证正确，只需修 seq_len=0 pad-row + live A/B。**
 
+> **⭐ 续¹⁰ live A/B 部分打通（2026-07-12）**：3 处 live 修复落地 —— sidecar `_feed_meta`
+> 把 seq_len=0 pad 行 sanitize 成 seq_len=1+scratch slot；容器后端 `pypto_whole_decode_backend.py`
+> `_extract_step_meta` prefill 检测改 `num_prefill_tokens>0`（原 `seq_len==0` 误判把 prefill 路由到
+> decode-only kernel → NaN，备份 `.bak-prefillfix`）。重启 8001 mode=full + sidecar 后 live A/B
+> （`北京是中国的首都` greedy max_tokens=3）：**8000=`，也是中国` / 8001=`，`**。突破：**NaN 消除**
+> （final residual 有限）+ **decode 正确路由 pypto**（forward #2 hidden(1,4096)）+ **首 token 对齐**。
+> 剩：pypto decode token 仍 blowup(~1e28)，offline golden row0 完美(1.0) → **live 特有**：pad 行
+> scratch 读未初始化 → 跨行污染 row0，或 vLLM KV 池布局 ≠ kernel flat `row=block*128+slot`（obstacle 3）。
+> **下步**：(a) kernel guard（seq_len≤0 输出 0、跳读写）真隔离行；或 (b) 核对 live KV 读（IPC KV 字节 vs
+> vLLM dump / row0 逐层 log）。8001+sidecar 在 cards 8-15 运行中。memory `g5b_swa_multientry_kv_nan_root_cause` 续¹⁰。
+
 > 新 session 直接把下面 code block 当第一条消息粘贴。自包含。生成于 2026-07-12（续⁵）。
 > **上个 session 攻破 G5b 全部结构性 blocker**：const-fold 证伪、socket 真 metadata 协议、import_ipc 真 KV 零拷贝、
 > **co-tenancy crash 彻底解决（file-based broadcast）** → 整条 live 45 层 single-handoff **HTTP 200 稳定跑通**。
