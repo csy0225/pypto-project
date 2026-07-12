@@ -53,6 +53,18 @@
 > **两条 track 在 INT8-native 汇合**。⚠ 待补控制实验：L15/L16-alone attn 对拍确认是幅值驱动还是 L17-index。
 > 复现器 `_stage_whole_decode_run.py --golden-decode-pos 17 --golden-fill-batch --layers 17` + gcmp-attn。
 
+> **⭐ 续¹¹g 控制实验确认 + INT8-native 收敛计划（用户拍板，2026-07-12）**：control（L15,16,17 chained attn-vs-golden）
+> **L15=0.27(mag48)→L16=0.11(mag52)→L17=0.089(mag58) 单调随幅值退化**（+ L1-alone=1.0 小幅值）→ **确认 BF16-dequant
+> attention/residual 在大残差幅值下精度退化 = 整网 token-garbage 根因**。**用户拍板：收敛到 INT8-native**。0162 两 checkout：
+> (a) `pypto-lib`(stepfun/develop @795dc474)=G5b BF16-dequant + live 基建（sidecar --serve、_feed_meta seq_len=0
+> sanitize、--golden-decode-pos、容器后端 prefill fix、co-tenancy NO_HCCL），无 INT8；(b) `pypto-lib-n1`(n1-live
+> @d9b7dc68)=INT8-native（moe.py INT8 + `whole_decode_faithful_real` TP=8 编译过 + Stage C MoE-block device 精度
+> PASS + weight_loader int8_routed），无 G5b serve/fixes（grep=0），full IPC e2e 卡 **Blocker B**（MoE collective ×
+> IPC 池 VA 0x12c1c0000000 冲突，深度 runtime）。**收敛计划（下 session，多步）**：(1) 把 G5b live 基建（serve loop
+> + _feed_meta seq_len=0 sanitize + prefill 路由 + co-tenancy）移植到 n1-live INT8-native whole-decode；(2) 解
+> Blocker B（N=1 track 在推进）；(3) INT8-native live A/B 8001 vs 8000 token-exact。**两 track 在此汇合 = G5b 基建 +
+> N=1 INT8-native compute = token-exact 路径**。
+
 > 新 session 直接把下面 code block 当第一条消息粘贴。自包含。生成于 2026-07-12（续⁵）。
 > **上个 session 攻破 G5b 全部结构性 blocker**：const-fold 证伪、socket 真 metadata 协议、import_ipc 真 KV 零拷贝、
 > **co-tenancy crash 彻底解决（file-based broadcast）** → 整条 live 45 层 single-handoff **HTTP 200 稳定跑通**。
