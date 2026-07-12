@@ -5,6 +5,15 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 **最后更新**：2026-07-12
 
+> **2026-07-12 (续¹¹) ⭐⭐⭐ Stage C 达成：INT8-native W8A8 MoE-block device 精度 PASS vs torch W8A8（ccec 修复后）[Phase 27]**：
+> 承续¹⁰（Stage B 到 device dispatch + 发现 ccec scale bug）。**修复 gap5_stagec ccec + device 精度验证通过**：
+> - **ccec 修复**：dispatch-side `local_routed_x_scale` 从 `[LOCAL_RECV_MAX, SCALE_W_PAD=8]` 改**非 padded contiguous `[1, LOCAL_RECV_MAX]`**；`_expert_routed` 读 `[1,RECV_TILE]` ND2ND row-slice+reshape（DeepSeek recv_scale_dq 模式）；`dispatch_step` repack 用 scalar col-0 read un-pad（a2a 窗口仍 `[.,SCALE_W_PAD]` 保 32B）；`chip_orch` create `[1,LOCAL_RECV_MAX]`。a2a3sim `[14.E] OK`。commit pypto-lib `1379ce2`。
+> - **device 精度 PASS**：`_stage_moe_block_precision --layer 3 --dev-offset 0 --ckpt <W8A8> --bypass-gate --torch-golden`（0234 8 卡，真 W8A8 INT8 experts，synthetic 输入）→ **`'moe_out' PASS ratio_allclose(atol=0.04, rtol=0.04, max_error_ratio=0.1)`**，`layer=3 target=ffn_out DEVICE: PASS (27.19s)`。→ **INT8×INT8 W8A8 MoE-block（gate/up/down INT8 matmul + col/row_expand dequant + h_i8 requant + dispatch-side per-token act quant）device 数值正确**（vs torch W8A8-dequant 参考，即 vLLM W8A8 同款数学），无 fractal-32 静默错。
+> - **意义**：**精度验证达成**（MoE kernel 级，device-verified）。standalone MoE-block 用 H2D 权重→无 Blocker B，8 卡 EP dispatch collective 跑通干净（27s）。
+> **剩余（full e2e）**：whole-net `whole_decode_faithful_real` full IPC e2e 仍卡 **Blocker B**（MoE collective × IPC 池 VA `0x12c1c0000000` = aclrtMalloc HUGE_FIRST 与 runtime arena 冲突；需 runtime VA-placement fix，深度、正交于 INT8）。vs-live-vLLM token-exact 需 W8A8 decode-step dump（0234 无 oracle）。
+> **本 session 全 commits**：pypto-lib `cd3ef0d`(A)→`a293fe7`(A5)→`132fedc`→`32b59d3`→`6404385`→`6fe58ee`→`517dd6e`→`1379ce2`(ccec fix)；pypto-project 更新中。
+
+
 > **2026-07-12 (续¹⁰) ⭐ Stage B device dispatch 到达 + INT8 集成正确性坐实；full-e2e 卡 pre-existing Blocker B；Stage C 缺 oracle dump [Phase 27]**：
 > 承 A5（whole_decode_faithful_real INT8 编译通过）。机器 **0234**（经本地 tmux `pypto-ascend-0:0`，与 b-csy NFS 共享 → 我的 INT8 commit 直接可见；8 卡空闲；0162 被两个 vLLM 占满不可用）。
 > **Stage B（`_stage_whole_faithful_real_ipc -d0-7`, INT8, heap=4GB）device 结果**：8 exporter 导 **INT8 池 25.35 GiB/rank**（vs 47GB BF16，**存储减半达成**）→ **compile OK** → 8 chip ready → **import_ipc_all OK** → rt.run 到达 device → **前 4 chip 执行完成**（`completed=4/32`：full_dense+2×swa_dense+swa_attn）→ **507018 scheduler-stall @ `stuck_task_id=0x100000003`（scope-1 task3）= 首个 MoE 层跨卡 dispatch collective**。= **pre-existing Blocker B**（MoE collective × IPC 池 VA 0x12c1c0000000 冲突），memory 已预言 INT8 不解此（与 INT8 正交：BF16 IPC 同样 stall）。cards force-reset 干净。
