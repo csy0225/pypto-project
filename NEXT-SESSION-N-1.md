@@ -1,107 +1,114 @@
-# NEXT SESSION — N=1 整网 W8A8 端到端集成收尾（IPC 真权重 + KV，解 Blocker B）
+# NEXT SESSION — N=1 整网 W8A8 端到端**精度对齐** vs vLLM（Blocker B 已解，进入精度阶段）
 
 > 直接把最底部 code block 当第一条消息粘贴。自包含。更新于 2026-07-12（本 session 尾）。
-> **运行环境：0234 机器，通过本地 tmux `pypto-ascend-0:0` 登陆**（8 卡 0-7 空闲；781GB RAM / 575GB free；driver 25.5.2 / firmware 7.8.0.7.220 / CANN 9.0.0-beta.1）。
+> **运行环境：0234 机器，通过本地 tmux `pypto-ascend-0:0` 登陆**（8 卡 0-7；781GB RAM；driver 25.5.2 / firmware 7.8.0.7.220 / CANN 9.0.0-beta.1）。
 > 编辑机 `b-csy-develop`（无 python，NFS 与 0234 共享，编辑即时可见）。分支 `pypto-lib feat/whole-net-n1-fusion`。
 
 ---
 
 ## ⛔ 用户硬约束（不可违背，勿走弯路）
 
-- **必须用 IPC 共享显存机制**做端到端，**KV cache 和权重都走 IPC**。**不许 H2D 绕路**、不许换非-IPC 方案。
-- **必须用真实权重加载**（真 W8A8 checkpoint，非 dummy）。
-- 遇到问题只能**解决它**（IPC 机制内解），不能绕开。（Blocker B 已解，且根因**不是** IPC VA 冲突而是 gate_topk mrgsort，见下。）
+- **必须用 IPC 共享显存机制**做端到端，**KV cache 和权重都走 IPC**。**不许 H2D 绕路**、不许换非-IPC 方案。（权重+KV IPC 已 device 跑通，见下。）
+- **必须用真实权重加载**（真 W8A8 checkpoint，非 dummy）。**真权重调试，不走其他弯路。**
+- 遇到问题只能**解决它**，不能绕开（work-around）。诊断脚手架只能定位、不能进产品路径。
+- **correctness > speed**：宁可诚实交接，不产出可能错误的精度数字（别为了"完成"硬造 A/B 结果）。
+- **对齐 DeepSeek/Qwen**：遇问题先看 DeepSeek v4/Qwen 实现 + 历史开发文档，尽量对齐；step3p5-vs-DeepSeek 差异必须论证（只在"性能更好"时保留）。
+- **架构优先**：coding 前先系统分析 + 整体设计。**严格遵守 SKILL.md**（`pypto-project/.claude/skills/pypto-dev-constraints/SKILL.md`）；不满足约束可能是设计不合理需重设计。
+- **⚠ 历史文档可能 stale，先核对当前代码再下结论**（本 session 就踩过：attention_full.py "Phase 15 BYPASS" 注释已 stale，实际 head-gate 已 landed）。
 
-## ⭐ 一句话状态（2026-07-12 更新）
+## ⭐ 一句话状态（2026-07-12）
 
-**本 track = N=1 整网融合（offline）**：`whole_decode_faithful_real` —— **全部 42 层 MoE 内联进一个 `@pl.program`**，真 W8A8 权重经 **IPC** 加载，harness `tests/step3p5/_stage_whole_faithful_real_ipc.py`，分支 `feat/whole-net-n1-fusion`。
-> ⚠ **别和另一个 track 搞混**：`NEXT-SESSION.md` 是 **G5b / per-layer 逐层 golden + live vLLM token-exact** track（harness `_stage_whole_decode_run.py`，在别的分支，本分支没有此文件）。两者都朝 INT8-native 收敛但**目标/harness/分支都不同**：本 track 是 offline IPC device 跑通，G5b track 是 live 数值对齐。
+**本 track = N=1 整网融合（offline）**：`whole_decode_faithful_real` —— **全部 45 层（42 MoE + 3 dense/swa）内联进一个 `@pl.program`**，真 W8A8 权重经 **IPC** 加载，harness `tests/step3p5/_stage_whole_faithful_real_ipc.py`，分支 `feat/whole-net-n1-fusion`。
+> ⚠ **别和另一个 track 搞混**：`NEXT-SESSION.md` 是 **G5b / per-layer 逐层 golden + live vLLM token-exact** track（harness `_stage_whole_decode_run.py`，未 commit 在 0162 working tree，本分支无此文件）。两者都朝 INT8-native 收敛但**目标/harness/分支都不同**。
 
-**✅ Blocker B 已解除（2026-07-12，commit `4bede85`）**：N=42 全 42 层真 W8A8 IPC，8 卡 → `REAL_WEIGHT_IPC_RUN_CLEAN` 3.48s，无 stall。
-**根因不是 IPC VA 冲突（文档旧假设已被 device 证伪）**，而是 `gate_topk` 的 mrgsort 级联 bug（format2 二路归并被喂"各含 2 段"的半块 → SKILL "format2 半块未排序→状态机不终止→挂死" → AICore 挂死）。修复 = 对齐 DeepSeek v4 gate.py 渐进 format1 链，把 format2 二路改成 `mrgsort(block_len=256)`（4×256→1×1024 全排序）。
-**剩余 = ① KV cache 也走 IPC（用户硬约束，当前 harness 喂 dummy KV）；② 整网精度 vs vLLM（gate 修复的数值正确性 + decode-step golden 或 live A/B）。**
+**功能 bring-up 已完成（device 验证 + 推送）**：
+- **Blocker B 解除**（`4bede85`）：全 42 MoE 层真 W8A8、**权重+KV 双双走 IPC**（`--kv-ipc`，`c61046b`）、8 卡 → `REAL_WEIGHT_IPC_RUN_CLEAN` ~3.4s，无 stall。根因是 `gate_topk` mrgsort 级联 bug（**非**文档旧假设的 IPC-VA 冲突，已 device 证伪），已对齐 DeepSeek format1 链修复。
+- **gate_topk 修复 device 数值验证 PASS**（`_probe_gate_sort` `b92031f`，vs torch.topk，7.33s）。
+- **head-gate 确认已 landed**（不是旁路——旧注释 stale，已更正）。
 
-## ✅ 已完成（device 验证，勿重做）
+**⭐ 现在进入：整网 token-exact 精度对齐 vs vLLM。头号阻塞见下。**
 
-1. **W8A8 kernel（moe.py）DONE**：真 INT8×INT8→INT32 + dequant，照抄 DeepSeek v4，dispatch-side 量化（Option A，用户拍板）。
-   - `_expert_routed` INT8 权重 + per-output-channel FP32 scale；gate/up `matmul(out_dtype=INT32)`+`matmul_acc` → `col_expand_mul(row_expand_mul(cast(acc,FP32), x_scale[T,1]), w_scale[1,N])`；中间 `h_i8` = DeepSeek cast 链（FP32→INT32 rint→FP16 round→INT8 trunc，`pl.at(CORE_GROUP,"routed_h_quant")`）；down INT8×INT8+dequant。
-   - `_quant_moe_input` = **scheduled InCore + `pl.range`（非 spmd）+ 双输出 tuple return**（三 codegen 坑终解）。
-   - dispatch_step：INT8 recv_x + 并行 `[.,SCALE_W_PAD=8]` scale 窗口融进同一 a2a barrier；repack scalar un-pad col-0 → `local_routed_x_scale [1,LOCAL_RECV_MAX]`。
-2. **ccec TLOAD 修复（commit 1379ce2）**：expert 消费的 scale 改**非-padded contiguous** `[1,LOCAL_RECV_MAX]` + `[1,RECV_TILE]` ND2ND **row-slice+reshape**（DeepSeek recv_scale_dq 模式）。a2a 窗口仍 `[.,SCALE_W_PAD]`。
-3. **✅✅ Stage C 精度 PASS（device）**：`_stage_moe_block_precision --layer 3 --dev-offset 0 --ckpt <W8A8> --bypass-gate --torch-golden` → **`'moe_out' PASS ratio_allclose(atol=0.04,rtol=0.04,max_error_ratio=0.1)` 27.19s**。INT8×INT8 W8A8 MoE-block 数值正确（vs torch W8A8-dequant = vLLM 同款数学），无 fractal-32 静默错。**精度验证达成（MoE kernel 级）。**（此路径用 H2D 权重只为隔离 kernel 精度，**不是** e2e 方案。）
-4. **A5 整网 INT8 编译 DONE（TP=8）**：`whole_decode_faithful_real` inlined MoE 经 `tools/step3p5/_a5_int8_transform.py` 转 INT8（in-kernel per-token quant，DeepSeek cast 链）。`_probe_whole_faithful_canonical --layer-name whole_decode_faithful_real -d 0-7` → COMPILE OK。
-5. **INT8 loader DONE**：`weight_loader.py int8_routed=True` → INT8 权重 + `KEY_MOE_W_{GATE,UP,DOWN}_R_SCALE`（`.squeeze(-1)` → `[N_MOE,EXPL,1280]`/`[.,4096]`）。host 验证 shape/dtype PASS。
-6. **IPC exporter INT8 DONE**：`pypto_weight_ipc.py` `_dtype_for`/`_torch_dtype` 加 int8/float16；`export_from_checkpoint(int8_routed=True)`；池 47→**25.35 GiB/rank**。
-7. **N=1 IPC 权重机制 device 证实（上上 session）**：`P_FAITHFUL_MOE_LAYERS=0`（跳 MoE）+ IPC 真 W8A8 + heap=2GB → `RESULT=REAL_WEIGHT_IPC_RUN_CLEAN`。即 attention+dense 全链（import_ipc + getitem + rt.run + tp_all_reduce）经 IPC 跑通。**IPC 机制本身可用**，只 MoE dispatch collective 卡。
+## ⛔ 头号精度阻塞：monolithic 整网的 per-layer gate_r（结构性）
 
-## ✅ Blocker B — 已解除（2026-07-12，commit `4bede85`）
+head-gate 靠 worker 预算的 `gate_r = expand_per_head(sigmoid(RMSNorm(hidden_L) @ w_g_L))` `[BATCH, HIDDEN_Q]` 经 `gate_r` 槽喂入（`attention_full.py` Scope 3.a：`attn_out * gate_r` inline 宽 mul）。**`gate_r` 逐层 activation-dependent**（依赖第 L 层内部残差 `hidden_L`）。
+`whole_decode_faithful_real` 把 45 层塞进**一个 dispatch**，caller 只能算对 **layer-0** 的 gate_r（`hidden_0 = 输入 embed`），**L1-44 拿不到内部 hidden → 当前 harness 喂 dummy gate_r，除 L0 外每层 head-gate 都错 → monolithic 单-dispatch 不可能 token-exact。**
 
-> **历史修正**：本节旧内容假设 Blocker B = "IPC 池 VA `0x12c1c0000000` 与 comm-window/arena VA 冲突"，并规划了一整套 VA-instrument / VA-placement 攻坚顺序。**该假设已被 device instrument 彻底证伪，勿再沿此方向。**
+**两条解法（下 session 攻，先做架构分析）：**
+- **路径 (a)【最贴合 N=1 目标，优先验证】恢复 on-device head-gate 计算**：当年因 `pl.matmul_acc` **小 N=16 丢 K 累加**的 codegen bug（gate_logits = normed @ w_g 输出 N=NUM_HEADS=16，结果 ~20× 偏小）才把 gate 移到 worker。**第一步：验证该 bug 现栈是否还在**（写个 N=16 matmul_acc probe vs torch，模型 `gate.py` Stage-1 的 K-chunk matmul_acc 写法，见 gate.py:138-149）。若已修 → 把 on-device gate_logits+sigmoid+block-diag-expand 加回 attention（+swa），monolithic 整网即可**自算 per-layer gate_r → token-exact**。若还在 → 上游 pypto 修 matmul_acc（N=16），或换避开小-N 的写法（如 pad N 到更大 + slice）。参 memory `moe_gate_topk_tail_precision` / `step3p5_head_gate_matmul_acc_n16`、`deployment/troubleshooting-8001-pypto-bridge.md §head-gate`。
+- **路径 (b) per-layer dispatch 架构**：resident-DeviceTensor 逐层 dispatch，每层从 resident hidden 算 gate_r（SKILL §H 推荐的 whole-decode-worker，`DistributedWorker #1706` + resident DeviceTensor 串 residual/KV）。放弃纯 monolithic 单-dispatch。这是 G5b track 的路子（`NEXT-SESSION.md`）。
 
-- **现象（旧）**：`_stage_whole_faithful_real_ipc -d0-7` → compile OK → import_ipc OK → rt.run → 前 4 chip 执行（`completed=4/32`）→ 507018 stall @ `stuck_task_id=0x100000003`。
-- **VA 证伪（device 实测）**：在真正的 MoE 路径 `comm_hccl.cpp:703 domain_alloc_via_ipc` 加 VA 诊断（旧诊断加错在 `:431` 未走路径；`LOG_INFO_V0` 被默认 `info_v=5` 压掉，`logging.getLogger("simpler").setLevel(15)` 放开）→ 42 层仅 1 个 MoE comm domain window 在 `0x12c041600000`+396MB，8 卡一致，**整段在池 `0x12c1c0000000` 下方无重叠**。IPC 映射表（`pypto_weight_map.rank0.json`）48 key 全 512 对齐/无重叠/`max_end==pool 25.35GiB`/都在池内 → **VA 表完全正确，无冲突**。exporter 侧 `PYPTO_WEIGHT_IPC_VA_SHIFT_GB` 无效是因为它改的是 exporter 池，与真根因无关（commit `7765a0e` 是失败实验，可 revert）。
-- **真根因 = `gate_topk` mrgsort 级联 bug**：device stall 快照（`ASCEND_GLOBAL_LOG_LEVEL=1`+`ASCEND_PROCESS_LOG_PATH` → `ascend_*/debug/device-*/`）显示 `task_id=3 state=RUNNING kernels=[aic:-1 aiv0:3] core=28(aiv0) fanin 3/3` 永不完成 = **`gate_topk` AIV kernel 挂死**（`orch_error=8` TENSOR_WAIT_TIMEOUT + S1 running-stalled；60s 超时排除"慢"）。`gate.py` SCORE_PAD=512 级联 `sort32→16×64 → mrgsort(block_len=64)→4×256 → mrgsort(srt[:,0:512],srt[:,512:1024])`——最后 format2 二路归并被喂两个"各含 2 段"的半块（非单段），违反 format2 前置 = SKILL "format2 半块未排序→状态机不终止→挂死"。**N≤2 clean / N=42 hang**（编译规模触发）。
-- **修复**（对齐 DeepSeek v4 `gate.py` 渐进 format1 链，scale 到 512）：format2 二路 → `mrgsort(block_len=256)`（4×256→1×1024 全排序）。`gate.py` + `decode_layer.py` 10 处去重内联 MoE gate 全改。
-- **验证**：全 42 MoE 层真 W8A8 INT8 IPC 池（25.35GiB/rank）8 卡 → `REAL_WEIGHT_IPC_RUN_CLEAN` 3.48s，无 stall。（输出为 0 因 harness 喂 dummy hidden/KV——device 执行路径已干净。）
-- **工具**：harness 加 `--reuse-exporters`（8 exporter 常驻、survive force-reset、bisect 秒级 attach，免 15min 重载）。
+## 🎯 精度对齐方式（三档，从易到难）
 
-### 剩余（下 session，本 N=1 track）
+**L0 单卡算子（已做）**：`_probe_gate_sort`（gate_topk sort vs torch.topk，PASS）。gate_matmul 单卡 unsliced 会 Mat/Vec 溢出（`test_gate.py`，pre-existing，单卡 shape 铁律），验 gate 用 sort-only probe。
 
-1. **KV cache 也走 IPC**（用户硬约束，当前 harness 喂 dummy KV）：KV bridge 见 memory `g5b_import_ipc_facade_missing`（dense L0 import vLLM KV + attention 读真 KV rc=0 已 device 证实）+ `g5b_kv_is_bf16_not_int8`（KV=bf16、1 head/rank、纯 layout reshape）+ `g5b_kv_bridge_not_pure_reshape`（per-layer feed，MAX_SEQ 不动 flash-attn scratch）。把权重 IPC 与 KV IPC 一起接进 `_stage_whole_faithful_real_ipc.py`。
-2. **整网精度 vs vLLM**：gate 修复的数值正确性需 gate-exercising 验证（Stage C 之前 `--bypass-gate` 没验过 gate）；整网需 decode-step golden（重生成 vLLM W8A8 eager dump）或 live A/B。**注意**：G5b track（`NEXT-SESSION.md`）发现整网 token-garbage 的另一个 bug = BF16-dequant 在 L17 大残差幅值下精度退化——那是 **live/per-layer track 的问题，与本 N=1 track 的 gate_topk 是两回事**，别混。
+**L1 ctx=1 单 token device-vs-vLLM（脚手架已建，gated on head-gate 路径 a/b）**：`_stage_whole_faithful_real_ipc.py --hidden-token <id>` 已把 `embed(token)` 灌进 `current_hidden` row0 + pos-0 identity rope（cos=1/sin=0）。原理：1-token prompt vLLM 首 token = argmax(lm_head(hidden(pos0)))，等价 ctx=1 self-attn（rope pos0=identity），**不需 prefill KV / KV bridge**。流程：`vllm serve` 起 oracle → `curl /v1/completions prompt=[token0] max_tokens=1 temperature=0` 拿 golden token → kill vLLM 腾卡 → 起 exporters + `_stage_whole_faithful_real_ipc --hidden-token token0` 拿 pypto argmax → 比对。**但 L0 之后 head-gate 仍 dummy gate_r → 必须先解 per-layer gate_r（路径 a/b）才 token-exact。**
 
-## 🎯 e2e 跑通后：整网精度验证 vs vLLM
+**L2 整网 token-exact / decode-step golden（终极）**：多 token 需 **vLLM→whole-net KV bridge**（vLLM 分页 KV 池 → 整网 flat KV，见 memory `g5b_kv_bridge_not_pure_reshape` / `g5b_kv_is_bf16_not_int8`(KV=bf16 1head/rank) / `g5b_import_ipc_facade_missing`(pure-python CTRL_IMPORT_IPC 已 device 证)）。或 **live A/B**（8001 pypto 整网 vs 8000 vanilla，co-tenancy `SIMPLER_COMM_NO_HCCL=1`，见 memory `project_g4_cotenancy_hccl_conflict`）。**这套是 G5b track 的机器（0162 working tree，本分支需 port）。** 判据：L1 per-layer hidden `ratio_allclose(atol=0.04)`；L2 logits cos≥0.999+topK overlap≥4/5；L3 greedy top-1≥95%。**oracle = vLLM eager dump，synthetic golden 会 stale。**
 
-- ⚠ 现有 vLLM dump 是 **18-token PREFILL**，kernel 是 BATCH=16 **decode-step**——需 **decode-step golden**（重生成 vLLM W8A8 eager dump `--quantization ascend`）或 **live A/B**（8001 pypto 整网 vs 8000 vanilla；live 路径 co-tenancy 用 `SIMPLER_COMM_NO_HCCL=1`，见 memory `project_g4_cotenancy_hccl_conflict`）。
-- MoE-block 精度已 PASS（Stage C）是整网精度的强证据；L1 per-layer hidden ratio_allclose(atol=0.04)。
+## 🖥 环境 / vLLM oracle 启动（本 session 验证可用）
 
----
+- **三件套激活**（每 fresh shell，`activate.sh` 不带 CANN env）：
+  `source /usr/local/Ascend/cann/set_env.sh && source $WS/activate.sh && export PTO_ISA_ROOT=$WS/pto-isa && export PYTHONPATH=$WS/pypto/python:$WS/pypto-lib`（`WS=/data/chensiyu/hw_project/pypto/workspace`）。
+- **vLLM W8A8 oracle（0234 可跑，本 session 验证）**：
+  `vllm serve <W8A8ckpt> --served-model-name step3p5 --trust-remote-code --quantization ascend --tensor-parallel-size 8 --enable-expert-parallel --enforce-eager --port 8000 --max-model-len 4096 --gpu-memory-utilization 0.85`
+  → health=200，greedy chat golden 可得。占 8 卡 0-7，~5-6min load。
+  - **⚠ acl 坑**：vLLM(`vllm_ascend`) 要 `import acl`（在 `/usr/local/Ascend/cann/python/site-packages`）。**跑 vLLM 前不要 export pypto 的 PYTHONPATH**（`$WS/pypto/python:...` 会 shadow 掉 CANN site-packages → `ModuleNotFoundError: acl`）。先 `source cann/set_env.sh`（它把 acl 加进 PYTHONPATH），**不** export pypto PYTHONPATH，再 `vllm serve`。
+  - vLLM 与 pypto **同卡** → 要么先 vLLM 出 golden 再 kill 腾卡跑 pypto（offline A/B），要么 co-tenancy `SIMPLER_COMM_NO_HCCL=1`（live A/B）。
+- **W8A8 ckpt** = `/mnt/hw910test-jfs/models/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp`（arch `Step3p5ForCausalLM`，45 层，embed=`model.embed_tokens.weight` 在 shard 00048，非量化）。
+- **8 卡 pypto env**：`PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072`。
+- **exporters（IPC 权重/KV）**：8 个 `--export-rank r --dev r` 常驻 hold（~15min cold load，jfs warm 快）；worker 用 `--reuse-exporters` 秒级 attach（免重载）。**exporter survive worker 的 force-reset**（分开进程），但 reset 后 pool 可能失效——保险起见重跑一轮。
 
-## ⭐⭐ 关键 device 事实 / 铁律（勿再踩）
+## 🐞 Debug 方式（本 session 验证有效）
 
-1. **单卡 ST/UT shape 铁律**：`apply_perrank_patch()`（保 TP=8 per-rank slice），**不用** `apply_tp1_patch()`。
-2. **gap-5 坑**：in-kernel `pl.cast(bf16/fp32,INT8)` 喂 cube 可能静默 ~98% 错。**照抄 DeepSeek cast 链 + create_tensor 位置 + scope 就避坑**（本 session 已验证整网编译过 + MoE-block 精度 PASS）。
-3. **三 codegen 坑**（`_quant_moe_input`）：终解 = InCore(pl.range) 双输出 tuple return。
-4. **ccec ND2ND**：scale slice 必须 contiguous row-slice `[1,RECV_TILE]`+reshape。a2a3sim compile 过 ≠ device ccec-clean（必须真 device 跑）。
-5. **每次 device run 慢**（8 rank sequential load 全 checkpoint 后 slice；~15min）。W8A8 ckpt = `/mnt/hw910test-jfs/models/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp`。
-6. **环境三件套**：`source /usr/local/Ascend/cann/set_env.sh && source $WS/activate.sh && export PTO_ISA_ROOT=$WS/pto-isa && export PYTHONPATH=$WS/pypto/python:$WS/pypto-lib`（WS=/data/chensiyu/hw_project/pypto/workspace）。
-7. **launch 前**：`pkill -f '[_]stage_whole'` + `rm -f /tmp/n1_weight_ipc/STOP /tmp/n1_weight_ipc/*.rank*`；**禁 `-9` 强杀 / `npu-smi set -t reset`**（netboot 机锁死全卡）。stale pyc：monkey-patch 后 `find models/step3p5 -name '*.py' -exec touch {} +`。
-8. **8 卡 env**：`PTO2_RING_HEAP=... PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072`。
-9. **push**：PAT `/data/chensiyu/secrets/github.env` + `git -c http.version=HTTP/1.1`，屏蔽 token。
+- **数字 device error 先查 [wiki Device-Error-Codes_zh](https://github.com/hw-native-sys/simpler/wiki/Device-Error-Codes_zh)**，别凭空猜。`507018` 是泛化 host 码，看 `orch_error_code`/`sched_error_code`/`sub_class` 定真因。
+- **device stall 快照（本 session 定位 gate_topk 的关键）**：
+  1. harness 里 `logging.getLogger("simpler").setLevel(15)`（→ simpler info_v=0，放开 `LOG_INFO_V0`）。
+  2. `export ASCEND_GLOBAL_LOG_LEVEL=1 ASCEND_PROCESS_LOG_PATH=<预建目录>`（device slog 落文件；否则不写盘）。
+  3. 读 `<dir>/debug/device-*/device-*.log` 找 `log_stall_diagnostics`：`TASK ... state=RUNNING kernels=[aic:-1 aiv0:N] running_on=[core=X(aiv0)]` = 卡住的 kernel+核；`SUMMARY completed=c/t`。root-owned，用 tmux(root) grep。
+  4. `orch_error=8`=`TENSOR_WAIT_TIMEOUT`（producer 永不完成/kernel hang），`sched=100 detail=1`=S1 running-stalled。定 kernel 后对 `next_levels/<orch>/orchestration/chip_orch.cpp` 的 `rt_submit_*(task_id, ...)` 数 task 号→kernel。
+- **单算子精度 probe 范式**（避开整网/matmul 溢出，隔离验证）：module-level `@pl.jit` + `from golden import TensorSpec, run_jit, ratio_allclose, topk_pair_compare` + torch golden_fn（见 `_probe_gate_sort.py`）。⚠ `@pl.jit` 的 shape/const 注释必须 module-level（closure-local const 报 `Undefined variable`）；`torch.full(FP32_NEG_INF)` 溢出，用 `-1e30`。
+- **VA 布局诊断**（本 session 加的，comm_hccl.cpp:703 `domain_alloc_via_ipc` 打 `[base,base+size)`）：证明 comm window 不撞 IPC 池。若再疑 VA，用它 + 校验 `pypto_weight_map.rank0.json`（offset 512 对齐/无重叠/在池内）。
+- **launch 前**：`pkill -f '[_]stage_whole'` + `rm -f /tmp/n1_weight_ipc/{STOP,*.rank*}`；**禁 `-9` 强杀 device 进程 / `npu-smi set -t reset`**（netboot 机锁死全卡）；`npu-smi info -t usages -i <c>` 确认 HBM<10%。stale pyc：monkey-patch 后 `find models/step3p5 -name '*.py' -exec touch {} +`。
+- **每次 device run 慢**（exporter 全 ckpt load ~15min；compile 42 层 ~4min）。
 
-## 📌 用户提示词要点（贯穿开发，务必遵守）
+## ⭐⭐ 铁律（勿再踩）
 
-- **不走弯路，严格按要求**：e2e 必须 IPC（KV + 权重）+ 真实权重。Blocker B 只能解不能绕。
-- **对齐 DeepSeek/Qwen**：遇问题先看 DeepSeek/Qwen 实现，尽量对齐；查历史开发文档避免重复造轮子。
-- **架构优先**：coding 前先有整体架构脉络，思考后再落地。
-- **step3p5-vs-DeepSeek 差异必须论证**：DeepSeek 为什么没遇到？能否搞成一样？只在"我们性能更好"时保留差异。
-- **地址对齐 / padding / shape / dtype / layout** 都检查（Blocker B 正是 VA 地址问题）。
-- **遇决策找另一个 agent 讨论**；重要的是**完成目标**。**严格遵守 SKILL.md**（`pypto-project/.claude/skills/pypto-dev-constraints/SKILL.md`），不满足约束可能是设计不合理需重新设计。
+1. **单卡 ST/UT shape**：`apply_perrank_patch()`（保 TP=8 per-rank slice），不用 `apply_tp1_patch()`。gate/gate_matmul 是 replicated（全 288 expert），单卡跑 gate_matmul 会 Mat/Vec 溢出——验 gate 用 sort-only probe。
+2. **gap-5 坑**：in-kernel `pl.cast(bf16/fp32,INT8)` 喂 cube 可能静默错；照抄 DeepSeek cast 链 + create_tensor 位置 + scope。
+3. **ccec ND2ND**：scale slice 必须 contiguous row-slice + reshape；a2a3sim compile 过 ≠ device ccec-clean（必须真 device 跑）。
+4. **push**：PAT `/data/chensiyu/secrets/github.env` + `git -c http.version=HTTP/1.1`，输出屏蔽 token。pypto-lib 的 `.git/objects` 是 root-owned（worker 以 root 跑过）→ commit/push 走 tmux(root)；pypto-project 是 chensiyu-owned，可直接。跨仓 push 同步 STATUS pin。
+5. **文档 stale 风险**：核对当前代码再下结论（head-gate 就栽在 stale 注释）。
 
-## 本 session commits（feat/whole-net-n1-fusion）
+## 本 session commits
 
-pypto-lib：`cd3ef0d`(A kernel) `a293fe7`(A5 transform+gen) `132fedc`(StageB wire) `32b59d3`(scale squeeze+IPC int8) `6404385/6fe58ee/517dd6e`(Stage C harness) `1379ce2`(ccec scale fix + Stage C PASS) `7765a0e`(VA-shift 实验，失败可 revert) **`4bede85`(gate_topk mrgsort 修复 → Blocker B 解除，N=42 IPC device-clean)**。
+pypto-lib `feat/whole-net-n1-fusion`：`4bede85`(gate_topk mrgsort 修复→Blocker B 解除) `c61046b`(KV via IPC `--kv-ipc`) `b92031f`(gate_sort device probe PASS) `<head-gate 注释更正+ctx=1 A/B 脚手架>`。
+pypto-project `main`：`e9af803`/`09a4e11`/`9f12dac`/`665431c`/`326d94a`(STATUS/blockers/NEXT-SESSION 更正)。
 
 ---
 
 ```
-继续 step3p5 **N=1 整网 W8A8 offline 端到端集成收尾**（本 track = `whole_decode_faithful_real`，42 层 MoE 内联进一个
-@pl.program，真 W8A8 权重经 IPC，harness `tests/step3p5/_stage_whole_faithful_real_ipc.py`，分支 feat/whole-net-n1-fusion）。
-⚠ 别和 `NEXT-SESSION.md` 的 G5b/per-layer 逐层-golden+live-vLLM track 搞混（那是别的分支、别的 harness）。
-用户硬约束：必须 IPC 共享显存（KV + 权重都走 IPC）+ 真实权重，不走弯路、不许 H2D 绕路。
+继续 step3p5 **N=1 整网 W8A8 端到端精度对齐 vs vLLM**（本 track = whole_decode_faithful_real，45 层内联进一个
+@pl.program，真 W8A8 权重+KV 经 IPC，harness tests/step3p5/_stage_whole_faithful_real_ipc.py，分支 feat/whole-net-n1-fusion）。
+⚠ 别和 NEXT-SESSION.md 的 G5b/per-layer 逐层-golden+live track 搞混。用户硬约束：IPC(KV+权重)+真实权重、不走弯路、
+correctness>speed、对齐 DeepSeek、架构优先、严格遵守 pypto-dev-constraints SKILL、历史文档可能 stale 先核对代码。
 
-✅ Blocker B 已解除（commit 4bede85）：全 42 层真 W8A8 IPC 8 卡 REAL_WEIGHT_IPC_RUN_CLEAN 3.48s。根因不是 IPC VA 冲突
-（device instrument 证伪：comm window 0x12c041... 在池 0x12c1c0... 下方无重叠），而是 gate_topk mrgsort 级联 bug
-（format2 二路被喂"各含 2 段"半块→挂死），已按 DeepSeek format1 链修（format2→mrgsort(block_len=256)）。
+功能已通（device+推送）：Blocker B 解除（gate_topk mrgsort 修复，非 IPC-VA 冲突）；权重+KV 双 IPC 8 卡 device-clean；
+gate_topk device 数值验证 PASS；head-gate 确认已 landed（旧"BYPASS"注释 stale）。
 
-第一步：KV cache 也走 IPC（用户硬约束，当前 harness 喂 dummy KV）—— 借 memory g5b_import_ipc_facade_missing /
-g5b_kv_is_bf16_not_int8 / g5b_kv_bridge_not_pure_reshape，把权重 IPC + KV IPC 一起接进 _stage_whole_faithful_real_ipc.py。
-第二步：整网精度 vs vLLM —— gate 修复的数值正确性需 gate-exercising 验证（Stage C 之前 --bypass-gate 没验 gate）+
-decode-step golden 或 live A/B。（注意 G5b track 的 L17 BF16-dequant 精度退化是那个 track 的 bug，与本 track gate_topk 无关。）
+⭐ 头号精度阻塞 = monolithic 整网的 per-layer gate_r：head-gate 靠 worker 预算 gate_r=expand(sigmoid(RMSNorm(hidden_L)@w_g_L))
+逐层喂入，activation-dependent；45 层塞一个 dispatch，caller 只能算对 L0，L1-44 喂 dummy → 除 L0 外 head-gate 全错 → 不可能 token-exact。
+两条解法：(a)【优先，最贴合 N=1】先验 N=16 matmul_acc codegen bug 现栈是否还在（当年因它把 head-gate 移 worker；写 N=16 matmul_acc
+probe vs torch，仿 gate.py:138-149），若已修则把 on-device gate_logits+sigmoid+block-diag-expand 加回 attention(+swa)→整网自算 per-layer
+gate_r→token-exact；若还在则修 matmul_acc(N=16) 上游或换避开小-N 写法。(b) per-layer dispatch(resident-DeviceTensor,SKILL §H,G5b 路子)。
 
-机器 0234 经 tmux pypto-ascend-0:0（8 卡；exporter reset 后仍可 --reuse-exporters attach）；编辑机 b-csy-develop 共享 NFS；
-分支 pypto-lib feat/whole-net-n1-fusion。全部读上面 ⛔/⭐/✅/铁律/提示词要点。
-环境三件套：source /usr/local/Ascend/cann/set_env.sh && source $WS/activate.sh &&
-export PTO_ISA_ROOT=$WS/pto-isa && export PYTHONPATH=$WS/pypto/python:$WS/pypto-lib（WS=/data/chensiyu/hw_project/pypto/workspace）。
-每完成关键节点更新 pypto-project STATUS/phases + push（同 session）。
+精度对齐三档：L0 单算子 probe（gate_sort 已 PASS，仿 _probe_gate_sort.py）；L1 ctx=1 单 token A/B（--hidden-token 脚手架已建：
+embed(token)灌 current_hidden row0+pos0 identity rope，vLLM 1-token prompt 首 token 作 golden，不需 KV bridge，但 gated on head-gate 路径 a/b）；
+L2 整网 token-exact（多 token 需 KV bridge / live A/B，G5b 机器需 port）。判据 L1 ratio_allclose(0.04)/L2 cos≥0.999/L3 top1≥95%，oracle=vLLM eager dump。
+
+环境：0234 tmux pypto-ascend-0:0（8 卡）；三件套 source cann/set_env.sh+activate.sh+PTO_ISA_ROOT+PYTHONPATH。
+vLLM oracle：source cann/set_env.sh（勿 export pypto PYTHONPATH，否则 import acl 失败）→ vllm serve <W8A8ckpt> --quantization ascend
+--tensor-parallel-size 8 --enable-expert-parallel --enforce-eager --trust-remote-code --port 8000（占 8 卡，先出 golden 再 kill 腾卡跑 pypto）。
+debug：数字 error 先查 wiki Device-Error-Codes_zh；device stall 快照 = setLevel(15)+ASCEND_GLOBAL_LOG_LEVEL=1+ASCEND_PROCESS_LOG_PATH→
+读 device-*/log 的 log_stall_diagnostics 找卡住 kernel/核。禁 -9/npu-smi reset；push 走 HTTP/1.1+PAT（pypto-lib root-owned 走 tmux root）。
+全部读上面 ⛔/⭐/🎯/🖥/🐞/铁律。每完成关键节点更新 pypto-project STATUS/blockers/NEXT-SESSION + push（同 session）。
 ```
