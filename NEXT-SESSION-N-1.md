@@ -313,7 +313,7 @@ worker（改 models 后先 find models/step3p5 -name '*.pyc' -delete；每次 co
 - [ ] **A3 M4 L1 token-exact**：`--hidden-token 6127`（L1 ctx=1）→ **argmax=303** vs vLLM。**bar**：greedy top-1 命中 303。依赖 A2。
 
 ### Phase B — 解 G5b 精度 open question（falsify-before-assert；memory g5b_swa... 续¹¹h）
-- [ ] **B1 查 attention 是否 W8A8**：读 W8A8 ckpt quant_config（`/mnt/hw910test-jfs/models/...w8a8_0328-copy-mtp/config.json` + weight index，看 q/k/v/o_proj 是否有 `weight_scale`）。**决定 attention 需不需 INT8**（若 vLLM attn 是 BF16 → attn 在大幅值也不退化 → L17-alone 0.25 大概率是 mid-start bootstrap artifact，INT8-MoE 足够；若 attn 是 W8A8 → attention 也要 INT8/per-token act-quant）。**bar**：给出明确 yes/no + 依据。**无需 device，先做。**
+- [x] **B1 查 attention 是否 W8A8** — ✅ DONE 2026-07-13（non-device）：W8A8 ckpt weight-index 显示 **q/k/v/o_proj `weight_scale#=0`（BF16，未量化）**，gate/up/down/experts `weight_scale#>0`（INT8）→ **step3p5 W8A8 只量化 MoE/MLP，attention 是 BF16**（vLLM 也 BF16）。∴ **BF16 attention 大幅值不内在退化**（vLLM 在 L17 正常为证）→ **L17-alone 0.25 是 mid-start bootstrap artifact，非真 bug**；唯一 quant-path 差异 = BF16-dequant MoE → **INT8-MoE-only 是正确且充分的修法，attention 不需 INT8**。（复现器 `/tmp/_ckq.py`；memory 续¹¹i。）
 - [ ] **B2 INT8-native full-chain golden 对拍**：在 A2 的 INT8-native whole-net 上，跑 **full-chain-from-L0**（非 mid-start，避 bootstrap artifact）逐层 out vs vLLM golden。**bar**：L0-44 逐层 `ratio_allclose(atol=0.04)` 全过，尤其 **L17 恢复**（BF16 时 attn 0.25 / chain NaN）。→ 坐实 INT8-MoE 是否足够修 L17。依赖 A2 + B1。
 - [ ] **B3（条件）attention INT8/精度**：若 B2 显示 L17 仍退化 且 B1 显示 attn 是 W8A8 → 给 attention 上 INT8（per-token act-quant，仿 vLLM/moe.py），或残差流关键处 FP32 累加。**bar**：B2 重跑 L17 过。依赖 B2。
 
