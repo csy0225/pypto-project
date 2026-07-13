@@ -295,3 +295,39 @@ worker（改 models 后先 find models/step3p5 -name '*.pyc' -delete；每次 co
 /data/chensiyu/secrets/github.env；pypto/pypto-lib .git objects root-owned → commit 走 tmux(root)。
 全部细节读上面 🎯/⛔/✅ 段 + 本 session（2026-07-13）段 + memory n1_head_gate_ondevice_restored_l1_nan（UPDATE9-10）。
 ```
+
+---
+
+## 📋 详细任务清单 — 收敛到 INT8-native token-exact（2026-07-13, G5b + N=1 两 track 汇合）
+
+> 来源：G5b track（`NEXT-SESSION.md`，harness `_stage_whole_decode_run.py`）诊断出 whole-decode 剩余
+> token-garbage 根因 = **BF16-dequant 在大残差幅值下精度退化**（L17 attn 起，control 证实单调随幅值），
+> 与 N=1 track（本文，M3b gap-5）**汇合到同一修法：INT8-native（与 vLLM W8A8 对齐）**。
+> 贯穿纪律见 `notes/08-integration-churn-postmortem.md` + memory `feedback_integration_churn_root_causes`：
+> **ready 只认 live-token-exact-device；声明 root cause 前先跑证伪实验；对齐 DeepSeek；pin 单一底座。**
+> 每条任务标了「验证口径(bar)」——只有过 bar 才算 done，否则标 `provisional`。
+
+### Phase A — INT8-native whole-net 数值正确（N=1 主线，当前卡 M3b）
+- [ ] **A1 gap-5 修复**：whole-net routed MoE 从 in-expert INT8 quant → **moe.py 已验证的 dispatch-side INT8 quant**（保留 FUSE）。做法：`_gen_faithful_real.py` 从 moe.py dispatch-side quant 重生成 routed 段（cd3ef0d 参考）。**bar**：P=1 单 MoE 层 `local_routed_y` finite + **跨 run deterministic** + vs torch W8A8 `ratio_allclose(atol=0.04)`（op-dump `pl.Out`，非 max|abs|）。依赖：M3b op-dump 已定位（续4）。
+- [ ] **A2 M3 full-chain finite**：42 层 full-chain-from-L0 跑完无 NaN/1e11。**bar**：final residual O(10-100) finite + 跨 run deterministic。依赖 A1。
+- [ ] **A3 M4 L1 token-exact**：`--hidden-token 6127`（L1 ctx=1）→ **argmax=303** vs vLLM。**bar**：greedy top-1 命中 303。依赖 A2。
+
+### Phase B — 解 G5b 精度 open question（falsify-before-assert；memory g5b_swa... 续¹¹h）
+- [ ] **B1 查 attention 是否 W8A8**：读 W8A8 ckpt quant_config（`/mnt/hw910test-jfs/models/...w8a8_0328-copy-mtp/config.json` + weight index，看 q/k/v/o_proj 是否有 `weight_scale`）。**决定 attention 需不需 INT8**（若 vLLM attn 是 BF16 → attn 在大幅值也不退化 → L17-alone 0.25 大概率是 mid-start bootstrap artifact，INT8-MoE 足够；若 attn 是 W8A8 → attention 也要 INT8/per-token act-quant）。**bar**：给出明确 yes/no + 依据。**无需 device，先做。**
+- [ ] **B2 INT8-native full-chain golden 对拍**：在 A2 的 INT8-native whole-net 上，跑 **full-chain-from-L0**（非 mid-start，避 bootstrap artifact）逐层 out vs vLLM golden。**bar**：L0-44 逐层 `ratio_allclose(atol=0.04)` 全过，尤其 **L17 恢复**（BF16 时 attn 0.25 / chain NaN）。→ 坐实 INT8-MoE 是否足够修 L17。依赖 A2 + B1。
+- [ ] **B3（条件）attention INT8/精度**：若 B2 显示 L17 仍退化 且 B1 显示 attn 是 W8A8 → 给 attention 上 INT8（per-token act-quant，仿 vLLM/moe.py），或残差流关键处 FP32 累加。**bar**：B2 重跑 L17 过。依赖 B2。
+
+### Phase C — G5b live 基建移植到 INT8-native + live A/B（M5/M6）
+- [ ] **C1 移植 G5b live fixes 到 INT8-native whole-decode**：从 `NEXT-SESSION.md` track（`_stage_whole_decode_run.py` stepfun/develop）移植 —— (a) `_feed_meta` **seq_len=0 pad 行 sanitize**（seq_len=1 + 非冲突 scratch slot；已 device 验证消 NaN）；(b) 容器后端 prefill 检测 **`num_prefill_tokens>0`**（原 seq_len==0 误判把 prefill 路由到 decode kernel）；(c) `SIMPLER_COMM_NO_HCCL=1` co-tenancy；(d) `--serve` sidecar loop + AF_UNIX。**bar**：INT8-native sidecar serve listening + import KV + co-resident live 8001 无 crash。依赖 A3。
+- [ ] **C2 M5 真 KV bridge**：vLLM 真 KV 经 IPC 接入 whole-net（复用 G5b KvIpcMap/`_CTRL_IMPORT_IPC`/build_stacked_kv）。**bar**：单层 active-row(row0) paged-index 数值对拍 vLLM decode dump 过。依赖 C1。
+- [ ] **C3 M6 live A/B token-exact**：8001(INT8 pypto mode=full) vs 8000(vanilla) **3-prompt greedy(temp=0)**。runbook 见 `NEXT-SESSION.md`（停 8001 pkill EngineCore + 清 card8-15 zombie；起 8001 `/logs/start_8001_full.sh`；起 sidecar `SIMPLER_COMM_NO_HCCL=1 WD_RING_HEAP=1GB`；SIGTERM 停 sidecar）。**bar（真出口）**：L3 greedy **top-1 ≥ 95%** 对 8000（L1 hidden atol=0.04 / L2 logits cos≥0.999+topK≥4/5 辅证）。依赖 C2。
+
+### Phase D — 准出 + perf
+- [ ] **D1 精度双过**：L1/L2/L3 全过（vLLM eager dump oracle，非 synthetic）。
+- [ ] **D2 perf baseline**：去掉每步 MoE 权重 copy（常驻权重 / G2 weight-IPC 重叠）；现 ~120s/token → 目标基线。
+
+### ⚠ 关键依赖 / 汇合点 / 已排除
+- **A1(gap-5) 是全链 gating**：INT8-native whole-net 不 finite 前，B/C 都无法验证。
+- **两 track 汇合 = N=1 INT8-native compute（A/B）+ G5b live 基建（C）**。避免同时改 n1-live（跨 session 冲突 = 反复推翻根因之一）。
+- **已排除（device 验证，别重查）**：G5b 原始 NaN=seq_len=0 pad（已修）、rope/qk_norm/head-gate/KV-layout/full-attn kernel、Blocker B=gate_topk（非 IPC-VA）、KV 池 offset（regular）。
+- **底座**：N=1 = 0234 tmux `pypto-ascend-0:0` + `feat/whole-net-n1-fusion`（moe.py INT8 cd3ef0d 在此分支）；G5b live 基建 = 0162 + stepfun/develop。moe.py 的 `select_moe_block(w8a8_native=True)`/EpTpMoEW8A8 在 `feat/whole-net-n1-fusion`，n1-live/stepfun-develop 都没有。
