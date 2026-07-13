@@ -20,7 +20,7 @@
 | M1 功能 bring-up | 42 MoE 真 W8A8 + 权重+KV 双 IPC 8 卡 dispatch-clean | ✅（Blocker B 解） |
 | M2 per-layer gate_r | monolithic 整网自算逐层 head-gate（on-device，token-exact-capable） | ✅（路径 a，本 session） |
 | **M3 单层 MoE 数值正确** | **NaN 修掉 → finite** | **⚠（2026-07-13 续2 复诊：NaN 消，但 MoE 层 nondeterministic ~1e11，未真正正确）** |
-| **M3b 单层 MoE 幅值正确** | **next_hidden 合理幅值** | **⛔ 当前卡这里 —— 见「本 session（2026-07-13 续2）」：FUSE 引入 intra-orch 别名（错方向），真源=MoE 层 nondeterministic 1e11；下一步回退 split + per-layer handoff** |
+| **M3b 单层 MoE 幅值正确** | **next_hidden 合理幅值** | **⛔ 当前卡这里 —— E2 op-dump 定位（续4）：~1e11 完全出自 `_expert_routed`（INT8 routed kernel）；FUSE 无罪、非别名/collective/degenerate。真修=对齐 moe.py dispatch-side INT8 quant（A5），保留 FUSE** |
 | M4 L1 ctx=1 token-exact | 全 42 层放开，`--hidden-token 6127` → **argmax=303** vs vLLM | ⏸ gated on M3 |
 | M5 L2 多 token / decode-step | vLLM→whole-net KV bridge 或 live A/B（8001 vs 8000），多 token token-exact | ⏸（需 port G5b 机器） |
 | M6 整网 decode 集成落地 | 接入 serving 路径（live single-handoff），端到端精度双过准出 | ⏸ |
@@ -70,10 +70,33 @@
 - **本 session 试过但没解决 ~1e11 的两个修复**（原理可能仍对，但非充分）：`_zero_routed_y_buf`（InCore，对齐 moe.py，data window 非自动清零 → combine gather 读 garbage；保留）；residual-protection（stash `resid1→next_hidden_out` Out + D 读它，基于已作废的 resid1-corruption 说，**回退候选**）。
 - **代码状态**：`feat/whole-net-n1-fusion` 工作区**未 commit**，含 FUSE + generator `_be` 修复 + zero-init + residual-stash + 诊断旋钮。**FUSE 状态存疑，未 push。**
 
+### ⭐⭐⭐ 本 session（2026-07-13 续4）— E2 op-dump 定位真因 = INT8 routed-expert kernel；FUSE 无罪，架构约束未违反
+
+> 详见 memory `n1_m3b_fuse_handoff_fixed_residual_clobbered` UPDATE续4。**覆盖上面所有 FUSE-别名 / 回退-split 的结论。**
+
+- **架构核查（`pypto_top_level_documents/`）**：FUSE（attn+EP-MoE 一个 orch）**不违反任何硬不变量**。「不 fuse」是软选择（DeepSeek 的）；「live 中间量不别名」是**编译器/`IMemoryManager` 的保证**（ADR-013）。⟹ ~1e11 是**实现 bug**，用户判断对。
+- **E1（填满 batch 真输入）**：仍 nondeterministic 1e11 → **input-agnostic**（排除 degenerate 零行 / INT8-amax-除 0）。
+- **heap 4→8GB**：无变化 → 非 GM ring-heap 溢出。
+- **E2（可靠 op 级 `pl.Out` dump，写进独立 `dbg_out` buffer，非 orch 内 return 旋钮）device P=1**：
+
+  | stage | 内容 | max\|dbg\| |
+  |---|---|---|
+  | 1 post_norm | MoE 输入 | **1.45 ✓** |
+  | 5 local_routed_x | dispatch 输出=routed 输入 | **1.45 ✓** |
+  | 3 local_routed_y | **routed expert 输出** | **3.99e11 ✗** |
+  | 2 sh_y | shared expert | **1.62 ✓** |
+  | 4 moe_out | combine 后 | 1.95e11（继承 routed garbage） |
+
+- **结论（device 证据、可靠）**：~1e11 **完全出自 `_expert_routed`（INT8 routed-expert 计算）**。post_norm / dispatch 输出 / shared 全干净。
+  - **推翻 FUSE-别名**（fused orch 中间量全干净）→ **FUSE 可行，别回退别改 split**。
+  - **推翻 collective**（dispatch 输出干净）。
+  - **推翻 degenerate 输入**（E1）。
+- **真因 = gap-5**：whole-net 内联的是**旧 in-expert INT8 quant**（`routed_x_quant`/`routed_h_quant`：per-token amax→INT8 cast→INT8 cube→INT32→dequant），**device 误编译**（nondeterministic 1e11）；moe.py 有**已验证的 dispatch-side quant**（Option A）。对应 memory `n1_w8a8_int8_kernel_done_wholenet_inlined_decoupled`(A5) + `gap5_int8_math_correct_pivot_dispatch_side` + `gap5_int8_cube_fractal_32_partial_tile`。
+
 ### ⛔ 修正后的下一步（按优先级）
 
-1. **[首选] 回退 FUSE → 保 SKILL 对齐的 SPLIT**（attn_only_orch + chip_orch，attention 与 MoE 分两个 orch，无 intra-orch 别名）+ **per-layer distinct handoff buffer 修 handoff**（不复用跨 42 层共享的 program-Out `h_mid_out`），靠上个 session 定位的 **pypto DCE `CommDomainScopeStmt` 修复**（`dead_code_elimination.cpp`，已定位未 commit，见 UPDATE7）解锁 computed-offset Out 写。
-2. **[若 split 仍 1e11]** = MoE-collective 未初始化读/race（dispatch pub_counts/count_done、shared tp_all_reduce、combine）→ 用 **op 级 copied-back `Out` dump**（不是 orch 内 return 旋钮）逐 stage 找谁先 garbage；对齐 validated moe.py 的 collective init/barrier。
+1. **[真修，memory「A5」] 把 whole-net 的 routed 路径对齐 moe.py 的 dispatch-side INT8 quant**：post_norm→INT8 在 gate/dispatch 做，dispatch INT8 `recv_x` + per-token scale，`_expert_routed` 去掉 in-expert input-quant。从 moe.py 当前 `EpTpMoE` 重生 whole-net 的 gate/dispatch/expert_routed step（generator 重生）。**保留 FUSE**。修完 P=1 routed 输出应 ~O(1) → 放开 42 层 → L1 A/B（tid 6127 → argmax 303）。
+2. commit 前清诊断脚手架（`_MOE_*`/`_FUSE_ATTN_ONLY`/`_DBG_STAGE` module ints + fused-orch dump 块 + `dbg_out` plumbing + harness `P_FILL_BATCH`/`max|dbg|` + residual-stash）；保留 generator `_be` 修复 + `_zero_routed_y_buf`。
 3. 权重/scale 前 session 已验有限，非源头。
 
 
