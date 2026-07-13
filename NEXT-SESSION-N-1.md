@@ -1,6 +1,6 @@
 # NEXT SESSION — N=1 整网 decode 集成 + 端到端精度对齐 vs vLLM
 
-> 直接把最底部 code block 当第一条消息粘贴。自包含。更新于 2026-07-13（M3 NaN 已修，当前卡 M3b）。
+> 直接把最底部 code block 当第一条消息粘贴。自包含。更新于 2026-07-13（A1 单层 MoE INT8 device-verified P=1/20/31；当前卡 A2 = P=42 comm-pool-bytes stall，根因已证伪确认，修法 = 完成 1A dispatch-side INT8，WIP 在 generator `.bak.1awip`）。⚠ 下方 续/续2/续3/续4 段是历史 M3b-别名 假设，已被 A1（续5，真因=`_expert_routed` in-expert INT8 quant）推翻，仅作历史参考。
 > **运行环境：0234 机器，通过本地 tmux `pypto-ascend-0:0` 登陆**（8 卡 0-7；781GB RAM；driver 25.5.2 / firmware 7.8.0.7.220 / CANN 9.0.0-beta.1）。
 > 编辑机 `b-csy-develop`（**无 python，有 npu-smi，能直连 github**；NFS 与 0234 共享，编辑即时可见）。分支 `pypto-lib feat/whole-net-n1-fusion`。
 
@@ -18,14 +18,29 @@
 |---|---|---|
 | M0 单算子 probe | matmul_acc N=16 / head-gate / gate_topk vs torch | ✅ PASS |
 | M1 功能 bring-up | 42 MoE 真 W8A8 + 权重+KV 双 IPC 8 卡 dispatch-clean | ✅（Blocker B 解） |
-| M2 per-layer gate_r | monolithic 整网自算逐层 head-gate（on-device，token-exact-capable） | ✅（路径 a，本 session） |
-| **M3 单层 MoE 数值正确** | **NaN 修掉 → finite** | **⚠（2026-07-13 续2 复诊：NaN 消，但 MoE 层 nondeterministic ~1e11，未真正正确）** |
-| **M3b 单层 MoE 幅值正确** | **next_hidden 合理幅值** | **⛔ 当前卡这里 —— E2 op-dump 定位（续4）：~1e11 完全出自 `_expert_routed`（INT8 routed kernel）；FUSE 无罪、非别名/collective/degenerate。真修=对齐 moe.py dispatch-side INT8 quant（A5），保留 FUSE** |
-| M4 L1 ctx=1 token-exact | 全 42 层放开，`--hidden-token 6127` → **argmax=303** vs vLLM | ⏸ gated on M3 |
+| M2 per-layer gate_r | monolithic 整网自算逐层 head-gate（on-device，token-exact-capable） | ✅（路径 a） |
+| **M3 单层 MoE 数值正确** | **NaN 修掉 → finite** | **✅（2026-07-13 续5：A1 device-proven P=1，NaN 消）** |
+| **M3b 单层 MoE 幅值正确** | **next_hidden 合理幅值** | **✅（2026-07-13 续5：A1 —— `_expert_routed` byte-align moe.py，flat-pre-quant INT8；P=1 `local_routed_y` 3.99e11→1.41，next_hidden=502 finite）** |
+| **A2 P=42 full-chain finite** | **全 42 层放开无 stall** | **⛔ 当前卡这里 —— P=42 TP-allreduce collective deadlock（507018 orch_error=8）；bisect P=31✓/P=42✗；已证伪确认根因 = comm-pool 字节上限（非 arena/task_window/dep_pool/rotating(破SSA)/collective-count）；修法 = 完成 1A dispatch-side INT8（recv_x→INT8，pool 391→~223MB<290MB clean），不做 FUSE→SPLIT** |
+| M4 L1 ctx=1 token-exact | 全 42 层放开，`--hidden-token 6127` → **argmax=303** vs vLLM | ⏸ gated on A2 |
 | M5 L2 多 token / decode-step | vLLM→whole-net KV bridge 或 live A/B（8001 vs 8000），多 token token-exact | ⏸（需 port G5b 机器） |
 | M6 整网 decode 集成落地 | 接入 serving 路径（live single-handoff），端到端精度双过准出 | ⏸ |
 
 **判据**：L1 per-layer hidden `ratio_allclose(atol=0.04)` / L2 logits cos≥0.999+topK overlap≥4/5 / L3 greedy top-1≥95%。**oracle = vLLM eager dump，synthetic golden 会 stale。**
+
+## ⭐⭐⭐ 本 session（2026-07-13 续5）— A1 INT8 routed FIXED (device-proven)；A2 P=42 collective deadlock 诊断（所有 runtime knob 无效）
+
+> 详见 memory `n1_a1_int8_routed_fixed_p42_windowstall`。device 实测为准。
+
+- **✅ A1 (M3/M3b 真解，device-proven)**：把 whole-net `_expert_routed` 换成 **byte-faithful moe.py device-PASS 版本**（新 generator 常量 `FRESH_EXPERT_ROUTED`，`tools/step3p5/_gen_faithful_real.py`）。输入量化改成对**整个 `local_recv_max=1024` recv buffer 的 FLAT pre-quant**（32 个满 RECV_TILE tile，无 partial-tile → 避开 gap-5 miscompile；镜像 moe.py `_quant_moe_input`），`lrx_scale` **非-padded `[1,1024]`** + `[1,RECV_TILE]` row-slice→reshape 读取（ccec ND2ND-safe），bare-slice `routed_h_quant`，`fillpad(zero)` gated。旧 generator `_pre_quant`/repoint string-transform 删除。**device P=1（真 W8A8+双 IPC，`P_DBG_STAGE=3`）：`local_routed_y` 3.99e11 → 1.41 ✓，next_hidden=502 finite，RUN_CLEAN**。前 8 次 UPDATE 的 M3b「handoff/别名」定位被 A1 覆盖（真因就是 `_expert_routed` in-expert partial-tile INT8 quant）。
+- **✅ 多层 bisect device-clean**：P=1 ✓、**P=20 ✓**（next_hidden=560）、**P=31 ✓**（next_hidden=2736）。
+- **⛔ A2 卡点 = P=42 TP-allreduce COLLECTIVE deadlock**：P=42 ~18s 后 `507018 orch_error=8 (TENSOR_WAIT_TIMEOUT) completed=38 running=1 waiting=2 stuck_core=AIV`；device stall-diag 显示 stuck kernel = `aiv_reduce_scatter`/`aiv_broadcast`/`hccl_aiv_sync`（= TP all_reduce），全 rank 同 task 挂（collective 互等）。**bisect 阈值 31<T≤42（cumulative depth，非特定层——`completed=38` 停在 pos~35-37 regular MoE 层，未到 special L43/L44）**。
+- **全部 RULED OUT（device 实测，勿再试）**：① arena exhaustion —— comm-domain window pool 自动扩容且 alloc 成功（P=20 186MB / P=42 391MB 都成功）；② per-layer window aliasing —— generator `_host_orch` 本就 per-layer distinct（`*_buf_L{pos}`）；③ **rotating window pool（K=8 reuse）—— 编译失败 `ConvertToSSA Error 6`**（跨层复用 window buffer = 多个 SSA def；这正是 per-layer-distinct 存在的原因）；④ task_window 131072→65536、dep_pool 131072→524288(4×)、heap 4→8GB —— 全部同样 stall。**没有 runtime knob 能修。**
+- **🎯 下一步 = 1A full-moe.py dispatch-side INT8**（evidence-based，最优先）：deadlock 与 pool size 相关（clean ≤290MB@P=31 / stall 391MB@P=42）。当前 A1 保留 **BF16 push-dispatch** → `recv_x_buf`=8MB/层。改 **INT8 recv_x**（moe.py Option A：dispatch 前量化 post_norm→INT8+scale，push INT8 + 并行 `recv_scale`/`send_scale` 窗口，`_expert_routed` 直接读 pre-quantized INT8、去掉 flat pre-quant）→ recv_x=4MB/层，pool **391→~223MB < P=31-clean(290MB)** → 大概率解 deadlock，且更贴 moe.py。改动面：base builder `_dispatch_push`/`_dispatch_stage`/dispatch window decls + `_expert_routed` + generator（模板见 moe.py `chip_orch` L2154-2185）。**备选**：FUSE→SPLIT（SKILL §H，pre-FUSE 有 N=42 clean）。
+- **✅ 续5b FALSIFICATION（bytes CONFIRMED / count REFUTED）—— 1A 是确定解**：把 `recv_x_buf` ×4 膨胀（diag）跑 **P=20**（只 20 层 = 同样低 collective count）→ pool `win_size=698690816`(**666MB**) → **507018 STALL**（正常 P=20@186MB CLEAN）。同层数、同 collective count、pool 变大就 stall ⟹ **deadlock 是 pool-bytes/offset，不是 collective-count/depth**。∴ **1A（recv_x→INT8，pool 391→223MB<290MB）是确定修法；FUSE→SPLIT 不必做**（count 理论已排除）。recv_x 是唯一够大的 lever（8MB/层，必须缩它；无非-INT8 捷径能到 <290MB）。已 revert 膨胀，tree 回 clean A1。**surgery 前先 `cp _gen_faithful_real.py{,.bak}`（generator 无备份）**。
+- **代码状态**：`feat/whole-net-n1-fusion` 工作区（NFS 0234），**未 commit**。已 regen 回 per-layer-distinct（compiling A1，P=1/20/31 device-clean，P=42 stall）。`FRESH_EXPERT_ROUTED` 在 generator。`.bak.a1pre`/`.bak.a1pre2` 备份。8 个 hold-mode exporter 仍 READY（`--reuse-exporters`）。
+
+
 
 ## ⭐⭐ 本 session（2026-07-13）— M3 NaN 根因找到并修复；前 8 次 UPDATE 的 MoE-INT8 判断是错的
 
@@ -237,63 +252,65 @@ memory `n1_head_gate_ondevice_restored_l1_nan`：UPDATE9（根因修复，推翻
 ---
 
 ```
-继续 step3p5 **N=1 整网 decode 集成 + 端到端精度对齐 vs vLLM**（总目标；不是只修一个 bug）。当前挡路 = M3b
-单层 MoE(chip_orch) 输出幅值爆炸（~1e12，跨 run 跳=未初始化读）；修完立刻推进 M4 全 42 层 L1 token-exact
-（tid 6127 → argmax=303）→ M5 多 token（KV bridge / live A/B）→ M6 整网 decode 集成落地。本 track =
-whole_decode_faithful_real（45 层内联一个 @pl.program，真 W8A8 权重+KV 经 IPC，harness
-tests/step3p5/_stage_whole_faithful_real_ipc.py，分支 feat/whole-net-n1-fusion）。⚠ 别和 NEXT-SESSION.md
-的 G5b/per-layer track 混。
+继续 step3p5 **N=1 整网 decode 集成 + 端到端精度对齐 vs vLLM**（总目标，未完成，跨多 session）。分支
+feat/whole-net-n1-fusion；harness tests/step3p5/_stage_whole_faithful_real_ipc.py；0234 tmux
+pypto-ascend-0:0（8 卡）；真 W8A8 + 权重/KV 双 IPC。⚠ 汇报避免误导性词语：未 device 验证的不能称
+"已完成/已修复"；P=42 未通过就是未通过。
 
-【硬约束】IPC(KV+权重)+真实权重、遇问题只解不绕(诊断脚手架不进产品路径)、correctness+speed、不只盯单步、
-对齐 DeepSeek/Qwen、架构优先、严格遵守 pypto-dev-constraints SKILL、历史文档可能 stale 先核对代码、
-**不要走弯路/不需要定位的别定位**（过度 device 定位烧 cycle）、遇难点可开 agent 从别角度看。
+【当前状态（device 实测）】
+- M0 probe ✅ / M1 双 IPC 8 卡 dispatch-clean ✅ / M2 on-device head-gate ✅。
+- A1 单层 MoE INT8 数值 ✅ device-verified：_expert_routed 对齐 moe.py device-PASS 版（原生 W8A8、
+  无 BF16-dequant），P=1 op-dump local_routed_y 3.99e11→1.41、next_hidden 有限；P=1/P=20/P=31 全链
+  device RUN_CLEAN。工作区 = clean-A1（未 commit）。
+- A2 P=42 全链 ⛔ 未通过：全 42 层 device stall 507018（orch_error=8 TENSOR_WAIT，TP-allreduce
+  collective 挂）。根因**已证伪确认 = comm-domain window pool 字节上限**（P=20/186MB✓、P=31/290MB✓、
+  P=42/391MB✗；recv_x×4 膨胀的 P=20/666MB 也✗ ⟹ 是 pool 字节，非 collective 层数）。已排除
+  arena/task_window/dep_pool/rotating(破 SSA)。
+- M4 token-exact(argmax=303) / M5 多 token / M6 live vLLM 集成 均未开始（gated on A2）。
 
-【里程碑】M0 单算子 probe ✅ / M1 双 IPC 8 卡 dispatch-clean ✅ / M2 on-device head-gate ✅ /
-**M3 单层 MoE NaN ✅（2026-07-13 修复）** / **M3b 单层 MoE 幅值 ⛔当前** / M4 L1 token-exact ⏸ /
-M5 L2 多 token ⏸ / M6 集成落地 ⏸。
+【下一步 = 完成 1A dispatch-side INT8（唯一确定修法；用户拍板：做 dispatch-side int8，不用 FUSE→SPLIT）】
+recv_x BF16(8MB/层)→INT8(4MB/层) → pool 391→~223MB < 290MB 干净线 → 预期解 P=42 stall。
+已完成并存于 tools/step3p5/_gen_faithful_real.py.bak.1awip（正确、待接力）：
+  Stage 1 = FRESH_EXPERT_ROUTED 改成 moe.py INT8-consuming _expert_routed（INT8 local_routed_x +
+    local_routed_x_scale[1,local_recv_max] 入参，无 flat pre-quant，scale 用 [1,RECV_TILE] row-slice）；
+  Stage 2a = dispatch 三函数签名（recv_x→INT8 + recv_scale + local_routed_x_scale_out）；
+  Stage 2b(A)(B) = _fused_moe_head sig（recv_x→INT8+recv_scale）+ _host_orch（recv_x_buf *2→*1 +
+    recv_scale_buf + window binding + call arg）。
+剩余 ~15 处（逐条清单见 memory n1_a1_int8_routed_fixed_p42_windowstall 续5c）：
+  (a) 加 _quant_moe_input InCore kernel（BATCH=16 行 per-token amax over HIDDEN → INT8 + [BATCH,8] scale；
+      InCore + pl.range，禁在 InCore 内嵌 pl.at）；
+  (b) chip_orch(moe_body)：dispatch 前调 _quant_moe_input(post_norm)→INT8+scale；local_routed_x create
+      BF16→INT8 + 加 local_routed_x_scale create；dispatch_step / expert_routed_step 调用加参；base
+      chip_orch sig recv_x→INT8+recv_scale；
+  (c) _dispatch_push：x BF16→INT8 sig + x_scale 参 + 每 token scale push（照 idx_tile remote_store，
+      scale_tile[1,8]→recv_scale[dst_row]）；
+  (d) _dispatch_stage：recv_x INT8 load + stage recv_scale[row,0]→local_routed_x_scale[0,row] + 返回加 scale；
+  (e) dispatch_step：穿 x_scale/recv_scale + 返回 local_routed_x_scale（含 return-type tuple）；
+  (f) expert_routed_step：INT8 local_routed_x + scale 参 → _expert_routed。
+接力：cp .bak.1awip → generator；补 (a)-(f)（generator string-transform，scope 到 head_and_setA/
+  chip_orch_text）；py_compile；strip 旧 real builder + `python tools/step3p5/_gen_faithful_real.py`；
+  smoke-compile（_probe_whole_faithful_canonical --layer-name whole_decode_faithful_real -p a2a3sim）；
+  device P_FAITHFUL_MOE_LAYERS=1 P_DBG_STAGE=3 --hidden-token 6127（验 local_routed_y~1.4 + 跨 run
+  deterministic）；device P=42（预期 pool ~223MB、RUN_CLEAN）；P=42 验 argmax=303（M4）。回退：generator
+  .bak.pre1a + decode_layer.py.bak.a1pre。
 
-⭐【M3 已解 —— 别再往 INT8/gap-5 方向查】NaN 真根因 = full/swa_attn_only_orch 里
-resid3_out = pl.create_tensor(...) 遮蔽了 pl.Out 参数 → attention 写局部 tensor、h_mid_out[rd] 从没写 →
-chip_orch 读未初始化 → NaN（dummy-0 权重一直掩盖）。修法=attention 结果 assemble 进 resid3_out Out
-（已落 real-builder 两 orch 定义 + generator）。device P=1：NaN→finite（h_mid 0→~450）。前 8 次 UPDATE 的
-MoE-INT8/gap-5 判断全错。工作区 git status 有此修复 + 诊断脚手架（未 commit）。
+【硬约束（不可违背）】
+- IPC(KV+权重) + 真实 W8A8 权重；**禁 BF16-dequant 历史版本**；禁 H2D 绕路。
+- 遇问题只解决不绕开；诊断脚手架不进产品路径。correctness+speed 都要（别用 correctness 当停摆借口，
+  也别造错误精度数字）。
+- 对齐 DeepSeek/Qwen + moe.py；step3p5-vs-DeepSeek 差异必须论证（只在性能更好时保留）。
+- 架构优先、先设计后编码；严格遵守 pypto-dev-constraints SKILL；分清模型每层交接边界；避免陷入局部错误反复。
+- 历史文档可能 stale，先核对当前代码。ready 的口径 = live-token-exact-device（compile/offline/synthetic
+  均不算 done）。汇报用词精确、不误导。
 
-⭐【M3b 已定位 / 三修法已失败 —— 别重复】NaN 消除后 next_hidden≈1e11-1e12（有限但错，跨 run 跳动=未初始化读）。
-根因 = chip_orch 在 attn_only 写 h_mid_out 之前就读它（读未初始化：NaN 或巨值）；pypto 没给这两个独立
-orchestration 排跨-orch 依赖序。**已试且全失败（别再试）**：(1) 合并两 per-rank 循环成一个 → 仍 1.99e11；
-(2) 捕获 attn_only 返回值传 chip_orch 当 current_hidden（强 data-dep）→ PASSTHROUGH 仍 3.05e11（harness h_mid=394）；
-(3) attn_only 把 Out 直接传 inline attention（对齐 dense dense_mlp_inline(h0_out)，"C1"）→ 回退成 nan。
-对比：dense 层内 attention+MLP 在**一个** swa/full_chip_orch 里（无层内 split），dense L1→L2 handoff 正常（P=0→502）。
-**这是 SKILL H 记载的 N=1-inline 跨-orch 依赖墙。**
-
-【下一阶段任务（按优先级）】
-1. **[正解] FUSE：把 attention 融进 MoE chip_orch** —— chip_orch 对 current_hidden 调 attention_inline → resid1
-   局部 → 现有 post_norm+MoE+residual（镜像 dense full_chip_orch），消掉 attn_only→chip_orch 层内 handoff。
-   需 full/swa 两 fused 变体（11 full + 31 swa MoE 层）+ generator _host_orch 重写（去 attn_only 调用、直接
-   fused chip_orch）+ regen（先删现有 real builder 再跑 _gen_faithful_real.py）。⚠ 编译墙风险（attention+全 MoE
-   一个 orch 可能过大——可能正是当初拆分的原因；若真撞墙，转下条）。
-2. **[备选] 转 SKILL 推荐的 multi-program + resident-DeviceTensor**（不 inline 45 层 body）—— 偏离 N=1 track，需与用户确认。
-3. 修好 M3b → P=1 幅值合理（~几百）→ 放开 P_FAITHFUL_MOE_LAYERS=42 → L1 A/B（tid 6127 期望 argmax=303）→ M4→M5。
-4. commit 前清诊断脚手架（3 旋钮 + merged-loop/capture-pass），保留 attn_only writeback + padding-mask 真修复。
-
-【debug 方法 / confounds】
-- **可靠 gating = 编译期 if X > 0:**（closure/module int，像 _FAITHFUL_MOE_LAYERS）；@pl.function 体内
-  int(__import__('os')...) 被 tracer 拒（要 module-global 常量）；裸 if module_int: 变 device-if。
-- 定位手法（有用）：harness 打印 max|h_mid|（attn_only 输出，chip_orch 不覆写）+ P_MOE_PASSTHROUGH（chip_orch
-  直接返回 resid1=其 h_mid 输入）→ 对比 harness h_mid vs PASSTHROUGH 看 handoff 是否错。
-- 跨 run 值跳动 = 未初始化内存读的信号（本 session 靠这个反推出是 ordering，非 INT8 数学）。
-- 数字 device error 先查 wiki Device-Error-Codes_zh；NaN/幅值 bisect 用 P_FAITHFUL_MOE_LAYERS 层数二分；禁 -9 / npu-smi reset。
-
-【环境】0234 tmux pypto-ascend-0:0（8 卡）；三件套 source /usr/local/Ascend/cann/set_env.sh && source $WS/activate.sh
-&& export PTO_ISA_ROOT=$WS/pto-isa && export PYTHONPATH=$WS/pypto/python:$WS/pypto-lib:$PYTHONPATH（PYTHONPATH 要
-**append** 否则丢 acl）。8 卡 env PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072。
-W8A8 ckpt=/mnt/hw910test-jfs/models/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp。
-bisect 高效：8 hold-mode exporter（--export-rank r --dev r --kv-ipc，一次~15min 冷载）+ 多次 --reuse-exporters
-worker（改 models 后先 find models/step3p5 -name '*.pyc' -delete；每次 compile+run ~3min）。⚠ /tmp 每机独立
-（查 ready keys 在 tmux 0234：ls /tmp/n1_weight_ipc/ready.rank* | wc -l）；收尾 touch /tmp/n1_weight_ipc/STOP
-+ pkill -f export-rank 释放卡。push 走 b-csy-develop（0234 连不通 github）+ HTTP/1.1 + PAT
-/data/chensiyu/secrets/github.env；pypto/pypto-lib .git objects root-owned → commit 走 tmux(root)。
-全部细节读上面 🎯/⛔/✅ 段 + 本 session（2026-07-13）段 + memory n1_head_gate_ondevice_restored_l1_nan（UPDATE9-10）。
+【环境】三件套：source /usr/local/Ascend/cann/set_env.sh && source $WS/activate.sh && export
+PTO_ISA_ROOT=$WS/pto-isa && export PYTHONPATH=$WS/pypto/python:$WS/pypto-lib:$PYTHONPATH（append，否则丢
+acl）。8 卡 env：PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072。
+W8A8 ckpt=/mnt/hw910test-jfs/models/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp。8 hold-mode
+exporter 常驻 READY（--reuse-exporters；/tmp 每机独立，查 ready 在 tmux 0234：
+ls /tmp/n1_weight_ipc/ready.rank*|wc -l）。改 models 后 find models/step3p5 -name '*.pyc' -delete。
+禁 -9 强杀 device / npu-smi reset（netboot 锁卡）。push 走 b-csy + HTTP/1.1 + PAT
+/data/chensiyu/secrets/github.env（0234 连不通 github）。
 ```
 
 ---
@@ -307,10 +324,10 @@ worker（改 models 后先 find models/step3p5 -name '*.pyc' -delete；每次 co
 > **ready 只认 live-token-exact-device；声明 root cause 前先跑证伪实验；对齐 DeepSeek；pin 单一底座。**
 > 每条任务标了「验证口径(bar)」——只有过 bar 才算 done，否则标 `provisional`。
 
-### Phase A — INT8-native whole-net 数值正确（N=1 主线，当前卡 M3b）
-- [ ] **A1 gap-5 修复**：whole-net routed MoE 从 in-expert INT8 quant → **moe.py 已验证的 dispatch-side INT8 quant**（保留 FUSE）。做法：`_gen_faithful_real.py` 从 moe.py dispatch-side quant 重生成 routed 段（cd3ef0d 参考）。**bar**：P=1 单 MoE 层 `local_routed_y` finite + **跨 run deterministic** + vs torch W8A8 `ratio_allclose(atol=0.04)`（op-dump `pl.Out`，非 max|abs|）。依赖：M3b op-dump 已定位（续4）。
-- [ ] **A2 M3 full-chain finite**：42 层 full-chain-from-L0 跑完无 NaN/1e11。**bar**：final residual O(10-100) finite + 跨 run deterministic。依赖 A1。
-- [ ] **A3 M4 L1 token-exact**：`--hidden-token 6127`（L1 ctx=1）→ **argmax=303** vs vLLM。**bar**：greedy top-1 命中 303。依赖 A2。
+### Phase A — INT8-native whole-net 数值正确 + P=42 全链跑通（N=1 主线，当前卡 A2）
+- [x] **A1 单层 MoE INT8 数值** — ✅ **device-verified（2026-07-13 续5）**：`_expert_routed` 对齐 moe.py device-PASS 版（flat-pre-quant INT8，原生 W8A8、无 BF16-dequant）。**bar 达成**：P=1 op-dump `local_routed_y` 3.99e11→1.41 finite；P=1/P=20/P=31 全链 device RUN_CLEAN。（clean-A1 在工作区，未 commit。）
+- [ ] **A2 P=42 全链跑通 = 完成 1A dispatch-side INT8** — ⛔ 当前卡：全 42 层 device stall 507018（TP-allreduce collective）。根因**已证伪确认 = comm-domain window pool 字节上限 ~290-390MB**（P=20/186MB✓、P=31/290MB✓、P=42/391MB✗；recv_x×4 的 P=20/666MB 也✗）；已排除 arena/task_window/dep_pool/rotating(破 SSA)。**修法 = recv_x BF16→INT8**（pool 391→~223MB<290MB）；WIP Stage1+2a+2b(AB) 存 `tools/step3p5/_gen_faithful_real.py.bak.1awip`，剩 ~15 处编辑见 memory `n1_a1_int8_routed_fixed_p42_windowstall` 续5c。**bar**：P=42 device RUN_CLEAN + final residual O(10-100) finite + 跨 run deterministic。**（不做 FUSE→SPLIT —— collective-count 理论已证伪。）**
+- [ ] **A3 M4 L1 token-exact**：P=42 `--hidden-token 6127`（L1 ctx=1）→ **argmax=303** vs vLLM。**bar**：greedy top-1 命中 303。依赖 A2。
 
 ### Phase B — 解 G5b 精度 open question（falsify-before-assert；memory g5b_swa... 续¹¹h）
 - [x] **B1 查 attention 是否 W8A8** — ✅ DONE 2026-07-13（non-device）：W8A8 ckpt weight-index 显示 **q/k/v/o_proj `weight_scale#=0`（BF16，未量化）**，gate/up/down/experts `weight_scale#>0`（INT8）→ **step3p5 W8A8 只量化 MoE/MLP，attention 是 BF16**（vLLM 也 BF16）。∴ **BF16 attention 大幅值不内在退化**（vLLM 在 L17 正常为证）→ **L17-alone 0.25 是 mid-start bootstrap artifact，非真 bug**；唯一 quant-path 差异 = BF16-dequant MoE → **INT8-MoE-only 是正确且充分的修法，attention 不需 INT8**。（复现器 `/tmp/_ckq.py`；memory 续¹¹i。）
