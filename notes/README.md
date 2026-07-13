@@ -48,3 +48,5 @@ graph LR
 ---
 
 *相关：架构对比笔记见 [`../architecture/`](../architecture/)；权威架构文档索引见 [`../../pypto_top_level_documents/pypto-runtime-arch-docs/00-index.md`](../../pypto_top_level_documents/pypto-runtime-arch-docs/00-index.md)。*
+
+- [08 集成反复推翻复盘](08-integration-churn-postmortem.md) — 为什么"ready"结果反复被推翻重做：根因（弱验证 bar / 假设当事实 / BF16 临时地基 / DeepSeek divergence / 底座漂移）+ 对策。
