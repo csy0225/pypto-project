@@ -160,6 +160,9 @@ description: >
 - **512B L2 cache line**：BF16 trailing ≥256 elem / FP32 ≥128 / INT8 ≥512；kernel 目标 ~50µs（太小 fold/merge/mix，太大 split）。`performance-tuning.md`
 
 ### H 集成架构
+
+> **⛔ 用户裁定（2026-07-14，最高优先，覆盖本节所有多程序描述）**："多程序从来不考虑…实现不了是代码bug"。**多程序 + resident-DeviceTensor 永久排除**，不得再作为路径提议；**N=1 整网单 `@pl.program`（`WholeDecodeFaithfulReal`）是唯一生产形态**；若 N=1 跑不通（如 A2 collective 507018/S1:running-stalled 死锁）= **collective handshake 代码 bug，定位+修，不是框架墙**。下面凡提"multi-program `DistributedWorker`"/"N 三档取 N≈few"/"whole-decode worker 用 multi-program" 均**作废**（保留仅为历史，勿据此选路）。
+
 - **整网执行在 pypto，vLLM 只调度 + KV cache**；准出 = 端到端 + 精度双过。`moe-block-nextwork §8`
 - **整模型 monkey-patch 在 `Step3p5Model.forward`（一次 45-layer+lm_head），不 per-layer**（45 次 launch 抹掉融合优势）；`per_layer=True` 只给 Phase 21 精度 diff。`phases/20-vllm-backend-monkey-patch.md`
 - **comm option A**：pypto kernel 内用 simpler shmem-IPC（不写 simpler↔HCCL bridge）；被 patch 的 pypto 路径 **`enforce_eager`**（pypto kernel 与 vLLM aclgraph 互斥）。`aclgraph-vs-pypto §D1/D3`

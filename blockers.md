@@ -185,6 +185,8 @@ RuntimeError: comm_alloc_domain_windows failed with code -1  (全 N chip)
 
 ## ⭐ NEW 2026-07-08 — 多程序 DistributedWorker N=8 co-prepare 死锁（whole-decode 整网 dispatch 硬 blocker）
 
+> **⛔ 作废（2026-07-14 用户裁定）**："多程序从来不考虑…实现不了是代码bug"。本节整段（多程序 co-prepare / DISPATCH wedge / Option-C 两程序）**永久出局**，保留仅为历史。生产形态 = N=1 整网单 `@pl.program`（`WholeDecodeFaithfulReal`）；N=1 的 A2 collective 死锁按 collective handshake 代码 bug 修。**勿再据本节把多程序当候选。**
+
 **严重度**：🔴 阻塞整网 live single-handoff —— whole-decode worker 需把全部层程序 co-prepare 到一个 worker，N=8 时死锁。
 
 **症状**：whole-decode worker（`_stage_whole_decode_run.py --worker`，多程序 DistributedWorker #1706）：

@@ -1,5 +1,7 @@
 # 学习笔记 · step3p5 + vLLM 集成：per-layer / block / 整网融合
 
+> **⛔ 用户裁定（2026-07-14，覆盖本笔记所有"program 个数 N 三档"权衡）**："多程序从来不考虑…实现不了是代码bug"。**多程序（N≈few per-block / N≈87 每层一个 / DistributedWorker co-prepare）永久排除**，本笔记的"三档取 N≈few"结论作废。**唯一路径 = N=1 整网单 `@pl.program`**；N=1 若跑不通（A2 collective 507018/S1 死锁）= collective handshake **代码 bug**，修它，不换路径。下文三档分析保留仅为历史背景。
+
 > **这是什么**：step3p5 接入 vLLM 做整网推理时，"逐层跑 vs 整网融合"的架构选择，以及项目里真实撞的两堵墙、和参考模型 DeepSeek 的对照。沉淀自多轮讨论。
 > **权威出处**：项目 `CLAUDE.md` Phase 20/25、memory `whole-model-pypto-decode-design`（2026-07-08 定稿）、`models/deepseek/v4/`、`models/deepseek/v3_2/`。
 > **一句话**：这里有**三个正交的粒度轴**别混——一个 program 装几层、装一层里的几块、同类型层复不复用。step3p5 撞墙撞在"轴3 program 个数"，不是"轴1 融合与否"。
