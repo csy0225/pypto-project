@@ -7,7 +7,32 @@ Blocker 解决时，**删掉本文件里这一节**，到
 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)
 "Resolved blockers" 段补一条 post-mortem。
 
-**最后检视**：2026-07-11。
+**最后检视**：2026-07-14。
+
+---
+
+## 🔴 ACTIVE 2026-07-14 — A2：N=1 整网 84 流水 collective 的跨卡 notify 时序竞态（507018 间歇挂死）
+
+**症状**：`whole_decode_faithful_real`（45 层融进一个 `@pl.program`，TP=8，~84 个手写 `tp_all_reduce`）在真 W8A8+双 IPC 8 卡上 **间歇挂死 ~66%**：`507018 orch_error=8 sched=100 sub_class=S1:running-stalled completed=38-39 running=1 waiting=1 stuck_task_id=(1,23)=tp_all_reduce stuck_core=26`，8 卡同一 task。跑通时 argmax=303==vLLM golden（精度本身对，唯一 blocker 是此挂死）。
+
+**根因（可靠，工具+多 agent+device 坐实）**：**跨卡 notify 写可见性时序竞态（Heisenbug）**，每个 collective 从第一个就有、84 个串行累积。
+- **非资源**：DFX `scope_stats` 所有资源 <1% 容量、dropped=0。
+- **非阈值/非某层**：sweep P=20 0/3、P=35 1/3、P=41 1/4、P=42 2/3（stochastic，随 collective 数量升）。
+- **非并发争抢**：collective 数据依赖串行，任一时刻只 1 个在跑（用户判断印证）。
+- 机制：`TNotify.hpp` 的 `st_atomic/store` 到 peer IPC 窗口 + `dsb(DSB_DDR)` 只 drain 本地 DDR，**不保证跨 HCCS 落到 peer HBM**；pto-isa 作者自注 `grid_intrinsic.hpp:454`："AICORE 核间 cache 不一致"。
+
+**修复尝试全部证伪（device，已回退 clean 基线）**：read-back（TNotify 加 dcci+reload+dsb）66%→25%（改善非根治）；notify AtomicAdd→Set 更差(~100%)；Set+poll-until-landed 更慢+挂（poll 45s 读不到自己写落定）；框架 `pld.tensor.allreduce` UB 溢出不能用。**关键**：修复响应**非单调**（read-back 有用、加量 poll 更差）= Heisenbug 签名 → **DSL/ISA 层任何改动只是扰动时序、修不掉根因**。
+
+**当前状态**：根因层级确定 = **runtime/框架层**（非模型层）。模型/DSL 侧能力已尽。隔离复现器 `pypto-lib/tests/step3p5/_probe_barrier_scale.py` 已写好（N 个纯 barrier collective、无 MoE，adversarial agent 的决定性实验）待 device 跑（barrier-only vs full × N=20/42/84），以最终判定 scheduler-ordering vs data-movement。
+
+**解除条件（三选一，需用户决策）**：
+1. **上报 simpler/pto-isa runtime team**（推荐）：给**确定性跨 rank collective 派发序**（现 fanin-driven 会跨 rank 错位，`scheduler_cold_path.cpp:248`）**或** 正确的**跨 die 写完成原语**（`TNotify.hpp`）。
+2. 先跑隔离 barrier-scale sweep 精确定位后再定 runtime 修法。
+3. 重估 N=1 约束（DeepSeek/Qwen 用多程序天然避开——每 program 少量 collective + dispatch 边界同步）。
+
+**⚠ 环境**：0234 tmux `pypto-ascend-0:0` shell 被上一批 poll 测试残留的不可中断 device 进程卡死；需手动 `pkill -f _stage_whole`（SIGTERM，勿 -9）+ 查 exporter/卡是否毒化。b-csy 无法跑 pypto（venv311 python 断链），编译/device 只能在 0234。
+
+**链接**：memory `n1_m4_accuracy_gap_converged_direction_drift`（全证据链）；wiki [Device-Error-Codes_zh](https://github.com/hw-native-sys/simpler/wiki/Device-Error-Codes_zh)（S1:running-stalled）。
 
 ---
 

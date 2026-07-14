@@ -1,5 +1,42 @@
 # NEXT SESSION — N=1 整网 decode 集成 + 端到端精度对齐 vs vLLM
 
+> **⛔⛔ 续13（2026-07-14 goal-session-2，device 复验）——权威当前状态。用词严谨：A2 未修复。本段覆盖续11/续12 中一切"A2 已修 / argmax=303 复现 3/3 / P=42 确定性 RUN_CLEAN"的结论。**
+>
+> **【最重要 · 纠正，勿再被误导】** 续12 与 commit `fc5a269` message 声称"A2 collective 死锁已修（completion-wave），P=42 不靠 logging 确定性 RUN_CLEAN 7 次、argmax=303 复现 3/3"。**本 session device 复验推翻**：clean `fc5a269` tree（completion-wave + combine 修复都在、工作区干净、17+10 marker 确认）、warm healthy exporters、**不开任何 logging**：`P_FAITHFUL_MOE_LAYERS=42 --hidden-token 6127 -d0-7` → **run1 STALL 507018 / run2 CLEAN argmax=303 / run3 STALL** ≈ **~66% 挂**。⟹ fc5a269 的 completion-wave **并未可靠修复 A2**；续12/commit-msg 的"device 验证 3/3"是**不可复现的 premature-victory**。⚠⚠ **本 session 一个 adversarial agent 因为读了 commit message 的"device 验证"就误判"A2 已修"**——所以下 session **铁律**：任何 commit message / memory / 文档里"已修 / device 验证"的声明，**必须先在 device 上复验（多次、无 logging）再据此行动**。
+>
+> **【A2 可靠根因（DFX 工具 + 多轮正反 agent 交叉质疑 + device 坐实）】** A2 = **跨卡 collective 时序竞态（Heisenbug）**，每个 collective 从第一个就潜伏（符合"顺序执行、一开始就有时序问题"），不是"数量并发争抢"。
+> - **非资源**：DFX `scope_stats`（42 scope×8 rank）task_window/heap/dep_pool/tensormap 全 <1% 容量、dropped=0。
+> - **非阈值/非某层**：sweep P=20 0/3、P=35 1/3、P=41 1/4、P=42 2/3（stochastic）。
+> - **非并发**：collective 数据依赖串行，任一时刻仅 1 个在跑。
+> - **本质差别（N=1 vs 多 program）**：多 program（DeepSeek/Qwen）每次 `rt.run()` dispatch 之间有 **runtime execute() drain 完成边界** + 层间可调 host 级 `comm_barrier`（`HcclBarrier`，厂商正确同步）；**N=1 单 program 层间没有这道边界**，in-kernel 只有 racy 的 shmem `TNotify/TWait`（`dsb(DSB_DDR)` 只 drain 本地、不保证跨 HCCS 落 peer HBM；作者自注 `grid_intrinsic.hpp:454` 核间 cache 非一致）。**N=1 内没有可靠的 in-kernel 跨卡同步原语**：`pld.tensor.barrier` 也 lower 到同一 racy shmem；`SyncAll/ffts_cross_core_sync` 只跨核不跨 die；数据路径无 `HcclAllReduce`；`HcclBarrier` 是 host 级只能多 program 用。
+>
+> **【本 session A2 修复尝试 + 确切 device 结果（全部已回退到 clean fc5a269 基线；勿重试这些死路）】**
+> - completion-wave（fc5a269 基线已含）：~66% 挂。
+> - `TNotify.hpp` read-back（dcci+reload+dsb 跨 die publish，纯 header）：66%→~25%（改善非根治；**非单调=Heisenbug 签名**）。
+> - notify `AtomicAdd→Set`（transform `_set_notify_tp_allreduce.py`）：更差 ~100%。
+> - `Set + poll-until-landed`（TNotify Set 分支 spin 至 100M）：更差；**且 100M in-kernel spin 会把卡 near-hang——本 session 0234 shell 卡死就是它导致的。铁律：禁大 in-kernel spin。**
+> - 框架 `pld.tensor.allreduce` intrinsic（transform `_swap_tp_allreduce_to_intrinsic.py`）：**UB 溢出**（一次 reduce 整个 [16,4096] 不 chunk，262144B>188416B），不能用。
+> ⟹ **DSL/ISA 层修不掉（只是扰动 Heisenbug）。修法必须在 runtime 层，或走多 program。**
+>
+> **【下一步（需用户先定方向 + 恢复环境；按依赖）】**
+> 1. **恢复环境**：0234 tmux `pypto-ascend-0:0` shell 被残留 device 进程卡死（poll-fix 的 100M spin 所致），从 b-csy 进不去（ssh 无权限；b-csy venv python 断链跑不了 pypto；0162 在 stepfun/develop 分支非本 track）。**需在 0234 手动 `pkill -f _stage_whole`（SIGTERM，勿 -9），可能需 card reset**，并查 exporter（EXP=8）/卡 HBM。
+> 2. **定方向（三选一）**：(A) **上报 simpler/pto-isa runtime team**——要 in-kernel 可靠跨 die 完成/同步原语，或确定性跨 rank collective 派发序（`scheduler_cold_path.cpp:248` fanin-driven 会跨 rank 错位）；(B) **环境恢复后跑隔离复现器** `tests/step3p5/_probe_barrier_scale.py`（N 个纯 barrier collective、无 MoE、barrier-only vs full × N=20/42/84）精确判定 scheduler-ordering vs data-movement，再定 runtime 修法；(C) **重估 N=1 vs 多 program**（多 program 是框架对"多层多 collective"的原生答案 = 天生有 drain 边界 + 可用 HcclBarrier）。
+>
+> **【精度状态（勿误解 / 勿夸大）】** 当 P=42 偶尔跑通时 argmax=303==vLLM golden（L2 attn_layer_idx `7294e26` + INT8 routed + combine 有效）。但"跑通"是**间歇**的、**不可复现**，**不能宣称 M4 token-exact 达成**。唯一 blocker = A2 间歇挂死。M5/M6 serving 集成**完全未开始**。
+>
+> **【本 session 落地物】** 代码：无（所有 A2 实验已回退到 clean fc5a269）。新增待用脚手架（未 commit，留参考）：`tests/step3p5/_probe_barrier_scale.py`（隔离复现器）、`tests/step3p5/_stage_whole_faithful_real_ipc.py` 的 `N1_DFX=dep,scope` env-gated DFX hook、3 个 transform（`_swap_tp_allreduce_to_intrinsic.py`/`_set_notify_tp_allreduce.py` = 死路；`_add_allreduce_completion_wave.py` = fc5a269 已用）。文档：本续13 + `blockers.md`（A2 ACTIVE 段）+ memory `n1_m4_accuracy_gap_converged_direction_drift`（全证据链，含"OVERTURNED 续12"段）。
+>
+> **【准则（用户反复强调，作为硬规则，不可再犯）】**
+> 1. **ready 只认 live-token-exact-device-reproducible**；任何"已修/device验证"声明先 device 复验再行动（本 session 血的教训：连 agent 都被 commit-msg 骗）。
+> 2. **不可 work-around**：诊断脚手架不进产品路径；禁大 in-kernel spin；不用 BF16-dequant，坚持原生 W8A8。
+> 3. **遇问题先查框架设计约束**（`pypto_top_level_documents` + `.claude/skills/pypto-dev-constraints`），没违反再查代码逻辑，**整体复查再 debug**。
+> 4. **两个 agent 正反质疑得可靠结论**，且**必须交叉核对 agent 结论是否被 stale 文档误导**。
+> 5. **先设计后编码；分清模型每层交接边界，避免陷入局部错误反复**。
+> 6. **golden 标准要正确**（oracle=vLLM eager dump；synthetic 会 stale）；可先跑单 batch。
+>
+> ---
+> （以下续11/续12 及更早段落中关于"A2 已修 / argmax=303 复现 3/3 / 确定性 RUN_CLEAN / 残余仅 combine 抖动"的结论**均已被上面续13 device 复验作废**，仅作历史保留，**勿据此行动**。）
+
 > **✅ 续11（2026-07-14 本 session，device 验证）— A2 死锁修复 + argmax=303 复现 3/3；残余 logit 抖动已定位但 reference 修法在流水线里死锁（已回退）。**
 > **两个 root-cause 修复（对齐框架/moe.py，无 work-around，均在生成的 decode_layer.py，未 commit）**：
 > 1. **A2 collective 死锁 = 手写 `tp_all_reduce` 缺完成波（single-wave）**。wiki `S1:running-stalled` = collective kernel 挂死（非容量）。框架 `pld.tensor.allreduce` 是 two-wave。修：全 17 份 `tp_all_reduce` 加 Phase-4 完成波（`notify+wait≥2`，transform `tools/step3p5/_add_allreduce_completion_wave.py`）。**device：P=42 确定性 RUN_CLEAN、无 507018、不靠 logging（7 次干净）。多 session 的硬 blocker 解除。**
