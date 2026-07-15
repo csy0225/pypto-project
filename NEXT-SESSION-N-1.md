@@ -1,6 +1,218 @@
 # NEXT SESSION — N=1 整网 decode 集成 + 端到端精度对齐 vs vLLM
 
-> **⛔⛔ 续13（2026-07-14 goal-session-2，device 复验）——权威当前状态。用词严谨：A2 未修复。本段覆盖续11/续12 中一切"A2 已修 / argmax=303 复现 3/3 / P=42 确定性 RUN_CLEAN"的结论。**
+> **🔒 测试唯一事实源（焊死）**：任何"跑通 / 精度 / stall"验证一律用
+> [`N1-CANONICAL-TEST.md`](N1-CANONICAL-TEST.md) 的唯一测试 + 命令。禁止自造 harness / 换随机输入 /
+> 把 `RUN_CLEAN` 当通过。要点：被测程序唯一 = `whole_decode_faithful_real`；精度金标准 = 真 token
+> **6127** + 真 W8A8 权重（IPC）→ `argmax == 303`（`RUN_CLEAN ≠ PASS`）；slow-vs-deadlock 用隔离探针
+> `_probe_barrier_scale.py` PUSH + 三个 `PTO2_*` 超时；不可 work around；下结论前两 agent 对抗。
+>
+> **【续15（2026-07-15，device）三超时诊断结果 — 坐实"真 hang 非慢"】** 按续14 第 1 步执行：隔离探针
+> `PUSH=1 CHAIN=1 N_COLL=42`（`_probe_barrier_scale.py`，忠实复现 `_dispatch_push`/`remote_store` 的
+> `remote_store→dsb(DSB_DDR)→TNOTIFY` 时序，与整网 func28 生成 cpp 同构）：
+> - **baseline（默认超时 sched10s/op45s/stream50s）：5/5 STALL**，`dt≈65s`，`sub_class=S1 sched_error_code=100 state=RUNNING kernels=[aiv0:0]`。
+> - **抬 10×（sched=100000ms/op=450000000us/stream=500000ms，过排序校验）：attempt-1 仍 STALL，`dt≈475s`**（≈op 450s 预算跑满），同一 S1 签名。`dt` 从 65s→475s 证明超时确实生效，**但仍不完成** → **真 hang / 死锁，非"慢"**。多等 7× 时间也救不回 → 抬超时不是修法。
+> - ⟹ **续14 的定性成立**：`_dispatch_push` 跨卡 PUSH 写完成间歇不触发；抬超时坐实真 hang。**下一步落地 dispatch push→pull**（续14"修复计划"）。
+> - **重要澄清（golden）**：`argmax=303` 是**真 token 6127 + 真权重**跑出的（`_stage_whole_faithful_real_ipc --hidden-token 6127`，非随机输入的 `_weights` harness），日志复现 76 次、vLLM golden=303；但存在非确定性尾巴（clean 有时出 993/45114），故金标准必须 `argmax==303` 而非 `RUN_CLEAN`。
+> - **dsb 说明**：生成 cpp（探针 `reduce_step.cpp` L114/128-130、整网 `_dispatch_push.cpp` L283-285）**确有** `dsb(DSB_DDR)` 夹在 `remote_store` 与 `TNOTIFY` 之间——**不是"缺 dsb"**。为何已有 dsb 盖不住时序问题见 [`N1-PUSH-DSB-TIMING.md`](N1-PUSH-DSB-TIMING.md)（给专家看的时序图）。
+>
+> **【续15 定案数据】** baseline 默认超时 **5/5 STALL**（~65s）；抬 10×（sched=100000ms/op=450000000us/stream=500000ms）**3/3 STALL**（~473–476s，op 预算跑满仍不完成），全同 S1/`sched_error_code=100`/`aiv0:0`。⟹ **真 hang 已坐实，抬超时不是修法。下 session 主线 = 落地 dispatch push→pull（见下）。**
+
+> **【续16（2026-07-15，device 环境已就绪 + 设计落地 + 评审通过 + pull 方法码已入库，wiring 未接线）】**
+> 本 session 完成 dispatch push→pull 的**设计 + 双 agent 对抗评审 + 可复用模板确认 + FRESH pull 方法码落地（inert）**；剩下的是**机械 wiring + regen + device 验 argmax==303**（较大、且 0234 无本地 compile-check，留作接续）。**未 device 验证——不得声称已完成。**
+> - **环境就绪**：0234 容器活着（tmux `pypto-ascend-0:1`，`brainctl rjob launch` PID 见 win1），env 三件套已激活，**8 个 hold-mode exporter 8/8 READY**（`--reuse-exporters` 秒级 attach，省 15min 冷载）。canonical §1 golden 命令可直接跑。
+> - **设计（validated）**：push（`_dispatch_push` = `pld.tensor.put`/`remote_store` TPUT MTE3 远端写，func28 S1 挂）→ pull（`pld.tile.remote_load` TGET MTE2，完成本地可观测；tp_all_reduce/`ep_all_to_all`(collectives.py:455)/barrier 探针 PUSH=0 均 device-clean）。source 各卡把自己 token 按 (dst,loc_e) bucket 序打进**自己**的 peer-readable `send_x/send_scale/send_route` window；Set/Ge rendezvous；dst 用 `remote_load` 按 `off_s`（**完全由已发布的 pub_counts 逆推，无新增跨卡发布**）gather 回本地 recv_x，复现**逐字节相同**的 expert-major CSR（loc_e 外/src 升序/cursor 内）→ `_dispatch_stage`/`_expert_routed`/combine **不动**。
+> - **双 agent 对抗评审（canonical rule 5）= PASS**：Agent A（correctness）逐条 re-derive off_s + CSR 逐字节相同 + barrier soundness 全 PASS（唯一 caveat：`send_route` padding 列 1..idx_pad-1 若不 zero-init 与 push 不逐字节同，但 stage 只读 col0，correctness 无影响；FRESH 已用 `pl.tile.full(value=0)` idx_tile zero-init）。Agent B（feasibility vs SKILL）：无 hard blocker；remote_load 在 `pl.range(n=runtime)`+runtime offset OK（`collectives.py:561` 先例）；self-window `pl.store` OK；send_x 静态首维 128 避开 §3/§4；§7 unroll UB 风险 → gather 嵌套镜像**已 device-clean 的 combine `_push_routed_y_to_sources`**（loc_e/src/row、per-row [1,HIDDEN]）即安全；只有 L25472 那份 `_dispatch_push` 被 `WholeDecodeFaithfulReal` 用；建议 real-only transform 保 BF16 base+其 INT8 transform 不动。
+> - **落地物**：`tools/step3p5/_gen_faithful_real.py` 新增 **`FRESH_DISPATCH_PULL_INT8`** 常量（`_dispatch_pack_publish` + `_dispatch_pull` 两个 InCore 方法，INT8 pull，已 py_compile 过）+ **WIRING PLAN** 注释（5 步机械接线）。**inert（未被 splice 引用，generator 输出不变，tree 仍可跑）**。备份 `_gen_faithful_real.py.bak.pre_pulldispatch_20260715_123346` + `decode_layer.py.bak.pre_pulldispatch_20260715_123346`。
+> - **下一步（接续，按 WIRING PLAN）**：(1) `_host_orch` 加 `send_x_buf/send_scale_buf/send_route_buf` per-layer + 复用 `count_done_buf` 作 `pack_done_sig`；(2) MoE fused orch sig 加 send_* 参数（real-only transform）；(3) splice FRESH pull 方法 + 改 `dispatch_step`（pack_publish→pull→stage）+ 改 `decode_layer.py:~26623` 调用点；(4) strip real builder → regen → py_compile → **device 跑 canonical §1，多跑几次，判据 argmax==303 且不 stall**；(5) combine push（`_push_routed_y_to_sources` TPUT，抖动源非挂死源）之后同法转 pull。
+> - **纪律**：不 work around；ready 只认 live-token-exact-device（argmax==303）；改前两 agent 对抗（本 session 已做设计评审，wiring 落码后仍需 device 复验）。
+
+> **【续16b（2026-07-15，device 验证 — dispatch pull 已接线+编译+跑通；hang 按预测移到 combine push）】**
+> **dispatch push→pull 已完整接线并 device 跑通**（wiring 全落地 generator + regen-clean + py_compile + 8 卡 device run）。device 证据：pull 版**编译通过全流程**（39 kernels 注册、IPC 权重导入、KV bound、"built 46 args, running..."），**跑过 dispatch**，最终 stall 在 **func 36**（`completed=78/81 running=1 waiting=2 orch_error=8 TENSOR_WAIT sub_class=S1`，8 卡同一 stuck，stuck_task_id 低位=26）——**orch 末端（78/81），func 36 > dispatch 的 28/29**。
+> - **定位（by elimination）**：`_dispatch_pull` 若挂则 stuck func = 28/29（实测已完成，只在 RUNNING 采样出现）；tp_all_reduce 是 PULL（device-proven clean）；唯一剩下的"末端+带 WAIT 的跨卡 PUSH（TPUT）"= **combine `_push_routed_y_to_sources`**（仍 `pld.tensor.put`，即 WIRING PLAN 第 5 步/续14 预言的第二个 push 点）。⟹ **dispatch pull 生效，hang 按预测移到 combine push。**（func 36 精确名未拿到——build dir finalize 时被清；靠 completed=78/81+func>dispatch+WAIT+唯一剩余 push 三重旁证，非拍脑袋。下轮可设 keep-build 拿 kernel_config 坐实。）
+> - **结论**：**push→pull 的 dispatch 半已完成、device 证明有效**；到 argmax==303 还需**把 combine 也转 pull**（第 5 步，现为 critical-path）。combine 是天然 gather：expert holder 把 routed 输出写进 peer-readable window，source 用 `inverse_map[t,k]`（generator 有 def=dead code，需激活）算 (dst_rank,dst_row) 后 `remote_load` 回本地 `routed_y_buf[r_route]` → `_weighted_gather_and_add`。
+> - **落地物**：generator + decode_layer.py 现为 pull-dispatch 版（regen-clean，py_compile 过）。checkpoint 备份 `models/step3p5/decode_layer.py.PULLDISPATCH_WORKS_20260715_051112` + `tools/step3p5/_gen_faithful_real.py.PULLDISPATCH_20260715_051112`；known-good push 版在 `decode_layer.py.GOODKEEP`。新增 `tools/step3p5/_strip_real_builder.py`（regen helper）。修复过一个 wiring bug：base dispatch_step 的独立 `self._dispatch_publish(...)` 调用需删（`_dispatch_pack_publish` 已含 publish）——已在 generator `_step_edits` 处理。
+> - **下一步（combine→pull）**：(1) 新增 peer-readable `routed_src_buf[local_recv_max,HIDDEN]` window（expert holder 写 routed 输出）；(2) 激活 `_build_inverse_map` 或 pub_counts 逆推 dst_row；(3) rendezvous barrier；(4) source `remote_load(routed_src_buf, peer=dst, [dst_row,0])`→本地 `routed_y_buf[r_route]`；(5) 删 `_push_routed_y_to_sources` 的 tensor.put + combine_done push；(6) regen → device 验 argmax==303（多跑）。exporters 8/8 常驻 READY（--reuse-exporters）。
+
+> **【续16c（2026-07-15，device — 全 push→pull 已实现+编译+跑通；仍 507018，kernel_config 坐实 stuck=`_dispatch_pull`；纠正续16b 的未证实映射】**
+> **combine→pull 也已完整落地**（generator FRESH_COMBINE_PULL：`_stage_routed_src`+`_pull_routed_y`，激活了 dead 的 `_build_inverse_map`；window `routed_src_buf` 全线程接；base `_push_routed_y_to_sources` 留死。regen-clean + py_compile 过 + 8 卡 device 编译通过全 codegen + 跑）。踩坑并修：① `_pull_routed_y` local-vs-remote device-if 让 `tile` 两种 Tile 类型 → SSA reject → 改成**统一 remote_load**（peer=dst 可==my_rank，dispatch_pull 已证自读 OK）；② `_build_inverse_map` 读 `pub_counts`(DistributedTensor) 必须在 **InCore** 上下文（放进 `_pull_routed_y`，不能在 Inline `combine_step` 里，否则 codegen `tensor.read must be TensorType`）。
+> - **⚠ 纠正续16b**：续16b 说"hang 移到 combine（func36）"是**未证实的 func 映射猜测**（run3 build dir 被清、拿不到 kernel_config，只凭 completed=78/81+旁证瞎猜）——**这正是文档反复警告的坑**。本轮 run7 **build_output 没被清**（`build_output/WholeDecodeFaithfulReal_20260715_053555/next_levels/full_moe_chip_orch/kernel_config.py` 在），坐实 **func 28 = `_dispatch_pull`**（func27=_dispatch_pack_publish/28=_dispatch_pull/29=_dispatch_stage/35=_zero_routed_y_buf）。full-pull device stuck = **`_dispatch_pull`**（`completed=39/41 orch_error=8 sub_class=S1`，8 卡 aiv0:28），**不是 combine**。⟹ dispatch pull 自身会挂（或 racy）。
+> - **待定（正在 device 判 racy vs deterministic）**：full-pull 已跑 2/2 STALL；正在多跑 3 次（run8-10）看是否偶发出 argmax==303（原 push 版 ~34% clean）。若从不 clean → pull 单独不足以消除 507018，root cause 比 push-vs-pull 更深（单 program whole-net 里多 collective 交织的调度/完成 race，接近续13 论点）；若偶发 clean → pull 降低了挂率、dispatch_pull 时序仍需收紧。
+> - **落地物**：full-pull checkpoint `decode_layer.py.FULLPULL_20260715_054234` + `_gen_faithful_real.py.FULLPULL_20260715_054234`；dispatch-only-pull `PULLDISPATCH_WORKS_20260715_051112`；known-good push `GOODKEEP`。kernel_config 存 `logs_n1/full_moe_kernel_config_053555.py`。
+> - **拿 kernel_config 的正道（下轮 func 映射必用）**：harness 打印 `compile OK => <output_dir>`；`build_output/WholeDecodeFaithfulReal_*/next_levels/<orch>/kernel_config.py` 里 `func_id→name`；device log `kernels=[aiv0:N]` 的 N 查此表。**别再靠 completed 比例/位置猜 func。**
+
+> **【续16d（2026-07-15，device — 全 push→pull 仍 507018；6/6 STALL；pull 当前是 regression 非 fix；重估 root cause】**
+> **全 push→pull（dispatch+combine 都 pull，含 self=local/peer=remote 对齐 ep_all_to_all 的修正）device 跑 6 次（run6-11）全 STALL（0% clean）**，而 known-good **push 版是 ~34% clean**。⟹ **as-implemented 的 pull 改写目前比 push 更差（regression），未达 argmax==303。**
+> - **关键观察**：run11 同一次挂里不同核 stuck 点不同（core24 `completed=39/41`、core26 `completed=67/70`，都 `orch_error=8 S1 running-stalled`）——**不是单个确定 kernel 的 bug，是整网多 collective 交织在调度器下 stall**。self-`remote_load`→local 的修正（对齐 ep_all_to_all，理应更对）**没有改变挂的行为** ⟹ self-remote_load 不是（唯一）根因。
+> - **重估（诚实，可能推翻文档"pull 修 stall"假设）**：把两个跨 die push 都转 pull **没有**消除 507018，说明 root cause **比 dispatch/combine 的 TPUT push 更深**——更像 **续13 的论点**（N=1 单 program whole-net 里大量 collective 交织、缺可靠 in-kernel 跨 die 同步/确定派发序 → racy/scheduler stall），而非"某个 push 原语脆弱"。隔离探针 PULL N=42×2 clean 是**孤立**的；整网 42 层 dispatch-pull+combine-pull+tp_all_reduce+shared 交织后仍 stall。**注意**：这与续14"dispatch push 是唯一挂点、pull 修好"直接冲突——续14 可能也基于未证实的 func 映射（同续16b 的坑）。
+> - **下一步（需重新定方向，勿盲目继续 pull 细修）**：(1) run11 开 ASCEND log 拿 stuck func（kernel_config 在 build_output 持久，别猜）——确认是 dispatch_pull / combine _pull_routed_y / tp_all_reduce 哪个，且是否跨 run 漂移（漂移=racy 调度，非单 kernel）；(2) 若确认是"多 collective 交织调度 race"→ 这是 runtime/scheduler 层问题，考虑上报 simpler runtime team（要确定性跨 rank 派发序）或重估 N=1 vs 多 program（但用户续10 禁多 program）；(3) 若定位到具体 pull kernel 的确定 bug（如 pub_counts AtomicAdd 未落地→off_s 越界→remote_load 越界 hang）→ 修那个。**先拿 stuck func 再定方向，勿再瞎修。**
+> - **回退保险**：`decode_layer.py.GOODKEEP` = known-good push（~34% clean，argmax==303 可复现）。full-pull 版在 `decode_layer.py.FULLPULL_20260715_054234` + 当前 tree + generator（含 self=local 修正，未存新 checkpoint——tree 即最新）。要回 push baseline：`cp decode_layer.py.GOODKEEP decode_layer.py`。
+
+> **【续16e（2026-07-15，device — run12 开 log，kernel_config 坐实 stuck func）】**
+> run12（ASCEND log，build `WholeDecodeFaithfulReal_20260715_055407` 持久）device stall kernels（RUNNING 采样）：**aiv0:37/38/39（513× 各）+ aiv0:28/29（77× 各）**。kernel_config 映射：**28=`_dispatch_pull`、29=`_dispatch_stage`、36=`_stage_routed_src`、37=`_pull_routed_y`、38=`moe_combine`(=_weighted_gather_and_add)、39=`moe_residual_add`**。多个 orch 实例卡在不同深度（completed 39/74、103/106、107/110、111/114；stuck_task_id 23/27）。
+> - **坐实**：hang 集中在**我新加的 pull collectives + combine/residual 段**（dispatch_pull 28 + combine _pull_routed_y 37 + combine 38 + residual 39），跨层多点。不是 scheduler 全局玄学，是**我的 pull 实现里的 hang**——但同时出现在 dispatch-pull 与 combine-pull（共享 Set/Ge rendezvous + remote_load gather 模式）+ 下游 combine/residual，且 0% clean。
+> - **未 root-cause（诚实）**：Set/Ge rendezvous（对齐 ep_all_to_all）+ remote_load（self=local/peer=remote 已修）+ pub_counts-derived offset（数学已验证逐字节等价 push CSR）逐条 reasoning 都没找到死锁点。需 device 级探针：dump pack_done/combine_done signal 窗口值 + 检查 remote_load/barrier 是否真的完成 + pub_counts AtomicAdd 是否在 pull 读前落地（若没落地→off_s/n 越界→remote_load 越界可能 hang）。**下轮先做隔离探针（仿 _probe_barrier_scale 但用 dispatch-shape 的 pull gather + pub_counts）判定，再改代码。勿再整网瞎试（6 次 device run 已烧很多）。**
+> - **也要复核 push baseline 是否真 34%**：本 session 没重跑 push GOODKEEP 确认它现在还 ~34% clean（环境可能漂）；下轮先 `cp GOODKEEP` 复跑 3 次确认 baseline，再对比 pull。
+
+> **【续16f（2026-07-15，device — 抬 10× 超时 = 真 deadlock 非 slow；收窄到 pull-gather 并发/资源）】**
+> run13 全 push→pull + **抬 10× 超时**（`PTO2_SCHEDULER_TIMEOUT_MS=100000 PTO2_OP_EXECUTE_TIMEOUT_US=450000000 PTO2_STREAM_SYNC_TIMEOUT_MS=500000`，过排序校验）：**~8min（op 450s 预算耗尽）后仍 507018** ⟹ **真 deadlock，不是 slow**（同续15 对 push 的结论；抬超时救不回 = 完成事件永不触发，非时间不够）。∴ **"per-row remote_load 太多导致慢"被排除，chunk-为-提速 不是修法。**
+> - **reasoning 排除**：`_dispatch_pull`/`_pull_routed_y` 的 Set/Ge rendezvous 是**对称全屏障**（所有 rank 都 Set+wait，在 data-dependent 分支外）→ 单独不死锁；gather 是**只读已 staged 的 peer 数据**（peer 在 rendezvous 前 task1 已 stage 到自己 HBM），gather 期间无跨 rank 等待 → 逻辑上不该死锁。self=local/peer=remote 已对齐 ep_all_to_all。**逐条 reasoning 找不到逻辑死锁点。**
+> - **最可疑（未证实）= 高 read-count 的并发跨卡 remote_load 资源环**：隔离探针 PULL N=42×2 clean，但那是**每 collective 每 peer 1 次** remote_load；`_dispatch_pull` 每层最多 **1024 次** per-row remote_load（8 rank 同时互读）。运行时 peer-access 读路径在高并发/高计数下可能资源死锁（runtime 层，非我 DSL 逻辑）。**这不是 slow（抬超时无效），是资源 deadlock。**
+> - **下轮决定性诊断（务必先做，勿再整网瞎试）**：写隔离探针（仿 `_probe_barrier_scale`，但复刻 dispatch-shape 的 pull-gather：rendezvous + 每 (bucket) 多次 remote_load，用合成 pub_counts，无 MoE/权重/exporter），扫 remote_load 计数（1→64→256→1024）找 deadlock onset。若高计数 deadlock → (a) chunk：把每 (loc_e,s) bucket 的 n 连续行合成**一次** remote_load `[t_rows, HIDDEN]`（collectives.py:209 证明多行静态 shape OK；n 动态则按固定 tile 分块+mask），把 per-layer remote_load 从 ~1024 降到 ~非空 bucket 数；(b) 若仍 deadlock → runtime 层跨卡并发读资源问题，上报 simpler team。
+> - **状态**：pull 改写完整实现+编译+跑通，但 **device 死锁（0% clean，regression vs push 34%），未达 argmax==303**。root cause 收窄到"pull-gather 高并发 remote_load 资源死锁（疑）"，未坐实。**下轮先隔离探针坐实，再决定 chunk vs 上报 runtime。** GOODKEEP=push 回退基线。
+> - **⭐ 最关键洞察（改方向）**：`remote_load` shape 必须**静态**（tp_all_reduce `t_rows` int / ep_all_to_all `[1,d_cols]`）→ 动态 bucket 不能合成一次读。但 **ep_all_to_all 就是同样的 per-row pull，且在 standalone moe.py（device-validated）里干净**——而 standalone 是**每层单独 program**（层间有 `rt.run()` drain 边界）。我的整网是**42 层全在一个 `@pl.program`**、层间无 drain。⟹ **死锁大概率是"单 program 里 42 层 collective 交织、无层间 drain 边界"（续13 论点），不是 push-vs-pull**——这解释了为何转 pull 没用（push 34% clean 是 racy 能完成，pull 0% 是我引入的某个确定性死锁 + 单 program 交织放大）。**下轮 decisive test**：隔离探针跑 N=42 层的 dispatch_pull-pattern（合成 pub_counts、per-row remote_load、rendezvous），看单 program 42 层交织是否必死锁；若是 → 这是 runtime/scheduler 层（单 program 缺 drain），不是我 DSL 能修，需上报 simpler runtime team 或（用户已禁的）多 program；若否 → 我 pull 代码里有确定性 bug（继续 bisect 层数 P_FAITHFUL_MOE_LAYERS=1→2→…找 onset）。**先做 P_FAITHFUL_MOE_LAYERS bisect（cheap，改 env 不改码）：若 P=1 single MoE 层 pull 就死锁 → 我代码 bug；若 P=1 clean、大 P 才死锁 → 单 program 交织。**
+
+> **【续21（2026-07-15，device — pull 实现已提交 GitHub + env 开关 + 挂率修正 + serial-gate 死路）】**
+> - **✅ 提交推送**：pull 实现推到 fork `csy0225/pypto-lib feat/whole-net-n1-fusion`（`fc5a269..5b058ca`，6 文件 +1933/-179）：`_gen_faithful_real.py`（best combo pull/push generator）+ `decode_layer.py`（pull 版）+ `_patch_moepy_dispatch.py` + `_patch_combine_pull.py` + `_strip_real_builder.py` + `_regen_mode.sh`。
+> - **✅ env 开关 `_regen_mode.sh`**：`N1_DISPATCH/N1_COMBINE={push|pull}` 一条命令切 push+push(GOODKEEP) / pull+push(默认 validated) / pull+pull。3 种模式 regen+py_compile 全过。pypto 每次 run 都重编（~4min），regen 开关与运行时开关成本等价、更干净。
+> - **⚠ 挂率修正（推翻"原语无关、白做"的过强说法）**：独立 run clean 率 push+push ~34% vs pull-dispatch ~70-80%（v3/rep1/rep4/fresh_p42 clean，rep2 stall）→ **pull-dispatch 明显降挂率**（续14 的 push-primitive 脆弱性真实存在、pull 缓解了）。但**残余随机挂仍在**（续13 交织）。∴ **两个归因各对一半**：pull 缓解 push-primitive + 残余 = 交织。样本小 + poison 干扰，非严格统计。
+> - **⛔ serial-gate 死路**：`PTO2_SERIAL_ORCH_SCHED=1`（`wait_for_orchestration_done_before_dispatch`，runtime_maker.cpp:611 / aicpu_executor.cpp:793）——假设"默认 orch/dispatch 流水→任务在 DAG 建全前被派发→竞态"，enable 后串行化。**device 实测 SER1 fresh 仍 STALL → 不修**。⟹ 残余挂不是 orch/dispatch 流水，是**执行期 collective 交织**（更深）。runtime knob 排除一个。
+> - **结论不变**：pull dispatch 改造完成+验证（argmax==303）；残余交织挂 = runtime/scheduler 层（非 DSL/非 orch-gate）；建议上报 runtime team 或 retry-based serving。
+
+---
+
+> **【续20（2026-07-15，device — combine-pull 实验：无单层 bug、不降挂率 → 残余=交织；最佳组合=dispatch-pull+combine-push argmax==303】**
+> 用户追问：combine 切 pull 是否代码 bug？挂在哪层？据此把 combine 也做成 **fixed-slot pull（dispatch 的对称反向）**：`_stage_routed_src` 反向 re-pack（expert-major→peer-major routed_src_buf[src*128+within]，pub_counts LOCAL）；`_pull_routed_y` = AtomicAdd barrier + source 本地重算 within（cursor replay）+ compound-scalar offset `my_rank*128+within` remote_load（无跨卡 pub_counts 读）。patch `tools/step3p5/_patch_combine_pull.py`（在 dispatch patch 后跑）。device 实测：
+> - **combine-pull P=1 = RUN_CLEAN** → **无单层代码 bug**（offset/order 数学已静态复核一致）。
+> - **combine-pull P=42 = 随机**（cprep2=303/cprep4=303 clean；cprep1=STALL；cprep5=COMMINIT）→ clean 时出 303、随机挂，**与 combine-push 相当，不降挂率**。
+> - ⟹ **combine push↔pull 不改变 P=42 挂率**。所有组合（push+push / pull-disp+push-comb / pull+pull）都 **P=1 clean / P=42 随机挂** → 残余 = **42 层单-program collective 交织**（续13），与原语无关。
+> - **挂在哪层？不是固定层**：历史 device log（续16d 同 0234）一次 P=42 挂里不同核卡在不同深度（completed=39/41 vs 67/70）= racy 调度漂移，非确定单层 bug（与 P=1-clean 一致）。本 session fresh sweep（P=10/20/30/41）被**卡毒化全 COMMINIT** 阻塞（+device stall-diag 不落盘），未拿到 fresh onset。
+> - **最佳组合（已回退到 tree）= dispatch-pull + combine-push**（`MOEPY_PULL_303_20260715_174703` checkpoint，argmax==303 已验 3/3 clean）。combine-pull WIP 在 `_patch_combine_pull.py`（可复现）。
+> - **建议**：残余交织挂是 runtime/scheduler 层（确定性跨 rank 派发序 / 层间 drain）→ 上报 simpler runtime team；非 DSL 原语能修。**pull 改造（dispatch）已完成+验证。**
+> - **环境 friction**：507018 挂毒化卡→下 run comm_init（~8min 自清，可靠性循环高估挂率）；AICPU device stall-diag 不落 `$HOME(/root on container)/ascend/log/debug/device-*/`（force-reset 抢在 flush 前）。
+
+---
+
+> **【续19（2026-07-15，device — ✅ pull dispatch 修好 + argmax==303 验证通过；残余 P=42 随机 stall = 更深的 42 层交织，非 pull-dispatch）】**
+> 按续18 的 5 步把 dispatch port 成 moe.py fixed-slot pull（patch 脚本 `tools/step3p5/_patch_moepy_dispatch.py`，regen-clean，py_compile 过），combine revert 回 push（moe.py 组合）。**device 实测**：
+> - **P=1 = RUN_CLEAN**（FULLPULL 原是确定性 STALL）→ **dispatch 确定性死锁修好**（坐实）。
+> - **P=42 canonical golden = `argmax==303`==vLLM，RUN_CLEAN，3 次独立 clean run（v3+rep1+rep4）全 303** → **pull 改造正确性验证通过**（canonical §1 判据）。
+> - **P=42 残余 = 随机 stall**（rep2/rep3 挂；rep4 在其后 clean+303 = 毒化已清）。一次 507018 会毒化下一 run（comm_init 失败 / 级联）→ 循环测的挂率被高估；真挂率≈push baseline(~34% clean)。**此残余不是 pull-dispatch**（P=1 确定性 clean；每个 clean 的 P=42 都出 303）——是**更深的 42 层单 program collective 交织**（续13 论点：一个 `@pl.program` 层间无 drain），push+push 的 GOODKEEP 同样 ~34% clean → **与 dispatch/combine 原语选择无关**。stuck-func 未抓到（本 session `ASCEND_PROCESS_LOG_PATH` device log 没落盘，是待解的抓取 friction；结论靠 P=1-clean + 3/3-clean→303 的强推断）。
+> - **踩坑**：507018 stall 毒化卡 → 下一 run comm_init 失败（`_ensure_comm_base failed 8/8`），过一会自清（rep4 clean）。可靠性循环要在 run 之间做卡恢复，否则毒化级联。SSA 坑：`pl.load`→Tile[Mem.Vec] vs `remote_load`→plain Tile，self/peer 拷必须用不同变量名（`sxt/sst/srt` vs `xt/st/rt`）。
+> - **落地物**：checkpoint `decode_layer.py.MOEPY_PULL_303_20260715_174703` + `_gen_faithful_real.py.MOEPY_PULL_303_*`（argmax==303 工作态）+ `_patch_moepy_dispatch.py`（可复核 patch）。GOODKEEP=push baseline。memory `n1_pull_dispatch_must_align_moepy_fixedslot` 有完整证据链。
+> - **下一步（若要 P=42 每次都 clean 的鲁棒性）**：残余交织 stall —— (a) 把 combine 也 port 成 fixed-slot pull（对齐 dispatch）看挂率是否降；或 (b) 若确认是 runtime 层单-program 交织 → 上报 simpler runtime team（确定性跨 rank 派发序 / 层间 drain），非 DSL 原语能修。**pull dispatch 本身已完成验证。**
+
+---
+
+> **【续18（2026-07-15，goal-session — pull 死锁根因锁定 = 偏离 device-validated moe.py；修法定案 + 已入 memory；port 未落地）】**
+> 用户重启 pull 方向（"push 握手问题，pull 能解决么？之前 pull 也有 bug，修好并验证，别重复造轮子"）。本 session **只做诊断 + 修法设计**（未 device 验证 argmax==303，不得声称完成）。
+> - **device 复现**：恢复 FULLPULL（`decode_layer.py.FULLPULL_20260715_054234`）跑 canonical §1 `P_FAITHFUL_MOE_LAYERS=1` → **507018 STALL（确定性，单 MoE 层就挂）**。确定性 ≠ push 的随机 ~66% → 是 pull 实现的**确定性代码 bug**。
+> - **根因（2 个对抗 agent + device-validated `moe.py ep_all_to_all` 对照，决定性）**：FULLPULL `_dispatch_pull`（generator `FRESH_DISPATCH_PULL_INT8`）把 device-proven 的**对称 fixed-slot a2a** 改成了会挂的**自造 fused CSR gather**，三处偏差：① barrier `Set`（moe.py 用 `AtomicAdd`）；② gather 上界运行时 `pl.range(n=读跨卡 pub_counts)`（moe.py 静态 `pl.range(T*TOPK=128)`）；③ remote_load offset 跨卡 `pub_counts` 逆推（moe.py compound-scalar `my_rank*128`/`peer*128` fixed-slot）。**静态上界要求 fixed-slot 打包——没有捷径。**
+> - **排除的错误方向（勿再查）**：`Set` 单独不是 bug（`collectives.py:538` ep_all_to_all 也用 Set+Ge）；`pub_counts` 确实清零（`comm_hccl.cpp:1059 aclrtMemset`）。
+> - **device-validated `moe.py` 组合 = pull-dispatch + push-combine**（moe.py combine 本身就是 push，只抖动不 stall、不翻 greedy argmax）。∴ 修法 = **从 GOODKEEP 出发，只把 dispatch 换 moe.py fixed-slot pull，combine 保持 push**（≠ FULLPULL 的 full-pull，那个 combine 也 pull 且 0% clean）。
+> - **落地 5 步（从 FULLPULL 脚手架改，已有 send 窗口 + splice；memory `n1_pull_dispatch_must_align_moepy_fixedslot` 有 moe.py 行号）**：
+>   (a) `_dispatch_pack_publish` 打包基址 `send_offsets_rank[r]`(prefix-sum) → **固定槽 `r*n_routes_per_rank`**（对齐 moe.py `_pack_send_payload`）；
+>   (b) send_x/send_scale/send_route 窗口 `n_routes_per_rank`(128)→`local_recv_max`(1024)：generator sig + host_orch buf 尺寸 + window shape。**注意 routed_y_buf 保持 n_routes_per_rank（combine 窗口，128 正确）**；
+>   (c) `_dispatch_pull`：barrier `Set→AtomicAdd` + 删 fused-CSR gather 换**静态 peer-major pull**（self 块 `pl.load` 本地拷、peer 块 `remote_load(send_x, peer, [my_rank*128+r,0])` 静态 `pl.range(128)` → recv_x[`peer*128+r`]，recv_x 变 **peer-major**）；
+>   (d) `_dispatch_stage`：直拷 → **re-pack**（peer-major recv_x → expert-major local_routed_x，用 pub_counts，镜像 moe.py:960-993）；**需给 `_dispatch_stage` 加 `pub_counts` 参数**（base `decode_layer.py` + generator `_stage_edits`/`_scall` 同步）——最耦合的一步；
+>   (e) **combine 回 push**：从 FULLPULL 删 `FRESH_COMBINE_PULL` splice + 恢复 base `_push_routed_y_to_sources` 调用（或直接从 GOODKEEP 起、只加 dispatch-pull）。
+>   → regen → py_compile → device 验 P=1 clean（多跑）→ 放开 42 层 → **argmax==303**。
+> - **备份/回退**：`decode_layer.py.GOODKEEP`（push baseline，~34% clean argmax==303）、`.FULLPULL_20260715_054234`（0% clean full-pull）、generator `.FULLPULL_20260715_054234` + `.bak.pre_pulldispatch_20260715_123346`。**本 session 收尾 tree+generator 均回 clean push baseline（GOODKEEP），exporters EXP=8 RDY=8 常驻。**
+> - **纪律**：0234 上 a2a3sim 坏了无快速编译检查，每轮 = 整网 device ~5min；`_dispatch_stage` re-pack 加 pub_counts 是最易出错处，改完先 py_compile 再 device。
+
+---
+
+## ⭐ 下 SESSION 主线：落地 dispatch `push→pull`（用户 2026-07-15 拍板）
+
+**背景已定案**：`_dispatch_push`（func28）跨卡 PUSH（`remote_store`/TPUT）写完成间歇不触发 →
+S1 hang；抬超时 3/3 无效（续15）。修法 = 把 dispatch 的前向 scatter-by-push 改成
+consumer 侧 gather-by-`remote_load`（PULL），因为**读的完成在本地可观测、写的完成在远端不可观测**
+（原理 + 性能权衡见 [`N1-PUSH-DSB-TIMING.md`](N1-PUSH-DSB-TIMING.md)）。PULL pattern 已被
+tp_all_reduce 与隔离探针 `PUSH=0`（`remote_load`）device 证明 N=42×2/N=2×4 全 clean。
+
+**⚠ 一切验证走 [`N1-CANONICAL-TEST.md`](N1-CANONICAL-TEST.md)**：唯一程序 `whole_decode_faithful_real`、
+真 token 6127、`argmax==303` 才算 PASS（`RUN_CLEAN≠PASS`）；改代码前先起两 agent 对抗审设计。
+
+### 执行步骤（每步都能独立 device 验证）
+1. **先 dispatch，后 combine**：device 确认 stuck = dispatch 的 `_dispatch_push`（stall 根因）。
+   combine 的 push（`push_routed_y_to_sources`）是 residual jitter 来源（见 memory），作为第 2 步。
+   两者都转 pull 才彻底，但先修 dispatch 解 stall。
+2. **激活 inverse_map**（generator `tools/step3p5/_gen_faithful_real.py` + `decode_layer.py`）：
+   `_build_inverse_map` 现有 **10 处 def / 0 处 call（dead）**。先接线——orch 里 alloc
+   `inverse_map[BATCH,TOPK] INT32` 并 `self._build_inverse_map(...)`；`packed=inverse_map[t,k]`，
+   `dst_rank=packed//LOCAL_RECV_MAX`、`dst_row=packed%LOCAL_RECV_MAX`。
+3. **source 侧改本地 peer-readable window**：dispatch 输入 token 从"A `remote_store` 写到
+   B.recv_x"改为"A 把自己的 token 写进**自己本地**的 `send_x` window（`pld.DistributedTensor`，
+   peer-readable，纯本地写、本地 fence）"；`recv_scale`/`recv_r_route` 对应改 `send_scale`/`send_route`。
+   +~7MB/layer（pool 自增，64GB HBM 够，见 [[n1_comm_window_bytecap_refuted]]）。
+4. **read-前 barrier**：一道 notify/wait rendezvous，保证所有 source 已写完各自 send window。
+5. **dest 侧 gather-by-pull**：dest rank 需"哪些 source 的哪些行给我"——把 combine push 里 dst 侧
+   已读的源路由表（`src_route_table`/`pub_counts`）镜像成 peer-readable，dest 据此算 `(src_rank,src_row)`，
+   `remote_load(send_x, peer=src_rank, offsets=[src_row,0])` 拉进 dest 本地 recv_x（scale/route 同理）。
+   删掉 `_dispatch_push` 的 `remote_store` + count_done/data_done 的 push notify。
+   ⚠ dispatch 是**前向 scatter**（源知道目的地），改 pull 是**反向 gather**（比 combine pull 难，
+   combine 天然 gather）——这一步是主要工作量。
+6. **compile → 8 卡 device → golden**：a2a3sim 在 0234 坏（g++-15 缺）→ 无快速 compile check，
+   每轮 = 全 device run（~5min w/ `--reuse-exporters`）。PASS 判据：不再 stall（多跑几次）**且**
+   `argmax==303`。先用隔离探针 `PUSH=0`（已 clean）锚定 pull pattern 正确，再上真程序。
+
+### 注意 / 备份
+- 改前备份：`_gen_faithful_real.py.bak.pre_pulldispatch_*` + `decode_layer.py.bak.pre_pulldispatch_*`。
+- generator 会静态 unroll 42 层 → inverse_map/send window 要 per-layer distinct 命名（`_L{pos}`），
+  否则撞 comm-domain 重名 alloc（同 whole-net per-layer window 规则）。
+- **不可 work around**：不得用抬超时/塞假输入冒充通过；golden 必须 `argmax==303`。
+
+---
+
+
+> **⛔⛔⛔ 续14（2026-07-15，device 确认，权威当前状态——覆盖续13/续12 中与本段冲突的一切结论。本 session 收尾。用词严谨、勿误导。**
+>
+> **【一句话结论】** A2 挂死（507018 / S1:running-stalled）的**根因 = 跨卡 PUSH 原语 `pld.tile.remote_store` / `pld.tensor.put`（两者都 lower 到 TPUT = MTE3 跨 die 远端写）的写完成间歇不触发**（kernel 挂在 `wait_flag(MTE3)`）。**精确挂点（device 确认）= dispatch 的 `_dispatch_push`（func_id 28）**。修法 = 把 dispatch 的 push 改成 **pull**（用 `remote_load`/TGET = MTE2 读，已 device 证明可靠）。**本 session 完成：根因去-confound + 精确目标的 device 确认 + 修复方案设计 + 排除所有捷径。修复代码未实现（是较大的 dispatch a2a 重写，留下 session）。**
+>
+> **【⭐ 下 session 执行顺序（用户 2026-07-15 拍板，务必按此序）】**
+> 1. **先试 3 个超时环境变量**（见下方表）——把 `SIMPLER_SCHEDULER_TIMEOUT_MS`/`SIMPLER_OP_EXECUTE_TIMEOUT_US`/`SIMPLER_STREAM_SYNC_TIMEOUT_MS` 调大（如 ×10），整网 P=42 跑几次，**观察状态有无改善 / 能发现什么**。判读：(a) 若 `_dispatch_push` 竟能完成、stall 消失 → 说明是"慢而非真 hang"，**改变定性**，可能有比 pull 更轻的修法，需重估；(b) 若仍在 `aiv0:28` 挂 → **坐实真 hang**，进第 2 步。⚠ 这一步是**诊断/观察**，不是修复；调大 timeout 当"修复"上线是 work-around（SKILL/wiki 禁）。
+> 2. **看情况再落地 pull 修改**（下方"修复计划"）——只有第 1 步坐实真 hang（或虽有改善但仍不稳定）时才做 dispatch push→pull 大改。
+>
+> **【device 证据链（可复现，别再走弯路）】**
+> - 隔离复现器 `tests/step3p5/_probe_barrier_scale.py`（本 session 新增，framework-only，无 MoE/权重/exporter；env 旋钮 `CHAIN`/`PUSH`/`PREBAR`）：
+>   - **PULL**（`remote_load`/TGET，= tp_all_reduce 用的原语）：链式 `CHAIN=1 BARRIER_ONLY=0 N_COLL=42` ×2 + `N=2` ×4 **全 CLEAN，0 挂** → **tp_all_reduce 彻底洗清**。
+>   - **PUSH**（`remote_store`/TPUT，= combine/dispatch 用的原语）：**随机挂**。⚠**去-confound 关键一步**：最初 PUSH 用动态首维窗口 `[NR,SIZE]`（`NR=pl.dynamic`，SKILL §3/§4 说动态首维跨函数丢父 stride），一度怀疑挂是这个 artifact；**改成静态窗口 `[8,SIZE]`（`_bscale_gen.py` 确认生成 `DistributedTensor[[8, SIZE]`，与整网 combine 静态窗口 `[128,HIDDEN]`、dispatch recv_x 同构）后仍随机挂：`CHAIN=1 PUSH=1 N_COLL=2` → 1clean/3STALL、`N=42` → STALL×2**。⟹ 动态窗口 artifact 排除，**`remote_store` 是真脆弱**。
+> - **整网 P=42 抓 stall + 读 stuck kernel 名**（`--reuse-exporters` + `ASCEND_GLOBAL_LOG_LEVEL=1 ASCEND_PROCESS_LOG_PATH=<dir>`；harness 已设 `simpler` logger level 15）：device log `<dir>/debug/device-*/device-*.log` 8 卡同一 stuck task：`state=RUNNING fanin_refcount=6/6 kernels=[aic:-1 aiv0:28 aiv1:-1] running_on=[cores=[core=24/26/28(aiv0)]]` → **`aiv0:28` = func_id 28 = `_dispatch_push`**（查 `build_output/…/next_levels/full_moe_chip_orch/kernel_config.py`）。⚠**host 侧 `stuck_task_id=(1,23)` 的 23 是 runtime task_id、≠ func_id**——读 kernel 名必须看 device log 的 `kernels=[aiv0:N]` 再查 kernel_config 的 func_id N。**续13"(1,23)=tp_all_reduce"是没核实的错误映射。**
+> - **clean run（~34%，A2 是随机 ~66% 挂）**：`--hidden-token 6127` → **argmax=303 == vLLM golden**。∴ 精度本身对，**唯一 blocker = 这个随机 push 挂**。
+>
+> **【被本段推翻/修正的旧结论——勿再据此行动】**
+> - 续13「N=1 内没有可靠的 in-kernel 跨卡同步原语（dsb 只 drain 本地 / 核间 cache 非一致 / HcclBarrier 只 host 级…）」→ **证伪**。原语存在且有 fence：`pld.system.notify/wait` → `TNotify.hpp`/`TWait.hpp` 带 `dcci`+`dsb(DSB_DDR)`+`pipe_barrier(PIPE_ALL)`（grid_intrinsic.hpp:455 的"核间非一致"注释在 `grid_mock` 里，是说 mock 需要 dcci、不是说没 fence）。**PULL 路径 device N=42 全 clean** 即证。问题不是"没原语"，是**某个特定原语（TPUT 远端写）脆弱**。
+> - 续12/续13「A2 = 手写 tp_all_reduce 单波 barrier 缺完成波；补 Phase-4 completion-wave 已修；argmax=303 复现 3/3；P=42 确定性 RUN_CLEAN」→ **证伪**。tp_all_reduce（PULL）被复现器洗清；真凶是 **dispatch 的 PUSH**（`_dispatch_push`），与 completion-wave 无关。argmax=303 只在 ~34% clean run 出现，不是 completion-wave 修好的。
+> - 续13「stuck_task_id=(1,23)=tp_all_reduce」→ **修正**为 `_dispatch_push`（func_id 28）；task_id≠func_id。
+> - 续12「残余抖动定位到 combine 跨卡 `routed_y_buf` gather」→ 部分成立但需正名：combine 的 push（`_push_routed_y_to_sources`）也是 TPUT（同类脆弱），是**抖动**源；但**挂死**在 **dispatch 的 push**。两者**同根（TPUT 远端写）、同修法（push→pull）**。
+>
+> **【本 session 试过并 device 实测失败的修复——已回退，勿重试】**
+> 1. pto-isa `TPut.hpp` 单传输路径（`TPUT_IMPL` 281-289）补 `pipe_barrier(PIPE_ALL)+dsb(DSB_DDR)`：仍 4clean/3stall。挂在 `wait_flag(PIPE_MTE3…)` 本身，补在其后无用。**已回退**。
+> 2. pre-push rendezvous barrier（push 前加一道全屏障，2nd signal window）：**更差 5/5 挂**。
+> 3. `pld.tensor.put` 换 `remote_store`：**不是替代**——两者都 lower 到 TPUT（MTE3），`pld.tensor.put` 非 SDMA。`_dispatch_push` 现在 recv_x 用 `pld.tensor.put`、recv_r_route 用 `remote_store`，都是 TPUT。
+> ⟹ **不是 fence/屏障顺序问题，是 TPUT 远端写完成本身间歇不触发。只有换成 pull（远端读）才可靠。**
+>
+> **【pypto 专家给的 3 个超时环境变量（第 1 步先试；定义在 runtime `runtimeout_config.h:23-25`）】**
+>
+> | 环境变量 | 单位 | 含义 | 默认 (onboard) |
+> |---|---|---|---|
+> | `SIMPLER_SCHEDULER_TIMEOUT_MS` | ms | AICPU 调度器无进展看门狗 | 10 s |
+> | `SIMPLER_OP_EXECUTE_TIMEOUT_US` | μs | STARS op-execute 超时 | 45 s |
+> | `SIMPLER_STREAM_SYNC_TIMEOUT_MS` | ms | host 侧 stream 同步超时 | 50 s |
+>
+> 试法：整网 P=42 把三个都调大（如 `SIMPLER_SCHEDULER_TIMEOUT_MS=100000 SIMPLER_OP_EXECUTE_TIMEOUT_US=450000000 SIMPLER_STREAM_SYNC_TIMEOUT_MS=500000`）跑 3-5 次，看 stall 率 / 是否完成 / device log 有无新信息。判读见上"执行顺序"第 1 步。
+>
+> **【修复计划（第 2 步、条件性）= dispatch `_dispatch_push` push→pull】**
+> 现状 `_dispatch_push`（`decode_layer.py:2678`，生成自 generator base builder）：逐 (t,k) token 从跨卡可读 `pub_counts` 算 `dst_row`，然后 `pld.tensor.put`(recv_x) + `pld.tile.remote_store`(recv_r_route) **推**到 peer dst。改 pull（每步都要 device 验证 stall 率 66%→0 且 argmax=303）：
+> 1. **加本地 pack**（无跨卡）：每卡按 bucket=`dst_rank*N_LOCAL_EXPERTS+loc_e` 顺序把自己的 token pack 进 `send_buf`（用 per-bucket cursor，逻辑见 `dispatch.py:pack_send_payload`）。
+> 2. **`send_buf` 变 peer-readable `pld.DistributedTensor` window**（host_orch alloc，尺寸 `[BATCH*TOPK=128, HIDDEN]`，比 recv_x[1024] 小）；recv_x 变本地输出（不再是 push 目标）。
+> 3. **一道 barrier**（所有卡 pack 完再拉）。
+> 4. **dst pull**：`for loc_e: for src S: off = Σ_{(dst',e') 在 bucket 顺序里 < (my_rank,loc_e)} pub_counts[S*N_RANKS+dst', e']; n = pub_counts[S*N_RANKS+my_rank, loc_e]; for row in range(n): tile = pld.tile.remote_load(S.send_buf, peer=S, offsets=[off+row,0]); pl.store(tile,[recv_slot,0], recv_x_local); recv_slot += 1`。**关键简化：`off` 完全由已有的跨卡可读 `pub_counts` 重算，无需新增任何跨卡发布**（pack 顺序=bucket 顺序、bucket 计数=各卡已发布的 pub_counts，所以 dst 能算出每个 src 的 send_buf 偏移）。
+> 5. **recv_r_route**：本地可重算（r_route 由 pull 顺序推）或同法 pull；**recv_scale**（INT8 dispatch 的 per-token scale）同法 pull。
+> 6. 改在 generator `tools/step3p5/_gen_faithful_real.py` 的 base builder（`_dispatch_push`/`dispatch_step` + host_orch window alloc）→ regen。
+> 7. **combine 的 push（`_push_routed_y_to_sources`）同类问题（TPUT），同法改 pull**（combine 侧有 `inverse_map[t,k]=dst_rank*LOCAL_RECV_MAX+dst_row`，但整网里 `_build_inverse_map` **定义了却 0 调用=dead code**，要 pull-combine 得先激活它、或同样用 pub_counts 逆推）。combine 的 push 目前是**抖动**源、dispatch 的 push 是**挂死**源；先修 dispatch（挂死），combine 顺带修（消抖动）。
+> ⚠ 0234 上 a2a3sim 坏了（`g++-15` 缺）**无快速编译检查**，每轮只能整网 device 跑（~5min/轮，用常驻 exporter `--reuse-exporters`）。备份在 `pypto-lib/{tools/step3p5/_gen_faithful_real.py,models/step3p5/decode_layer.py}.bak.pre_pullcombine_*`。**改根因、不 work-around；诊断脚手架（复现器、旋钮）不进产品路径。**
+>
+> **【环境 / 恢复 runbook（本 session 踩坑记）】**
+> - 0234 通过 `brainctl rjob launch --charged-group=hw910test --host-network=true --privileged=true --cpu 60 --gpu 8 --private-machine=group --positive-tags A910X,node/gpu-a910x-0234.host.platform.shaipower.com --volume /data/chensiyu:/data/chensiyu --volume /home/chensiyu:/home/chensiyu --mount juicefs…chensiyu-jfs --mount juicefs…hw910test-jfs --image hub.i.basemind.com/stepcast/stepcast:0.19.0-081dd47dd175-fbfe288fe1ee-2026.06.09-141938 --entrypoint "" -- bash`（在 b-csy 上跑，落进 tmux 窗口成 0234 容器 shell）。
+> - **卡死 shell 恢复**：Ctrl-C 中断正挂死的 device run 会残留一个卡在 ACL 调用的进程（同续13），C-c/C-\/pdb 都唤不醒。`brainctl exec`/`brainctl stop` 对 replica/rjob **被 RBAC 挡**（ns=shai-core，kube 用户无权）。**可用恢复 = 在 b-csy 上 `kill -TERM <'brainctl rjob launch …0234' 客户端 PID>`**（干净结束交互 rjob → pod 回收 → 0234 卡释放，非孤儿；本 session 验证：kill 后新 worker 又调度回 0234），再用上面同样命令原样重开。exporter 会丢（barrier 复现器不需要 exporter；整网需重载 ~15min）。
+> - 三件套激活（每 fresh shell）：`export WS=/data/chensiyu/hw_project/pypto/workspace; source /usr/local/Ascend/cann/set_env.sh; source $WS/activate.sh; export PTO_ISA_ROOT=$WS/pto-isa; export PYTHONPATH=$WS/pypto/python:$WS/pypto-lib:$PYTHONPATH`。8 卡 env：`PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072`。
+> - exporter：常驻 hold-mode（`--export-rank r --dev r --kv-ipc --out /tmp/n1_weight_ipc` ×8，~15min 冷载写 `ready.rank{r}` 后 hold）→ worker `--reuse-exporters` 秒级 attach。收尾释放：`touch /tmp/n1_weight_ipc/STOP`。**本 session 收尾时已 STOP 释放 8 卡**。
+>
+> **【buffer 命名核查（此前用户问）= 干净】** generator 静态展开 `for pos: sfx=L{pos}`，comm/signal/hidden buffer 全逐层 distinct（每 MoE 层 12 window + 5 signal 1:1 collective + 84 个 `h_moe_L{pos}`/`resid_hold_L{pos}`），无复用，满足设计不变量 P3/ADR-013。**不是本 bug。**
+>
+> **【memory 索引】** `n1_a2_primitive_exists_not_missing`（全证据链 + 修复 recipe + 恢复 runbook）；`n1_m4_accuracy_gap_converged_direction_drift`（历史，其中"A2 已修/completion-wave"部分被本段作废）。`blockers.md` A2 段已同步。
+
+> **⛔⛔ 续13（2026-07-14 goal-session-2，device 复验）——历史段落。其中「没有可靠 in-kernel 跨卡同步原语」「A2=tp_all_reduce 缺完成波已修」「stuck_task_id=(1,23)=tp_all_reduce」等结论均已被上面续14 device 证伪/修正，仅作历史保留，勿据此行动。用词严谨：A2 未修复。本段覆盖续11/续12 中一切"A2 已修 / argmax=303 复现 3/3 / P=42 确定性 RUN_CLEAN"的结论。**
 >
 > **【最重要 · 纠正，勿再被误导】** 续12 与 commit `fc5a269` message 声称"A2 collective 死锁已修（completion-wave），P=42 不靠 logging 确定性 RUN_CLEAN 7 次、argmax=303 复现 3/3"。**本 session device 复验推翻**：clean `fc5a269` tree（completion-wave + combine 修复都在、工作区干净、17+10 marker 确认）、warm healthy exporters、**不开任何 logging**：`P_FAITHFUL_MOE_LAYERS=42 --hidden-token 6127 -d0-7` → **run1 STALL 507018 / run2 CLEAN argmax=303 / run3 STALL** ≈ **~66% 挂**。⟹ fc5a269 的 completion-wave **并未可靠修复 A2**；续12/commit-msg 的"device 验证 3/3"是**不可复现的 premature-victory**。⚠⚠ **本 session 一个 adversarial agent 因为读了 commit message 的"device 验证"就误判"A2 已修"**——所以下 session **铁律**：任何 commit message / memory / 文档里"已修 / device 验证"的声明，**必须先在 device 上复验（多次、无 logging）再据此行动**。
 >
@@ -468,3 +680,23 @@ ls /tmp/n1_weight_ipc/ready.rank*|wc -l）。改 models 后 find models/step3p5 
 - **两 track 汇合 = N=1 INT8-native compute（A/B）+ G5b live 基建（C）**。避免同时改 n1-live（跨 session 冲突 = 反复推翻根因之一）。
 - **已排除（device 验证，别重查）**：G5b 原始 NaN=seq_len=0 pad（已修）、rope/qk_norm/head-gate/KV-layout/full-attn kernel、Blocker B=gate_topk（非 IPC-VA）、KV 池 offset（regular）。
 - **底座**：N=1 = 0234 tmux `pypto-ascend-0:0` + `feat/whole-net-n1-fusion`（moe.py INT8 cd3ef0d 在此分支）；G5b live 基建 = 0162 + stepfun/develop。moe.py 的 `select_moe_block(w8a8_native=True)`/EpTpMoEW8A8 在 `feat/whole-net-n1-fusion`，n1-live/stepfun-develop 都没有。
+
+> **【续16g（2026-07-15，device — P=1 bisect 结论 + 用户拍板回退 push baseline）】**
+> - **P=1 bisect**：`P_FAITHFUL_MOE_LAYERS=1`（3 dense + 1 MoE 层）pull 版 device **仍 507018 死锁** ⟹ **单 MoE 层就复现 = 我 pull collective 的确定性代码 bug，NOT 42 层单-program 交织**（推翻续16f 倾向）。好消息：单层可 P=1 快迭代。bug 在 `_dispatch_pull`(func28) 或 combine `_pull_routed_y`(func37)；reasoning 找不到（rendezvous 对称、gather 越界已排除），需 device log 拿 stuck func + `waiting=` 定位（带 log 的 P=1 未拿到 stall 诊断即被回退打断）。
+> - **⛔ 用户拍板回退 push baseline（已执行）**：`cp decode_layer.py.GOODKEEP decode_layer.py` + `cp _gen_faithful_real.py.bak.pre_pulldispatch_20260715_123346 _gen_faithful_real.py` → decode_layer.py 现为 **push 版**（`_dispatch_push`×10 / `_dispatch_pull`×0，py_compile 过），generator 也回 pre-pull（regen 复现 push）。push baseline = fc5a269 known-good（~34% clean，argmax==303 可复现）。
+> - **pull WIP 全保留可续**：`decode_layer.py.FULLPULL_20260715_054234` + `_gen_faithful_real.py.FULLPULL_20260715_054234`（全 push→pull）；`PULLDISPATCH_WORKS_20260715_051112`（仅 dispatch pull）；`logs_n1/full_moe_kernel_config_053555.py`（func 映射表）。
+> - **接续起点（若重启 pull）**：恢复 FULLPULL 备份 → P=1 + ASCEND log 拿 stuck func（build_output kernel_config 持久映射，**别猜**）→ 二分 dispatch-pull vs combine-pull 哪半死锁（可暂只改 dispatch、combine 留 push）→ 修 rendezvous/handoff 确定性 bug → P=1 clean 后放开 42 层 → argmax==303。**勿 chunk-为-提速（抬超时证明 deadlock 非 slow）。**
+
+> **【续17（2026-07-15，device — PUSH baseline 重确认 + 专家 put/dsb/notify 线索深调 + 3 处纠正）】**
+> 用户拍板**回到 PUSH**（pull 是 regression，见续16d）。本 session 深调专家的 `A: put+pipe_mte3+dsb+notify / B: wait+load` 假设，device 复现并**坐实卡点**（记忆 `n1_a2_primitive_exists_not_missing` 已附完整证据）：
+> - **PUSH baseline（GOODKEEP）device 复现 BOTH**：clean → `argmax=303==vLLM golden`（3.32s）；stall → `507018×8`（P=42，1/1 attempt 即挂）。**必须 `export P_FAITHFUL_MOE_LAYERS=42`**（shell 里陈旧 `=1` 会只跑 1 MoE 层 → 2.78s clean、`argmax=27527`=P=0 诊断值、push 几乎没跑，假通过）。
+> - **stall device log（权威）**：`TASK …319 state=RUNNING fanin=6/6 kernels=[aiv0:28] core=26`（在核上自旋、输入齐备、永不完成）+ `TASK …320 state=WAIT kernels=[aiv0:29] missing_deps=1`；`completed=39/137`；**device-4/5/6/7 全同 …319/aiv0:28**。⟹ **func28=`_dispatch_push` 在核 kernel hang（S1），8 卡一致；func29=`_dispatch_stage` 等它**。是 in-kernel hang、**不是**调度器 fanin 死锁。
+> - **专家 A/B 模式确实生成**（源核实）：put→`TPUT_IMPL`(TPut.hpp:281-289) 末尾 `wait_flag(PIPE_MTE3)`（写入排空）；notify→`TNOTIFY_IMPL` = `st_atomic`+`dsb(DSB_DDR)`+`pipe_barrier`。
+> - **⚠ 纠正 1**：`PTO_ASSERT` 由 `_DEBUG` 门控（debug.h:32-36），release kernel 下 = `((void)0)` → `TWAIT` 的 100M 自旋保护**在 device 上被编译掉** → **barrier 的 wait 也能静默 S1-stall**。不能靠"无 assert ⟹ 非 barrier"推断，必须 device 定位。
+> - **挂点子操作（强指向，未 PC 钉死）**：消去法 —— 干净的 PULL `tp_all_reduce`(N=42) 用**完全相同的 AtomicAdd notify + Ge TWAIT barrier** → barrier 可靠；PUSH vs PULL 唯一差别 = `remote_store`(跨die批量`TSTORE`)/`wait_flag(MTE3)` vs `remote_load` ⟹ 挂点 = **跨 die 批量 MTE3 写完成排空**。**佐证**：simpler 自己验证通过的 `allreduce_twophase` 所有跨 die 批量搬运都用 PULL(`TLOAD`)，唯一跨 die 写是标量 `st_atomic`，**从不做跨 die 批量 `TSTORE`**——正是整网 dispatch push 依赖、且挂死的原语。可靠跨 die 写 = 标量 atomic，非 MTE3 DMA 批量。
+> - **⚠ 纠正 2**：`_probe_barrier_scale PUSH BARRIER_ONLY` 的 inv=5 stall = **重复调用 + Set-notify 无 inter-run reset → 跨 run rank 去同步** 的探针 artifact；inv=1（单次 42-collective）CLEAN。整网是**单次 `rt.run`**（harness:298），故 barrier-only 单跑干净，与"remote_store 才导致挂"一致。（已给探针 PUSH 分支加 `barrier_only`-gated `push_store` 隔离。）
+> - **决定性下一实验（未跑）**：物理**删掉** dispatch 的 `put`/`remote_store`（InCore body 内 module-int `if` 会变 device-if → 不能 gate，必须删+regen），保留 barriers，P=42 跑几次 → clean ⟹ 坐实 TSTORE；stall ⟹ barrier。**这是整网单跑、真 AtomicAdd barrier、per-layer window，无探针 confound。** 然后定修法方向：跨 die 批量 MTE3 写完成是 hardware/runtime 级问题——请专家确认"跨 die 批量 MTE3 写是否被支持/可靠"，还是正确原语是标量/pull。此前 TPut.hpp 加 fence / pre-push barrier 均失败（续14）；抬 3× `PTO2_*` 超时 10× 仍 deadlock（续15）。
+> - **运维**：stall 后 worker 残留（STAGE=9）→ SIGTERM `[_]stage_whole...hidden-token`（禁 -9）；exporters（EXP=8 RDY=8）能扛住 507018 reset；build_output 即使 stall 也被自动清（要 kernel_config 需 stall ~100s 窗口内抓，或复用续14 映射）。
+> - **⚠⚠ 收尾更正（同 session）——撤回"barrier 非 write"，sub-op 仍 UNRESOLVED（stale-compile confound）**：试了 redirect 变体（dispatch write `peer=dst`→`peer=my_rank`，10 份，barrier 保留）。P=42 ×3：a1 STALL 同 func28/task319/completed=39；**a2 CLEAN `argmax=303`**；a3 clean(被 kill)。⚠ **a2=303 是红旗**——若 local-dispatch 真生效，42 层错路由应使 argmax≠303；出正好 golden 303 ⟹ **edit 很可能没进 device kernel（kernel-compile 缓存？）** ⟹ redirect 实验**不可信**，write-vs-barrier **仍未定**（消去法偏 write；redirect 偏 barrier 但被 confound）。**任何基于改源码的诊断前，硬前提 = 先证实 `decode_layer.py` 的改动真的进了 device kernel**（stall ~100s 窗口内抓 KEPT build 的 dispatch `.cpp` 核对，或找/清 ir.compile/ptoas kernel 缓存）。更干净的定位（不改数据写）：删掉 count_done/data_done barrier 的 notify+wait（非 write）→ func28 若不再挂 = barrier 坐实。GOODKEEP 已还原（改过的版本备份 `.bak.pre_skippush_diag_20260715`）。**⚠ exporters 被误杀**（`pkill -f '[_]stage_whole_faithful_real_ipc'` 漏了 `.*hidden-token` → 连 `--export-rank` 一起杀，EXP=0，stale ready.rank* 残留）；下 session `rm /tmp/n1_weight_ipc/{ready.rank*,STOP}` + 重起 8 exporter（~15min）。杀 worker 必须带 `.*hidden-token` 过滤。
+> - **⚠⚠ 收尾 SETTLED（推翻上一条"a2=303 红旗/UNRESOLVED"）——stale-compile 排除；sub-op 偏 BARRIER**：`simpler_setup/kernel_compiler.py::compile_incore`(296-383) 每次 ccec **全新编译** kernel `.cpp` 到临时 `.o`、**无 cache-skip**；唯一缓存是 orchestration-`.so` 上传（按 content sha1 Build-ID，改内容即失效）→ **`decode_layer.py` 改动确实进 device kernel（LIVE）**。a2=303 **不是** stale-compile，而是 **TP-replicated-token**：`x`(post-norm) 在 8 卡 TP-复制、expert EP-切分，local-dispatch 下每卡留 token 算自己那份 expert shard，cross-die combine（未改）照常 gather 正确 top-K → 仍出 303。⟹ **a1 在 write=local 下仍挂 func28 ⟹ 挂点是 notify/wait BARRIER（count_done/data_done），非跨die批量 `TSTORE`**；**推翻消去法"write 是元凶"**。置信：edit-live + func28 挂 = 坐实；barrier-是挂点 = 偏向（n=1，需多跑几次坐实）。疑似机制：count_done/data_done 的跨die `st_atomic` notify 间歇丢/竞（可能跟在批量写突发后 / notify 投递竞态）；pull 的 tp_all_reduce 无此前置批量写故不挂。**修法从专家的 data-path put/dsb/notify 转向 barrier-handshake 健壮性**。干净坐实：只删 count_done+data_done 的 notify+wait（不动 write）→ func28 不再挂 = barrier 坐实。
+> - **⚠⚠ TWO-WAVE barrier fix 已试 → 无效（device，同 session）**：假设强且框架对齐（dispatch count_done/data_done 是单波 `expected=1`，10/10；tp_all_reduce 有两波完成波、device-clean；`_add_allreduce_completion_wave.py` 明说单波在 ≥41 层挂 `507018/S1`=func28 签名）。给 count_done & data_done 各加两波完成波（2nd notify + `wait expected=2`，同 window，10 份，cd_exp2=10 dd_exp2=10，edit-live）。**device P=42 ×5：a1 CLEAN argmax=303；a2 STALL；a4 STALL → ~与 baseline 同的 ~66% 挂 → 没修好。** ⟹ write-locality 和 barrier-wave-count 都修不了 func28 → **收敛到续13：A2 是更深的 Heisenbug 时序竞态；DSL/ISA 层微调（fence/notify变体/barrier波数/写本地化）扰动但不根治。真修法 = runtime/scheduler 层（可靠 in-kernel 跨die完成 / 确定性跨rank派发序）或多program（用户禁）。** GOODKEEP 已还原（~34% clean baseline）；two-wave 备份 `.bak.pre_twowave_20260715`（框架更正确但非 fix，勿当 fix 上线）。**建议带证据上报 pypto/simpler runtime team**：func28 dispatch 在核挂 + two-wave 无效 + write-local 无效 = runtime 层跨die/调度时序竞态，非 DSL data-path(put/dsb/notify) 问题。
