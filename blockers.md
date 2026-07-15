@@ -11,28 +11,31 @@ Blocker 解决时，**删掉本文件里这一节**，到
 
 ---
 
-## 🔴 ACTIVE 2026-07-14 — A2：N=1 整网 84 流水 collective 的跨卡 notify 时序竞态（507018 间歇挂死）
+## 🔴 ACTIVE 2026-07-14 — A2：N=1 整网 collective 507018 间歇挂死 —— 根因 device 确认 = cross-rank PUSH（`remote_store`/TPUT）脆弱；修法 = push→pull（2026-07-15 去-confound 确认）
 
-**症状**：`whole_decode_faithful_real`（45 层融进一个 `@pl.program`，TP=8，~84 个手写 `tp_all_reduce`）在真 W8A8+双 IPC 8 卡上 **间歇挂死 ~66%**：`507018 orch_error=8 sched=100 sub_class=S1:running-stalled completed=38-39 running=1 waiting=1 stuck_task_id=(1,23)=tp_all_reduce stuck_core=26`，8 卡同一 task。跑通时 argmax=303==vLLM golden（精度本身对，唯一 blocker 是此挂死）。
+**症状**：`whole_decode_faithful_real`（45 层融进一个 `@pl.program`，TP=8）在真 W8A8+双 IPC 8 卡上 **间歇挂死 ~66%**：`507018 orch_error=8 sched=100 sub_class=S1:running-stalled completed=38-39 running=1 waiting=1 stuck_task_id=(1,23) stuck_core=26`，8 卡同一 task。跑通时 argmax=303==vLLM golden（精度本身对，唯一 blocker 是此挂死）。
 
-**根因（可靠，工具+多 agent+device 坐实）**：**跨卡 notify 写可见性时序竞态（Heisenbug）**，每个 collective 从第一个就有、84 个串行累积。
-- **非资源**：DFX `scope_stats` 所有资源 <1% 容量、dropped=0。
-- **非阈值/非某层**：sweep P=20 0/3、P=35 1/3、P=41 1/4、P=42 2/3（stochastic，随 collective 数量升）。
-- **非并发争抢**：collective 数据依赖串行，任一时刻只 1 个在跑（用户判断印证）。
-- 机制：`TNotify.hpp` 的 `st_atomic/store` 到 peer IPC 窗口 + `dsb(DSB_DDR)` 只 drain 本地 DDR，**不保证跨 HCCS 落到 peer HBM**；pto-isa 作者自注 `grid_intrinsic.hpp:454`："AICORE 核间 cache 不一致"。
+**✅ 根因 device 确认（隔离复现器 `_probe_barrier_scale.py` on 0234，含去-confound）：cross-rank PUSH 原语 `pld.tile.remote_store`（TPUT）随机时序挂死，不是 tp_all_reduce。**
+- **PULL（`remote_load`/TGET，= tp_all_reduce）**：链式 N=42 全 CLEAN、A/B N=2×4 0 stall → 洗清。
+- **PUSH（`remote_store`/TPUT，= combine/dispatch）动态窗口 `[NR,SIZE]`**：N=2/4/42 随机 STALL。
+- **去-confound（关键，2026-07-15）**：改用**静态窗口 `[8,SIZE]`**（`_bscale_gen.py` 确认 `DistributedTensor[[8, SIZE]`，与整网静态 combine 窗口 `[128,HIDDEN]` 同构）**仍随机挂：N=2 → 1 clean/3 STALL、N=42 → STALL×2**。⟹ 之前担心的"动态窗口 artifact"**排除**，`remote_store` 是真脆弱。
+- **两个修复 device 实测失败**：(a) `TPut.hpp` 单传输路径补 `pipe_barrier+dsb` → 仍 4c/3s，已回退；(b) pre-push rendezvous barrier → 更差 5/5 挂。⟹ **不是跨 die 写落地 fence、也不是屏障顺序**；机制 = 跨 die MTE3 写（remote_store 的 `wait_flag(MTE3)` 到 peer 地址）间歇不完成 → kernel 挂（S1:running-stalled）。PULL 读进本地内存（MTE2）无此依赖 → 可靠。
 
-**修复尝试全部证伪（device，已回退 clean 基线）**：read-back（TNotify 加 dcci+reload+dsb）66%→25%（改善非根治）；notify AtomicAdd→Set 更差(~100%)；Set+poll-until-landed 更慢+挂（poll 45s 读不到自己写落定）；框架 `pld.tensor.allreduce` UB 溢出不能用。**关键**：修复响应**非单调**（read-back 有用、加量 poll 更差）= Heisenbug 签名 → **DSL/ISA 层任何改动只是扰动时序、修不掉根因**。
+**✅ 二次复现确认「非单机」（0162，2026-07-15）**：在 gpu-a910x-0162（cards 8-15，driver 25.5.2 / non-GA CANN 9.0.0，与 0234 同 n1 pin：pypto 5e619dc7 / simpler n1fusion-base 98ce22a6 / pto-isa ecb6c303 / PTOAS 72ada0a1）用**同一 push-mode `whole_decode_faithful_real`（GOODKEEP push+push，真 W8A8+双 IPC，token 6127）跑 6 次 = 2 CLEAN(argmax=303==vLLM golden) / 4 STALL(507018) ≈ 33%/67%**，与 0234 的 ~34%/~66% 一致。⟹ **A2 挂死不是 0234 单机/硬件问题，是可跨机复现的代码/机制问题**（poison 在 run 间自清）。搭建配方 + 踩坑（分支不够，须补 0234 未提交的 Python 工作区改动 worker.py/device_tensor.py/distributed_runner.py）见 memory `n1_push_reproduced_on_0162_setup_recipe`。
 
-**当前状态**：根因层级确定 = **runtime/框架层**（非模型层）。模型/DSL 侧能力已尽。隔离复现器 `pypto-lib/tests/step3p5/_probe_barrier_scale.py` 已写好（N 个纯 barrier collective、无 MoE，adversarial agent 的决定性实验）待 device 跑（barrier-only vs full × N=20/42/84），以最终判定 scheduler-ordering vs data-movement。
+**✅ 修法方向（device 证据支持）= push→pull**：combine/dispatch 的跨卡交换从 source `remote_store`（推）改成 peer `remote_load`（拉，用已有 dispatch 路由表的逆映射）。PULL 已 device 证明可靠。或：runtime/pto-isa 提供可靠的远端写完成原语。现有 combine self-notify + completion-wave 不够。
 
-**解除条件（三选一，需用户决策）**：
-1. **上报 simpler/pto-isa runtime team**（推荐）：给**确定性跨 rank collective 派发序**（现 fanin-driven 会跨 rank 错位，`scheduler_cold_path.cpp:248`）**或** 正确的**跨 die 写完成原语**（`TNotify.hpp`）。
-2. 先跑隔离 barrier-scale sweep 精确定位后再定 runtime 修法。
-3. 重估 N=1 约束（DeepSeek/Qwen 用多程序天然避开——每 program 少量 collective + dispatch 边界同步）。
+**下一步**：① 恢复 exporter（前次实验杀了 job，需 15min 重载 W8A8）→ 整网 P=42 带 `ASCEND_PROCESS_LOG_PATH` 读 `log_stall_diagnostics` 的 **stuck kernel 名**，坐实整网真凶是 push op（dispatch/combine）而非 gate_topk（其 mrgsort 已核查为正确 format1，非本 bug 嫌疑）。② 实现 combine/dispatch push→pull + regen + 8 卡 device + vs vLLM 精度双验证（大改，多步）。
 
-**⚠ 环境**：0234 tmux `pypto-ascend-0:0` shell 被上一批 poll 测试残留的不可中断 device 进程卡死；需手动 `pkill -f _stage_whole`（SIGTERM，勿 -9）+ 查 exporter/卡是否毒化。b-csy 无法跑 pypto（venv311 python 断链），编译/device 只能在 0234。
+**buffer 命名核查 = 干净**（用户问）：generator 静态展开 `_L{pos}`，全逐层 distinct，满足 P3/ADR-013。**"没有 in-kernel 跨卡同步原语" 旧说法证伪**（原语存在有 fence，pull 路径 device 可靠）。
 
-**链接**：memory `n1_m4_accuracy_gap_converged_direction_drift`（全证据链）；wiki [Device-Error-Codes_zh](https://github.com/hw-native-sys/simpler/wiki/Device-Error-Codes_zh)（S1:running-stalled）。
+**环境恢复记录（2026-07-15）**：Ctrl-C 中断挂死的 PREBAR run 曾把 0234 shell 卡死（同续13）；`brainctl exec/stop` 都被 RBAC 挡（ns shai-core）。可用恢复 = 在 b-csy 上 `kill -TERM <本地 'brainctl rjob launch' 客户端 PID>`（干净结束交互 rjob + 释放 0234，非孤儿——新 worker 重新调度回 0234），再用**同样命令重开**（`--positive-tags A910X,node/gpu-a910x-0234... --image ...0.19.0-081dd47dd175-fbfe288fe1ee... -- bash`）。exporter 会丢（barrier 复现器不需要）。
+
+**修复方向（Phase 3，未做，先在复现器验证 PUSH N=2 多次 0 stall 再上整网）**：(a) 每个 `remote_store` 后补跨 die 完成（`dsb(DSB_DDR)` / 显式 TPUT 完成 wait，改 pto-isa `TPut.hpp` 或每-push fence）；(b) 把 combine/dispatch 的 push 改成 pull（peer `remote_load` 取，而非 source `remote_store` 推）；(c) 对 async DMA 完成做已验证的 wait。现有 combine self-notify AtomicAdd+0 + completion-wave 不够。
+
+**复现器（快、无权重）**：`CHAIN=1 PUSH=1 BARRIER_ONLY=1 N_COLL=2 -p a2a3 -d 0-7` 随机挂；`CHAIN=1 BARRIER_ONLY=0 N_COLL=42`（pull）clean。probe 带 CHAIN/PUSH 旋钮。
+
+**链接**：memory `n1_a2_primitive_exists_not_missing`（device 全证据链）+ `n1_m4_accuracy_gap_converged_direction_drift`；wiki [Device-Error-Codes_zh](https://github.com/hw-native-sys/simpler/wiki/Device-Error-Codes_zh)（S1:running-stalled）。
 
 ---
 
