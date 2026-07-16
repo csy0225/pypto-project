@@ -6,6 +6,28 @@
 
 
 
+## 2026-07-16 —— N=1 standalone canonical stall gate 关闭 ✅
+
+gpu-a910x-0162 上固定
+`whole_decode_faithful_real + P_FAITHFUL_MOE_LAYERS=42 + token 6127 +
+native W8A8 IPC weights + KV IPC + dispatch-pull + combine-pull`，同一最终源码、
+fresh exporter pool 连续 **20/20 PASS**，每次 `argmax=303`。runtime
+min/mean/max=`2.53/2.5685/2.62s`；整理后 final smoke 也 PASS
+（`2.57s`, `argmax=303`）。20-run 与 smoke 的 dmesg 时间窗无新增 fault、
+`507018`、`running-stalled` 或 `stranded CQE`。
+
+最终发布 commit：pypto-lib
+`0e7a0fddc90c4f2348f1d59e015fb817a0877a02`。最终最小 layout A/B
+是 control signal physical allocation `32B -> 512B`：logical view 仍为
+`[8,1] INT32`，216/216 signal 物理 nbytes=512，相对 offset 全部
+`%512=0`。generator 的真实 strip/regenerate byte round-trip 通过。
+
+历史上把 PUSH/TPUT、某个 stuck kernel 或 signal bit 写成唯一硬件根因的结论
+已降级为定位假设。当前证据支持“512B signal isolation 是最终最小 A/B 变量，
+并使 canonical 从历史随机 stall 收敛到 20/20”，但不构成 bit-level hardware
+proof。standalone blocker 已从 `blockers.md` 删除；后续 active 工作是 Phase 28
+的 per-layer KV bridge、redundant-weight/3-way HBM 与 live token-exact A/B。
+
 ## 2026-07-10 (续⁵ —— G3 HBM 假门槛移除 + resident-runtime 复用验证 [de-risk 任务 5-7])
 
 承接续⁴。G1 offline（任务 1-4）已收尾；本段是对 G2-G5（任务 5-7）的两个 de-risk 进展。

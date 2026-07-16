@@ -1,8 +1,10 @@
 # Phase 27 —— N=1 整网融合（单 @pl.program 全 45 层 + tail）
 
 > **独立攻关线**，与 Phase 25（Option-C 多程序 whole-model orchestration）并行、互不干扰。
-> 分支：pypto-lib `feat/whole-net-n1-fusion`（其余仓 `n1fusion-base`）。
-> 执行机：`gpu-a910x-0234`（tmux `pypto-ascend`）。**不碰 0162**。
+> 分支：pypto-lib `feat/whole-net-n1-fusion`。
+> 最终 release 验证机：`gpu-a910x-0162`，devices `8..15`。
+> 本文较早的 0234 环境重建与历史 bisect 章节保留作历史证据；当前 release
+> 状态以本文顶部与 `N1-CANONICAL-TEST.md` 为准。
 
 ## Pin snapshot（升级栈，2026-07-09 从 0162 只读 bundle 导入 + 重建）
 
@@ -10,7 +12,7 @@
 |------|-----|------|
 | pypto | `5e619dc7` | 0162 bundle（rebased origin/main + step3p5 glue；#1828 在内） |
 | simpler | `71e39623` | 0162 bundle（pypto 5e619dc7 submodule 精确锁此） |
-| pypto-lib | `feat/whole-net-n1-fusion` @ `94aa015c` | fork stepfun/develop `b511da0e`(SplitIncoreOrch 修复) + gap-5 docs |
+| pypto-lib | `feat/whole-net-n1-fusion` @ `0e7a0fdd` | final standalone P42 release：native W8A8/KV-IPC，dispatch-pull + combine-pull，512B signal isolation |
 | pto-isa | `ecb6c303` | origin/main |
 | PTOAS | `72ada0a1` | origin/main |
 | ptoas-bin | **v0.49** | PTOAS release `ptoas-bin-x86_64.tar.gz` |
@@ -84,6 +86,29 @@ host_orch，`decode_layer.py:903-1140`）**泛化到 45 层 + tail**（~90 seque
 - gap-5 INT8-native 仍 gated OFF（BF16-dequant 为工作路径）。
 
 ## Status
+
+✅ **2026-07-16 standalone canonical closure**：Phase 27 的发布门已经完成，而不是
+仍停留在历史的 random-hang 或 push-mode 状态。固定对象为
+`whole_decode_faithful_real`、`P_FAITHFUL_MOE_LAYERS=42`、token `6127`、
+gpu-a910x-0162 devices `8..15`、native W8A8 IPC weights、KV IPC、
+**dispatch fixed-slot pull + combine pull**。同一最终源码、fresh exporter pool
+连续 **20/20** 通过，每次 `argmax=303`，runtime
+`2.53/2.5685/2.62s`（min/mean/max）；final smoke 也通过
+（`2.57s`, `FINAL_SMOKE=PASS`）。最终代码为 pypto-lib
+`0e7a0fddc90c4f2348f1d59e015fb817a0877a02`，已推送到 fork。
+
+最终保留的实现边界包括：dispatch 生成 `recv_counts` 与
+dispatch-produced `inverse_map`，combine 直接消费该 inverse map；self
+走 local load、peer 走 remote load；per-layer distinct communication
+buffers；signed tile remainder；native INT8 W8A8 routed expert；以及
+logical `[8,1] INT32` signal 的 physical 512B isolation。生成器真实
+strip/regenerate byte round-trip 通过（`PRECOMMIT_ROUNDTRIP=PASS`,
+`ROUNDTRIP_CMP_RC=0`）。
+
+**Phase 27 当前结论**：standalone canonical stall gate 已关闭；历史 push
+mode 的随机 stall、旧的中间层数 gate、以及把 PUSH/TPUT 或某个 signal bit
+写成唯一硬件根因的过强结论，不再是当前状态。下一阶段转入 Phase 28 的
+per-layer KV bridge、live HBM/重复权重消除和 live token-exact A/B。
 
 🟢 **N=1 整网编译里程碑达成（2026-07-10）**：`WholeDecodeNetwork` —— ONE `@pl.program` 跑**全 45 层** decode（每层 attn-only method → EP-MoE method，per-protocol 分离）+ tail —— **编译通过 rc=0** on 0234（升级栈 pypto `5e619dc7` + ptoas v0.45 + tmov 修复；`build_output/WholeDecodeNetwork_20260710_043504`）。逐级验证链全绿：
 
@@ -275,7 +300,10 @@ host_orch，`decode_layer.py:903-1140`）**泛化到 45 层 + tail**（~90 seque
 
 ### Step-3 更新（2026-07-11 续）—— 0234 经 tmux 可达 + 真实权重 self-load OOM（确认 Task② 架构）
 
-**机器修正**：`ssh 0234` 裸主机名不解析（→0.0.0.156），但 **0234 经 tmux `pypto-ascend-0:0` 可达**（常驻 `root@0234` shell）。0234 = **8 卡（0-7）全空闲**、607GB free RAM、真实 W8A8 ckpt 已挂、**与编辑机 b-csy-develop 共享同一 NFS**（编辑即时可见，最优 dev loop）。0234 pypto-lib = `feat/whole-net-n1-fusion@d3f155b`（n1 原生）、SDMA=OFF、无 co-tenancy 补丁（0162 专有）。故 phase27 顶部"执行机 0234 / 不碰 0162"仍成立（0234 是 N=1 dev 机）；0162 是 live-A/B 机（co-tenancy runtime + 两个 vLLM 容器 + G5a live plumbing）。
+**历史机器记录（2026-07-11）**：当时 `ssh 0234` 裸主机名不解析（→0.0.0.156），但
+0234 可经 tmux `pypto-ascend-0:0` 使用，并与编辑机共享 NFS。该记录只解释早期
+开发环境；2026-07-16 最终 release 已转到 0162 devices 8..15 完成 20/20，不得再据此
+把“不要使用 0162”当作当前约束。
 
 **关键发现：真实权重 self-load = 死路（OOM）**。在 0234 cards 0-7 跑 `_stage_whole_faithful_real_weights.py --ckpt <real> -d 0..7`：**compile OK**（`WholeDecodeFaithfulReal_20260711_034124`，45 perf hints），但 `compiled(*inputs)` dispatch 阶段被 **OOM-killer 杀（exit 137）**——harness 在单 driver 进程里 stack 全 8 rank bundle + `[tp,...]` 副本 ≈ 752GB > 607GB free。**这确认了文档 Task② 的架构决定**：真实权重必须**逐 rank**（绝不 8× stack 在一个 host），只能走 (a) 每 forked chip 内逐 rank load（`step3p5_decode.py:275-293` / `_stage_whole_decode_run.py --worker` 模式）或 (b) vLLM-IPC（`WeightIpcExporter.export_from_checkpoint` 逐 rank 1 bundle/进程 mem-safe → 1 key/rank → worker `import_ipc` child ctx → 逐 rank DeviceTensor）。两者都需 **DistributedWorker**（非 `ir.compile+compiled(*inputs)` auto-shard）。
 

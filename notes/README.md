@@ -12,6 +12,7 @@
 | 05 | [物理视图 Physical View](05-physical-view.md) | 跑在什么硬件、怎么部署、怎么扩、坏了怎么办 | `05-physical-view.md` |
 | 06 | [PyPTO 编程与部署 API](06-pypto-programming-and-deploy-api.md) | 怎么写 PyPTO 程序(L2/L3)、tensor/tile、API↔模式、buffer/融合/namespace 实战坑、编译部署 | 多源汇总 |
 | 07 | [step3p5 + vLLM 集成](07-step3p5-vllm-integration.md) | per-layer / block / 整网融合三轴、program 个数 N≥6 墙、DeepSeek 对照 | 多轮讨论 |
+| 09 | [Cache Line 与 Signal 隔离](09-cache-line-and-signal-isolation.md) | single cache line、false sharing、跨 rank signal/cache-line isolation 调试口径；含 0162 P42 20/20 device evidence | `02-logical-view/04-memory.md` |
 
 ## 🎨 配色约定（贯穿所有笔记）
 

@@ -1,0 +1,124 @@
+# Phase 28 — N=1 整网 → vLLM live single-handoff 集成
+
+> 承 Phase 27（N=1 整网融合 `whole_decode_faithful_real`，分支
+> `feat/whole-net-n1-fusion`，最终 standalone release 在机器 0162）。本 phase 把已
+> canonical 20/20、每次 `argmax=303` 的 N=1
+> whole-net decode **接进 vLLM serving 路径**（M5/M6：live single-handoff A/B）。
+> 严格遵循 SKILL §H：**N=1 单 `@pl.program` 是唯一生产形态**（多程序永久排除）。
+>
+> **组件 pin（2026-07-16）**：pypto-lib `feat/whole-net-n1-fusion` @
+> `0e7a0fddc90c4f2348f1d59e015fb817a0877a02`；whole-net 底座 =
+> `dispatch fixed-slot pull + combine pull`，standalone P42 20/20
+> `argmax=303`；simpler runtime = `n1fusion-base:98ce22a6` +
+> `SIMPLER_COMM_NO_HCCL` co-tenancy patch。
+>
+> **提交边界**：`0e7a0fdd` 只发布 standalone 核心的
+> `decode_layer.py`、`moe.py`、`_gen_faithful_real.py`。下表中的
+> holder/sidecar/KV importer/容器 backend 属于 2026-07-15 live 集成工作区记录，
+> **不在该 release commit 内**；下一 session 必须先整理、复核并单独提交这些 live
+> 组件，不能把 standalone commit 当作完整 live 集成交付。
+
+## Goal
+
+真实 vLLM 请求的 decode step 走 pypto N=1 whole-net（token-exact vs vanilla 8000）。
+准出 = live A/B **L3 greedy top-1 ≥ 95%**（L1 hidden atol=0.04 / L2 cos≥0.999 辅证）。
+
+## 架构（live single-handoff）
+
+```
+vLLM(8001, mode=full, enforce_eager)          pypto sidecar (co-resident, cards 0-7)
+  Step3p5Model.forward (patched)                WholeDecodeHolder (build+prepare 一次)
+    embed(input_ids) -> hidden [T,HIDDEN]         resident weights(IPC) + gate_r
+    rank0: socket send hidden ───────────►        recv hidden -> set_hidden
+                                                   holder.run() = whole-net 45L + tail
+    rank0: recv next_hidden ◄───────────          send next_hidden
+    tp.broadcast(next_hidden, src=0)
+  compute_logits (patched) = norm + lm_head
+```
+
+- **co-tenancy**：sidecar 设 `SIMPLER_COMM_NO_HCCL=1`（跳过 HCCL control comm，file_barrier+IPC
+  不变），与 vLLM 的 HCCL world 同卡共存。见 `deployment/cotenancy-simpler-no-hccl.md`。
+- **seam**：patch `Step3p5Model.forward`→sidecar（返回 next_hidden，pre-norm）；`compute_logits`
+  用 vLLM validated tail（norm+lm_head）。whole-net 内部 lm_head 只作 debug argmax。
+
+## 已落地组件（本 session，offline/standalone 验证）
+
+| 组件 | 文件 | 验证 |
+|------|------|------|
+| resident holder | `pypto-lib/tools/step3p5/whole_decode_holder.py` | 2026-07-15 工作区 device compile OK；**未包含在 `0e7a0fdd`** |
+| sidecar + 协议 | `pypto-lib/tools/step3p5/whole_decode_sidecar.py` | 2026-07-15 工作区 offline `--selftest` PASS；**未包含在 `0e7a0fdd`** |
+| monkey-patch full seam | `pypto-lib/tools/step3p5/vllm_monkey_patch.py::_pypto_full_forward` | py_compile OK；collective fallback + rank0 drive/broadcast |
+| 容器 self-contained backend | `pypto-lib/tools/step3p5/pypto_whole_decode_backend.py` | 2026-07-15 工作区 py_compile + status() OK；**未包含在 `0e7a0fdd`** |
+| co-tenancy patch | `pypto/runtime/.../comm_hccl.cpp` `SIMPLER_COMM_NO_HCCL` | 重编 exit 0；flag-OFF 无回归 + flag-ON bootstrap device-validated |
+| KV-bridge importer | `pypto-lib/tools/step3p5/pypto_kv_ipc.py` | 2026-07-15 工作区 selftest PASS；**未包含在 `0e7a0fdd`** |
+
+## Stage 4 设计 — per-layer KV + KV-bridge（下 session 执行；先设计）
+
+**根因边界（本 session 读码坐实）**：`whole_decode_faithful_real` 现在 **45 层共享 ONE
+`k_cache/v_cache [KV_CACHE_ROWS_DYN=4096, HEAD_DIM] bf16`** → ctx=1-only（每层对自身
+position-0 K/V 自注意力，无 history；argmax==303 数值成立）。real multi-token decode 须
+per-layer KV + 导入 vLLM 已 prefill 的 KV。
+
+**设计决策**：
+1. **KV 来源 = vLLM prefill 的 paged KV（IPC 导入，非 pypto 自算 prefill）**：vLLM 做
+   prefill 填充其 paged KV pool；pypto decode 经 IPC 导入 rank-r 的 KV。phases/20 §G FINAL
+   device-verified：vLLM KV = **bf16、1 KV head/rank、per-layer flat `[nb*bs, head_dim]`**
+   （**不是 int8** → 无 dequant，纯 reshape）。
+2. **per-layer KV 接法 = 导入 vLLM per-rank KV 大池（ONE key）+ 按 map offset 切每层**（选 (b)，
+   对齐 vLLM 布局；不用 90 个 per-layer arg 的选 (a)）：
+   - vLLM 侧：port `pypto_kvpool_backend.py`（从 0162/stepfun-develop）→ patch
+     `_allocate_kv_cache_tensors` = 45 层 K/V 进 ONE buffer → `aclrtIpcMemGetExportKey` ONE key +
+     offset map（`pypto_kvpool.key.rank{r}` + `pypto_kvpool_map.json.rank{r}`：`L{i}.K/V`→
+     {offset,nbytes,shape}）。
+   - pypto 侧：写 `pypto_kv_ipc.py::KvIpcMap`（**镜像 `pypto_weight_ipc.py::WeightIpcMap`**：
+     `from_files(key,map,rt,worker_id)`→`import_ipc`→`peer_base`；per-layer `DeviceTensor(peer_base+offset,
+     [nb*bs, head_dim], bf16)`）+ `build_stacked_kv(maps, layer)`→per-layer StackedDeviceTensor(8 shards)。
+   - whole-net host_orch：把每层 attention 的 k_cache/v_cache 从共享单 buffer 改成 per-layer KV
+     DeviceTensor（generator `_gen_faithful_real.py` — docstring 已述"each layer method receives its
+     OWN per-layer KV cache"，per-layer 线程已存在，改 binding 即可）。
+3. **ABI**：`config.KV_CACHE_ROWS_DYN = nb*bs`（live num_blocks*block_size，须对 running 8001 pin）→
+   recompile。`block_table`/`slot_mapping`/`seq_lens` 每 step 从 live forward_context 经 socket 传
+   （sidecar 协议已支持 meta_* tensor）。
+4. **attention read**：现 flat `k_cache[slot_mapping]` 读；vLLM paged `[nb,bs,1,hd]` flatten `nb*bs`
+   后 block_table 索引等价（phases/20 per-op 已 token-exact）→ 大概率兼容，**device 验证确认**。
+
+**buffer/边界注意（用户强调）**：
+- 每层 KV = vLLM per-rank pool 的 distinct offset slice（vLLM 分配 45 层 KV 互不别名）。
+- dtype **bf16**（vLLM KV 是 bf16，无 quant/dequant → 与"禁 bf16-dequant 历史版本"不冲突：那条针对
+  **权重**；KV 本身在 vLLM 就是 bf16）。
+- 512B 对齐：每层 K/V row = head_dim(128)×2 = 256B；nb*bs 是 block_size(128) 倍数 → 池对齐。
+- 多 batch：block_table `[BATCH, MAX_BLOCKS_PER_SEQ]` per step；单 batch T=1。
+- 内存初始化：vLLM prefill 已写 KV；pypto decode 只读 context + 写当前 step 的新 K/V（add_inout）。
+
+**为何必须单独验证（不能盲写）**：num_blocks/KV 精确 shape 必须对 live
+vLLM pin；per-layer KV model change 会修改 whole-net KV 接口，必须先重跑
+standalone canonical 回归，再做 live HBM 与 token-exact 验证。现有 standalone
+release 已 20/20，但不能自动证明新 KV ABI 正确。
+
+## Stage 5b runbook — live A/B（下 session，gated on Stage 4 + HBM closure）
+
+1. 部署 `pypto_whole_decode_backend.py` → 容器 `/logs/pypto_patch/` + sitecustomize 加
+   `_load_backend("PYPTO_WHOLE_DECODE", ...)`。
+2. 起 8001 mode=full（`PYPTO_WHOLE_DECODE=1` + sock 路径；profiling 期 sock absent → collective
+   fallback 存活）→ health=200。
+3. 起 sidecar：`python -m tools.step3p5.whole_decode_sidecar --serve --sock /logs/pypto_whole_decode.sock
+   -d 0-7 --kv-ipc --ckpt <w8a8>`（`SIMPLER_COMM_NO_HCCL=1`）。
+4. 3-prompt greedy(temp=0) A/B vs 8000 vanilla → L3 top-1≥95%。
+5. hazard：pypto AICore timeout → `aclrtResetDeviceForce` 卡级 nuke 同卡 vLLM（见
+   `deployment/cotenancy-simpler-no-hccl.md §hazard`）；停 sidecar 后须 restart 8001。
+
+## Status
+
+- 2026-07-16：Phase 27 standalone gate 已关闭；0162 canonical P42
+  **20/20 PASS**（pull + pull，native W8A8/KV-IPC，`argmax=303`），final
+  smoke PASS；standalone random stall 不再是当前 gate。
+- Stage 4（per-layer KV bridge + whole-net model-side KV binding）仍未执行；
+  当前需从 live vLLM paged KV pool 导入每层 BF16 KV，并传递真实
+  `block_table`/`slot_mapping`/`seq_lens`。
+- 当前 live HBM blocker 是 vLLM 常驻 W8A8 权重、exporter whole-net
+  INT8 权重和 runtime working set 的重复占用；须先消除 redundant weights
+  或实现共享/in-place 权重方案。
+- Stage 5b（live A/B）仍未执行；live single-handoff token-exact
+  **尚未完成**。不得把 standalone 20/20 写成 serving 已完成。
+- live 组件当前还缺一份经过 review 的独立 commit/pin；先整理提交，再开始
+  per-layer KV 与 HBM 攻坚。

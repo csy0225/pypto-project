@@ -3,7 +3,58 @@
 pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状态
 变化都更新这里**。历史细节查 [`archive/`](archive/)。
 
-**最后更新**：2026-07-12
+**最后更新**：2026-07-16
+
+> **2026-07-16 ✅ Phase 27 standalone canonical stall gate 关闭；Phase 28 live serving 仍进行中**：
+> - **发布代码**：pypto-lib `feat/whole-net-n1-fusion` commit
+>   `0e7a0fddc90c4f2348f1d59e015fb817a0877a02`
+>   （`fix(step3p5): stabilize N1 pull MoE with isolated control signals`），已推送
+>   `csy0225/pypto-lib`。
+> - **固定准出组合**：gpu-a910x-0162、devices 8..15、`whole_decode_faithful_real`、
+>   `P_FAITHFUL_MOE_LAYERS=42`、token 6127、native W8A8 IPC weights、KV IPC、
+>   **dispatch fixed-slot pull + combine pull**。
+> - **canonical 稳定性与精度**：fresh exporter pool 连续 **20/20 PASS**，每次
+>   `argmax=303`，runtime min/mean/max=`2.53/2.5685/2.62s`；20 次数值指纹一致。
+>   日志：`workspace/logs_n1/signal512/signal512_p42_20_20260716_220004`。
+> - **整理后复验**：`signal512_final_smoke_20260716_230225`，
+>   `2.57s, argmax=303, FINAL_SMOKE=PASS`；20-run 与 final smoke 的 dmesg
+>   时间窗均无新增 fault、`507018`、`running-stalled` 或 `stranded CQE`。
+> - **最终最小 layout A/B**：control signal logical view 仍为 `[8,1] INT32`
+>   （32B），physical allocation 从 32B 改为 **512B**；216/216 signals 为 512B，
+>   相对 offset 全部 `%512=0`。这是相对历史随机 stall 的强因果证据，但不写成
+>   某个 signal bit 或 PUSH/TPUT 已被硬件层证明为唯一根因。
+> - **架构边界**：dispatch 生成 `recv_counts + inverse_map`；combine 直接消费
+>   dispatch-produced `inverse_map`；self 用 local load、peer 用 remote load；
+>   per-layer distinct communication buffers、signed tail、native INT8
+>   gate/up/down 全保留，禁止 BF16 dequant 权重回退。
+> - **generator gate**：真实 strip → regenerate → byte-compare 已通过：
+>   `PRECOMMIT_ROUNDTRIP=PASS`, `ROUNDTRIP_CMP_RC=0`。
+> - **当前 active blocker 已转移到 Phase 28 live serving**：per-layer paged-KV
+>   bridge；消除 vLLM/exporter 重复权重并解决 3-way HBM；完成 live
+>   single-handoff token-exact A/B。**standalone random hang 不再是 active blocker，
+>   但 live serving 也尚未完成。**
+> - 唯一 standalone 测试口径见 [`N1-CANONICAL-TEST.md`](N1-CANONICAL-TEST.md)；
+>   下一会话边界见 [`NEXT-SESSION-N-1.md`](NEXT-SESSION-N-1.md)。
+
+> **2026-07-15 (续²·live single-handoff 实测) 🟡 live 单-handoff plumbing 打通 + co-tenancy patch live 验证；⛔ 3-way HBM 墙（redundant weights）挡住 token-exact [Phase 28]**：
+> 本 session 推到**真机 live 单-handoff 实测**，拿到里程碑 + 一个 device-proven 硬 blocker：
+> - **✅ live plumbing 端到端打通**：patched vLLM 8001 full-mode（`util 0.57 + --num-gpu-blocks-override 256`，与 8/8 exporters 共存，H=200）→ 请求 `[6127]` 经 `_pypto_full_forward` → AF_UNIX socket → sidecar whole-net holder（8 chips ready、`SIMPLER_COMM_NO_HCCL` bootstrap 干净、权重+KV via IPC、46 args、listening）**全链路路由通**。
+> - **✅ co-tenancy patch live 验证**：sidecar 与真 vLLM 同卡共存，`SIMPLER_COMM_NO_HCCL` 无 HcclCommInit 冲突（此前仅 standalone bootstrap 验证，本次真 vLLM 共存坐实）。
+> - **✅ vanilla 参照 live**：vLLM 8001 `[6127]` → "，"(303) —— 金标准在 0234 live 确认。
+> - **⛔ blocker（device-proven）= 3-way HBM 墙**：whole-net `rt.run` OOM `207001 (size≈16GB)` —— vLLM(25G, W8A8 weights 24G) + exporters(26G, whole-net INT8 weights) + whole-net-run(16G) ≈ 67G > 64G/卡。**根因 = 权重双份冗余**（vLLM 与 exporter 各存一份 step3p5 全模型）。token-exact 303 **未达成**（run 前 OOM，非 hang）。
+> - **vLLM 两道内存检查坑（记下）**：`util*total ≤ free`（exporters 占 26G → free 35G → util≤0.577）**且** `util*total > resident_used`（→ util>0.55）→ **窗口极窄 ~0.56–0.57**；再 `--num-gpu-blocks-override` 强制小 KV。util 0.9 挂 check1，util 0.3/0.4 挂 check2。
+> - **修法（下一步，gated）**：**HBM 墙 device 二次坐实 = redundant weights，非单纯 ring 旋钮**：`RING_HEAP=4G` run-alloc 16G→OOM；`RING_HEAP=2G` run-alloc 缩到 2.4G（确认 alloc=4×RING_HEAP）**但仍 207001**——whole-net **cumulative** footprint（ring 2G + per-layer comm windows ~3.5G + dep/task pools + activation）> vLLM(25G)+exporters(26G) 后剩的 ~13G free。**根因 = 权重双份**（vLLM W8A8 24G + exporter INT8 26G = 同模型两份，占 51G）。**真修法 = 消除双份**：whole-net sidecar 不自带 26G exporter，改**读 vLLM 常驻权重 via IPC**（whole-net INT8 stacked 布局 ≠ vLLM W8A8，是多日级 model-side 改）；或激进缩 whole-net working（task_window/dep_pool，风险 deadlock）。本段是 2026-07-15 live 实验记录；其 standalone stall 状态已被 2026-07-16 的 20/20 结论覆盖。**净：live 单-handoff plumbing/co-tenancy/IPC 全通，token-exact 当前卡在 redundant-weights HBM 与 per-layer KV/live A/B。**
+> - **清理干净**：sidecar+vLLM killed、exporters 8/8 存活、卡回 44%、207001 未 force-reset（无 poison）。
+
+> **2026-07-15 (集成 groundwork，历史里程碑) 🟡 N=1 whole-net → vLLM live single-handoff 组件落地 [Phase 20/M5-M6]**：
+> 本段只记录 live 集成组件的形成过程；当时尚未完成的 standalone 稳定性状态已经被
+> 2026-07-16 的 canonical P42 20/20 结论覆盖，不再作为当前 gate。
+> - **`tools/step3p5/whole_decode_holder.py`（新）= `WholeDecodeHolder`**：把 harness 的 compile→prepare→import_weights→rt.run 抽成常驻 holder（build+prepare 一次，`run()` 复用 rt）。arg 顺序逐字对齐原 harness，device compile OK。
+> - **`tools/step3p5/whole_decode_sidecar.py`（新）= sidecar serve + AF_UNIX 协议**：常驻 holder + length-prefixed self-describing 帧（JSON header + bf16-safe tensor blob）+ `WholeDecodeClient`。serve loop 解耦为 `decode_fn`。**offline `--selftest` round-trip PASS**（协议/bf16 编解码/client-server，无 device）。
+> - **`tools/step3p5/vllm_monkey_patch.py::_pypto_full_forward`（改）**：从 fail-closed 改为经 `WholeDecodeClient` 驱动 sidecar；collective-consistent fallback（sock absent 全 rank 一致回退，避免 broadcast 死锁）+ rank-0 drive + TP-broadcast replicated next_hidden。**compile OK**（live 验证 gated）。
+> - **`pypto/runtime/.../comm_hccl.cpp`（改）= `SIMPLER_COMM_NO_HCCL` co-tenancy patch**：comm_init 跳过 HcclGetRootInfo/HcclCommInitRootInfo（保 run_token+file_barrier）、comm_barrier null-comm no-op、alloc_domain 放宽 null 检查；flag-OFF 无回归，flag-ON bootstrap 通过，后续真 vLLM 共存也已验证。
+> - **`tools/step3p5/pypto_whole_decode_backend.py`（新）= 容器 self-contained full-mode backend**：内联 BATCH/HIDDEN + 内联 socket client（与 sidecar 协议逐字一致）+ `_full_forward`（collective fallback + rank-0 drive + broadcast）+ tail compute_logits + `install/uninstall/status/maybe_autoload`（sitecustomize `PYPTO_WHOLE_DECODE=1`，容器无 pypto-lib mount 用）。**offline py_compile + status() PASS**（vLLM step3p5 可 import）。
+> - **剩余 gate（device/live）**：(1) whole-net 从共享 ctx=1 KV 改为 per-layer paged-KV bridge，并传真实 attention metadata；(2) 消除 vLLM/exporter 冗余权重，解决 3-way HBM；(3) 完成 live A/B token-exact。当前不得声称 serving 集成已经完成。
 
 > **2026-07-12 (续¹²) ✅✅✅ Blocker B 解除：N=1 整网 42 层真 W8A8 IPC device 跑通干净（3.48s）[Phase 27]**：
 > **文档假设（Blocker B = IPC VA 冲突）被 device 证伪，真根因 = gate_topk mrgsort 级联 bug。**
@@ -309,6 +360,8 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 | **2.0（Phase 20）** | vLLM monkey-patch e2e — 整模型 patch `Step3p5Model.forward`；单卡/TP=8 mixed/full PyPTO runner 接入 | 🟡 **待实现**；dump-based 精度 blocker 已清，但 production backend 未接 | [`phases/20-vllm-backend-monkey-patch.md`](phases/20-vllm-backend-monkey-patch.md) | 3-4 周 |
 | **2.1（Phase 21）** | 与 vLLM 原生精度对比 harness；L1/L2/L3 三层 | ✅ **dump-based 精度闭环完成**（BF16 decode、W8A8 decode、W8A8 prefill）；待 Phase20 backend 后做在线 L1/L2/L3 gate | [`phases/21-precision-validation.md`](phases/21-precision-validation.md) | 1-2 周补在线 gate |
 | **2.2（Phase 22）** | Perf baseline + 两轮优化；TP=8 多卡 | 📐 设计已落；gate Phase 21 + 2 个硬 blocker | [`phases/22-perf-baseline.md`](phases/22-perf-baseline.md) | 6-8 周 |
+| **2.7（Phase 27）** | N=1 单 `@pl.program` whole-net standalone | ✅ **canonical P42 完成**：0162 native W8A8/KV-IPC pull+pull 20/20，commit `0e7a0fdd` | [`phases/27-n1-whole-net-fusion.md`](phases/27-n1-whole-net-fusion.md) | standalone gate closed |
+| **2.8（Phase 28）** | N=1 whole-net → vLLM live single-handoff | 🟡 standalone gate 已清；per-layer KV、redundant-weight/3-way HBM、live token-exact A/B 待完成 | [`phases/28-n1-live-integration.md`](phases/28-n1-live-integration.md) | dedicated live session |
 
 **到 v1.0 production decode 的总目标**：自 2026-06-22 起约 12-16 周
 （含 gate 任务的并行投入）。
@@ -603,6 +656,7 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler（submodule） | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------------------|-----------|
+| 2026-07-16 | N=1 standalone canonical closure：0162 P42 native W8A8/KV-IPC pull+pull 20/20 `argmax=303`，512B signal isolation，generator byte round-trip PASS | `stepfun/develop:5e619dc7`（本轮未改） | `feat/whole-net-n1-fusion:0e7a0fdd` | `main:ecb6c303`（本轮未改） | `main:72ada0a1`（本轮未改） | `n1fusion-base:98ce22a6`（本轮未改） | v0.49 |
 | 2026-07-12 | on-device head-gate 恢复（matmul_acc N=16 修复）→ 整网 per-layer gate_r 解除 blocker；whole_decode_faithful_real TP=8 COMPILE OK；L1 A/B 暴露 pre-existing attn NaN | （未改本 session） | `feat/whole-net-n1-fusion:f07da3b`（attention_full/swa Scope 1.f on-device gate + gate_r=block-diag R + 3 probe） | （未改） | （未改） | （未改） | v0.49 |
 | 2026-07-10 | tmov 修复 + 3-scalar layer_idx split（整网多层 gating blocker）committed + push fork stepfun/develop | `stepfun/develop:5e619dc7` | `stepfun/develop:47c260e3`（`d3075ac9` tmov chunk64 + `8b4bf3fa` 3-scalar split + `47c260e3` ST arity；fork `b511da0→47c260e`） | `main:ecb6c303` | `main:72ada0a1` | `71e39623` | v0.49 |
 | 2026-07-07 | MoE-block 精度全 PASS 合并到集成分支 + import_ipc 全网 push + 0162/fork 对齐（L44 shared-swiglu16 clamp + router_bias BF16 补齐到 backend/worker 线；三仓 push；0162 rebase 到最新） | `stepfun/develop:be90f992`（DeviceTensor.__getitem__ slicing + distributed_runner import_ipc glue；submodule→simpler 1aa6efb） | `stepfun/develop:1a6c634`（L44 精度修复 cherry-pick 到 bb9e683 merge 线：routed a2a + INT8 + shared clamp `2b00bec` + router_bias BF16 `1a6c634`） | `stepfun/develop:e25732f0`（未改） | `stepfun/develop:da011a3d`（未改） | `stepfun/develop:1aa6efb`（import_ipc device-IPC key import `c236194`/rebased `1e55bba` + timeout 实验 + comm PID-whitelist fix `25a0544`） | `v0.45` |
@@ -624,8 +678,10 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | # | Blocker | 严重度 | gate 什么 | Owner | 详情 |
 |--:|---------|--------|-----------|-------|------|
+| N1-S | **N=1 standalone random stall** | ✅ RESOLVED 2026-07-16 | ~~standalone P42 release~~ → 0162 20/20 `argmax=303`，commit `0e7a0fdd` | team-lead | [`N1-CANONICAL-TEST.md`](N1-CANONICAL-TEST.md) |
+| N1-L | **Phase 28 live：per-layer KV + redundant-weight/3-way HBM** | 🔴 Active | live single-handoff token-exact A/B | team-lead | [`phases/28-n1-live-integration.md`](phases/28-n1-live-integration.md) |
 | G4 | **co-tenancy：whole-decode worker HCCL world 与 vLLM 同卡冲突** | ✅ RESOLVED (dispatch) | ~~live single-handoff~~ → 已解，`SIMPLER_COMM_NO_HCCL=1` | team-lead | [`deployment/cotenancy-simpler-no-hccl.md`](deployment/cotenancy-simpler-no-hccl.md) |
-| 0 | **0234 节点级跨卡 IPC poison（507899 ImportByKey）** | 🔴 基础设施 | **0234 上所有多卡 device 运行**（N=1 dispatch / Option-C 链 / MoE 8 卡） | 需 host 级 reset/reboot | [`blockers.md`](blockers.md) §NEW 2026-07-10 |
+| 0 | **0234 历史跨卡 IPC poison（507899 ImportByKey）** | 🟡 历史/待复核 | 不再 gate 0162 N=1 standalone；只在复用 0234 时复核 | 需 0234 专项 owner | [`blockers.md`](blockers.md) §NEW 2026-07-10 |
 | 1 | Phase 20 production backend 未接入 | 🟡 功能 | 真实 vLLM 请求走 PyPTO runner | 未指派 | `phases/20-vllm-backend-monkey-patch.md` |
 | 2 | Prefill MoE L1 overflow（TASK-29） | 🟡 功能/性能 | 真实 PyPTO NPU prefill kernel + TTFT | 未指派 | [`blockers.md`](blockers.md) §2 |
 | 3 | head_gate × 1 旁路 — vLLM 原生语义偏离 | 🟡 精度 | 在线 backend L1 layer parity | TASK-L（pto-isa 上游） | [`blockers.md`](blockers.md) §1 |
