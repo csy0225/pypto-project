@@ -1,0 +1,4 @@
+interface:
+  display_name: "PyPTO Whole-Net Hang Debug"
+  short_description: "用日志、寄存器和生成物定位整网 kernel hang"
+  default_prompt: "Use $pypto-whole-net-hang-debug to locate a PyPTO whole-network stall from isolated runtime logs, scheduler registers, optional same-image AICore PC mapping, and buffer-layout evidence."

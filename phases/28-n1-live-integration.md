@@ -6,11 +6,13 @@
 > whole-net decode **接进 vLLM serving 路径**（M5/M6：live single-handoff A/B）。
 > 严格遵循 SKILL §H：**N=1 单 `@pl.program` 是唯一生产形态**（多程序永久排除）。
 >
-> **组件 pin（2026-07-16）**：pypto-lib `feat/whole-net-n1-fusion` @
-> `0e7a0fddc90c4f2348f1d59e015fb817a0877a02`；whole-net 底座 =
-> `dispatch fixed-slot pull + combine pull`，standalone P42 20/20
-> `argmax=303`；simpler runtime = `n1fusion-base:98ce22a6` +
-> `SIMPLER_COMM_NO_HCCL` co-tenancy patch。
+> **组件 pin（2026-07-16）**：standalone 模型源码为 pypto-lib
+> `feat/whole-net-n1-fusion` @ `0e7a0fddc90c4f2348f1d59e015fb817a0877a02`；
+> whole-net 底座 = `dispatch fixed-slot pull + combine pull`，0162
+> standalone P42 exact-source 20/20 `argmax=303`。当前可复现 clean runtime
+> stack 为 pypto `n1fusion-base:e277de9f` + simpler
+> `n1fusion-base:36957c6b`；两者是后续 formalize 的 clean pins，不要将其
+> 误写成旧 20-run 当时直接冻结的 commits。
 >
 > **提交边界**：`0e7a0fdd` 只发布 standalone 核心的
 > `decode_layer.py`、`moe.py`、`_gen_faithful_real.py`。下表中的

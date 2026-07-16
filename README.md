@@ -45,6 +45,7 @@
 | 哪些卡住了 / 帮忙解什么？ | [`blockers.md`](blockers.md) |
 | 在新机器上怎么部署？ | [`deployment/`](deployment/) |
 | 项目架构怎么拼起来的？ | [`architecture/`](architecture/) |
+| 整网程序 hang / 507018 怎么定位？ | [`.claude/skills/pypto-whole-net-hang-debug/SKILL.md`](.claude/skills/pypto-whole-net-hang-debug/SKILL.md)（通用流程 + N1 案例 + 解析脚本） |
 | Phase 01-19 的原型开发是怎么走过来的？ | [`archive/prototype-phase-01-19-summary.md`](archive/prototype-phase-01-19-summary.md) |
 | 写 pypto kernel 时有哪些坑？ | `pypto-lib/docs/known-pypto-pitfalls.md`（在 pypto-lib 仓） |
 | 开发工作流有什么坑（pyc / 环境 / git）？ | `pypto-lib/docs/dev-workflow-gotchas.md`（在 pypto-lib 仓） |

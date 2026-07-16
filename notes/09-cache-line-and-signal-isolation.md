@@ -332,19 +332,23 @@ all relative offsets % 512 = 0
 window size = 766525440B, % 512 = 0
 ```
 
-同一最终源码与 fresh exporter pool 连续运行 20 次：
+release commit `0e7a0fdd` exact-source 与 fresh exporter pool 连续运行 20 次：
 
 ```text
 20/20 PASS
 each argmax = 303
-runtime min/mean/max = 2.53 / 2.5685 / 2.62s
+runtime min/mean/max = 2.50 / 2.5605 / 2.62s
 ```
 
-最终整理后的 smoke 也通过（`2.57s`, `argmax=303`）。20-run 和 final
-smoke 的 dmesg 时间窗均没有新增 `507018`、`running-stalled`、
-`stranded CQE`、devmm/page fault、illegal VA/instruction 或 DMA/UB fault。
+最终整理后的 smoke 也通过（`2.57s`, `argmax=303`）。20 个逐
+worker-run dmesg 窗口与 smoke worker-run 窗口均没有新增 `507018`、
+`running-stalled`、`stranded CQE`、devmm/page fault、illegal VA/instruction
+或 DMA/UB fault。fresh exporter pool teardown 后 outer 窗口新增 2 条
+`stranded cqe`，属于 cleanup 边界，不归因于 whole-net worker kernel。
 
-结论必须保持谨慎：512B signal isolation 相对历史随机 stall 是**强因果
-证据**，但不是 bit-level hardware proof；不能据此单独声称已经证明某个
-signal bit、某个 TPUT 或某个 stuck kernel 是唯一根因。完整测试入口见
+结论必须保持谨慎：在 0162 上，512B signal isolation 与历史随机 stall
+消失具有**强关联**，并由 exact-model-source 20/20 与最终三仓 clean-pin
+smoke 支持；但现有记录不是 matched 单变量因果证明，也不是跨机器充分条件或
+bit-level hardware proof。不能据此单独声称已经证明某个 signal bit、某个
+TPUT 或某个 stuck kernel 是唯一根因。完整测试入口见
 [`../N1-CANONICAL-TEST.md`](../N1-CANONICAL-TEST.md)。

@@ -28,14 +28,14 @@ TOP5=[303, 9592, 768, 1043, 410]
 
 ```text
 /data/chensiyu/hw_project/pypto/workspace/logs_n1/signal512/
-  signal512_p42_20_20260716_220004
+  signal512_p42_20_20260717_001135
 ```
 
 运行时间：
 
 ```text
-min=2.53s
-mean=2.5685s
+min=2.50s
+mean=2.5605s
 max=2.62s
 ```
 
@@ -71,7 +71,23 @@ models/step3p5/moe.py
 tools/step3p5/_gen_faithful_real.py
 ```
 
-0162 工作树在提交后 clean；所有旧 `*.bak.*` 和临时 probe 已清理。
+当次 `pypto-lib` 三个 tracked release 文件与 `0e7a0fdd` 一致；这不代表
+当时完整三仓 runtime 已形成 clean manifest。历史 20-run 仍依赖 pypto /
+simpler 的未提交支持。后续已将其 formalize 并推送为：
+
+```text
+pypto   e277de9f2a55a686956d66933301204520bd7374
+simpler 36957c6b56700ecba3aeb8dbbedd6240594e01de
+```
+
+最终三仓 clean-pin smoke：
+
+```text
+.../release_manifest/final_stack_smoke_20260717_015635
+rc=0, 2.58s, argmax=303, worker-window relevant dmesg=0
+```
+
+本地 live/debug backup/probe 未混入 standalone release。
 
 ## 3. 核心修复
 
@@ -155,7 +171,7 @@ PRECOMMIT_ROUNDTRIP=PASS
 
 ## 5. dmesg 与 stall 边界
 
-20 次 run 的 before/after diff 只有 callback-suppressed 信息；没有：
+20 个逐 worker-run dmesg before/after 窗口没有：
 
 ```text
 devmm/page fault
@@ -166,7 +182,9 @@ running-stalled
 stranded CQE
 ```
 
-最终 smoke 同样无新增相关 dmesg。
+最终 smoke 的 worker-run 窗口同样无新增相关 dmesg。fresh exporter
+pool teardown 后 outer 窗口新增 2 条 `stranded cqe`（dev8/dev11 exporter）；
+它们不在任何 worker-run 窗口内，必须记录为 cleanup 边界，不能归因给整网 kernel。
 
 历史失败 build 曾映射为：
 
@@ -182,8 +200,9 @@ device 15: _dispatch_pull
 
 可以写：
 
-> 512B signal isolation 是最终最小 layout A/B 变量；应用后 canonical
-> 从历史随机 stall 收敛为 fresh pool 20/20。
+> 在 0162 的固定测试环境中，512B signal isolation 是最终最小 layout
+> A/B 变量，并与历史随机 stall 消失强关联；`0e7a0fdd` exact-model-source
+> 完成 fresh pool 20/20。该结论不是 matched 单变量因果证明，也不覆盖 0234。
 
 不应写：
 
@@ -191,7 +210,8 @@ device 15: _dispatch_pull
 
 ## 7. 下一阶段
 
-standalone canonical stall gate 已关闭。下一阶段是 live serving：
+0162 scope 的 standalone canonical stall gate 已关闭。0234 项目记录中的
+stall 仍待恢复访问并按完整三仓/runtime manifest 复核。下一阶段是 live serving：
 
 - per-layer KV bridge；
 - 去除 vLLM/exporter 冗余权重；

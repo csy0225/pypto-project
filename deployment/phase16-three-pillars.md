@@ -103,4 +103,5 @@ test -f /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && echo OK
   主机上安装/恢复这个绑定
 - [`version-matrix.md`](version-matrix.md) —— 完整 5 仓库 + 工具链 pin
   兼容
-- [`../blockers.md`](../blockers.md) §5 —— 0234 driver+firmware 升级未做
+- [`machine-recovery.md`](machine-recovery.md) —— 机器版本核验与恢复步骤；
+  0234 的旧“未升级”状态已经过时，不再列为 active blocker

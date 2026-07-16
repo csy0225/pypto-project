@@ -5,6 +5,30 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 
 **最后更新**：2026-07-16
 
+> **2026-07-16 runtime manifest 审计 + clean-pin formalize**：
+> - **旧 20-run 的真实范围**：`pypto-lib 0e7a0fdd` 模型源码 exact-match；
+>   pypto 当时为 `5e619dc7 + dirty runtime source`，simpler 当时为
+>   `98ce22a6 + dirty runtime source`。因此不得把旧 20-run 写成三仓 clean
+>   pin 上直接完成。
+> - **相关 standalone 依赖已提交并推送**：
+>   pypto-lib `0e7a0fdd`、pypto `e277de9f`、simpler `36957c6b`。
+>   0162 三个 release 工作树均 clean；本地 live/debug WIP 仍隔离存在，未混入
+>   standalone release。
+> - **最终 clean-pin smoke**：0162 日志目录
+>   `workspace/logs_n1/release_manifest/final_stack_smoke_20260717_015635`
+>   （目录名来自 0162 机器时间），固定 P42 pull+pull、token 6127、
+>   native W8A8 IPC/KV IPC；`rc=0`、`RUN done 2.58s`、`argmax=303`、
+>   `TOP5=[303,9592,768,1043,410]`。worker dmesg 窗口新增 relevant=0；
+>   outer 窗口在 exporter teardown 后新增 1 条 dev14 `stranded cqe`，归 cleanup。
+> - **0234 证据边界**：项目既有记录称该机只同步 pypto-lib 后 fresh canonical
+>   3/3 stall，但本次 `ssh infra@gpu-a910x-0234...` 返回
+>   `Permission denied (publickey,password)`，无法独立复核三仓、runtime
+>   binary 和环境。**只拉 pypto-lib 不是同一测试对象**，不得由此直接断言
+>   512B 在 0234 失效或已得到跨机器单变量结论。
+> - **live 组件边界**：本地 holder/sidecar/KV importer/backend 仍属于独立
+>   live WIP，未包含在 standalone 三仓 release 中；live token-exact A/B、
+>   per-layer KV 与 redundant-weight HBM 仍未完成。
+
 > **2026-07-16 ✅ Phase 27 standalone canonical stall gate 关闭；Phase 28 live serving 仍进行中**：
 > - **发布代码**：pypto-lib `feat/whole-net-n1-fusion` commit
 >   `0e7a0fddc90c4f2348f1d59e015fb817a0877a02`
@@ -13,26 +37,36 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 > - **固定准出组合**：gpu-a910x-0162、devices 8..15、`whole_decode_faithful_real`、
 >   `P_FAITHFUL_MOE_LAYERS=42`、token 6127、native W8A8 IPC weights、KV IPC、
 >   **dispatch fixed-slot pull + combine pull**。
-> - **canonical 稳定性与精度**：fresh exporter pool 连续 **20/20 PASS**，每次
->   `argmax=303`，runtime min/mean/max=`2.53/2.5685/2.62s`；20 次数值指纹一致。
->   日志：`workspace/logs_n1/signal512/signal512_p42_20_20260716_220004`。
+> - **canonical 稳定性与精度**：release commit `0e7a0fdd` exact-source 在
+>   fresh exporter pool 连续 **20/20 PASS**，每次 `argmax=303`，runtime
+>   min/mean/max=`2.50/2.5605/2.62s`；20 次数值指纹一致。
+>   日志：`workspace/logs_n1/signal512/signal512_p42_20_20260717_001135`
+>   （0162 机器时间标签）。
 > - **整理后复验**：`signal512_final_smoke_20260716_230225`，
->   `2.57s, argmax=303, FINAL_SMOKE=PASS`；20-run 与 final smoke 的 dmesg
->   时间窗均无新增 fault、`507018`、`running-stalled` 或 `stranded CQE`。
+>   `2.57s, argmax=303, FINAL_SMOKE=PASS`。exact-source 20-run 的 20 个逐
+>   worker-run dmesg 窗口均无新增 fault、`507018`、`running-stalled` 或
+>   `stranded CQE`；fresh exporter pool teardown 后 outer 窗口新增 2 条
+>   `stranded cqe`（dev8/dev11 exporter），已明确归入 cleanup 边界。
 > - **最终最小 layout A/B**：control signal logical view 仍为 `[8,1] INT32`
 >   （32B），physical allocation 从 32B 改为 **512B**；216/216 signals 为 512B，
->   相对 offset 全部 `%512=0`。这是相对历史随机 stall 的强因果证据，但不写成
->   某个 signal bit 或 PUSH/TPUT 已被硬件层证明为唯一根因。
+>   相对 offset 全部 `%512=0`。在 0162 上它与历史随机 stall 消失强关联，
+>   但不是 matched 单变量因果证明，也不写成跨机器充分条件或某个 signal bit /
+>   PUSH/TPUT 已被硬件层证明为唯一根因。
 > - **架构边界**：dispatch 生成 `recv_counts + inverse_map`；combine 直接消费
 >   dispatch-produced `inverse_map`；self 用 local load、peer 用 remote load；
 >   per-layer distinct communication buffers、signed tail、native INT8
 >   gate/up/down 全保留，禁止 BF16 dequant 权重回退。
 > - **generator gate**：真实 strip → regenerate → byte-compare 已通过：
 >   `PRECOMMIT_ROUNDTRIP=PASS`, `ROUNDTRIP_CMP_RC=0`。
-> - **当前 active blocker 已转移到 Phase 28 live serving**：per-layer paged-KV
->   bridge；消除 vLLM/exporter 重复权重并解决 3-way HBM；完成 live
->   single-handoff token-exact A/B。**standalone random hang 不再是 active blocker，
->   但 live serving 也尚未完成。**
+> - **排查方法沉淀**：新增
+>   [`.claude/skills/pypto-whole-net-hang-debug/`](.claude/skills/pypto-whole-net-hang-debug/)
+>   ，包含通用 stall 分类、TASK/CLUSTER/COND、task→kernel→生成源码映射、
+>   可选 AICore PC 路径、buffer/layout 审计、证据解析脚本和本次 N1 完整案例。
+> - **状态边界**：0162 standalone release gate 已关闭；但项目记录中在
+>   pypto-lib 三个 release 文件与 `0e7a0fdd` byte-match 后的 0234 fresh
+>   canonical 3/3 stall 仍是独立 active blocker，
+>   本次 session 无法通过 SSH 独立复核。Phase 28 live serving 仍另有
+>   per-layer paged-KV bridge、重复权重/3-way HBM 和 token-exact A/B。
 > - 唯一 standalone 测试口径见 [`N1-CANONICAL-TEST.md`](N1-CANONICAL-TEST.md)；
 >   下一会话边界见 [`NEXT-SESSION-N-1.md`](NEXT-SESSION-N-1.md)。
 
@@ -656,7 +690,8 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler（submodule） | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------------------|-----------|
-| 2026-07-16 | N=1 standalone canonical closure：0162 P42 native W8A8/KV-IPC pull+pull 20/20 `argmax=303`，512B signal isolation，generator byte round-trip PASS | `stepfun/develop:5e619dc7`（本轮未改） | `feat/whole-net-n1-fusion:0e7a0fdd` | `main:ecb6c303`（本轮未改） | `main:72ada0a1`（本轮未改） | `n1fusion-base:98ce22a6`（本轮未改） | v0.49 |
+| 2026-07-16 | N=1 standalone runtime manifest formalize：相关 pypto/simpler dirty runtime 支持已提交；最终 clean stack 在 0162 P42 pull+pull smoke `rc=0,argmax=303` | `n1fusion-base:e277de9f` | `feat/whole-net-n1-fusion:0e7a0fdd` | `main:ecb6c303` | `main:72ada0a1` | `n1fusion-base:36957c6b` | v0.49 |
+| 2026-07-16 | N=1 model exact-source canonical closure：`0e7a0fdd` 在 0162 P42 native W8A8/KV-IPC pull+pull 20/20 `argmax=303`；当时 runtime 实际为 pypto `5e619dc7` + dirty support、simpler `98ce22a6` + dirty support，后由上一行 clean pins formalize | `5e619dc7 + dirty runtime source` | `feat/whole-net-n1-fusion:0e7a0fdd` | `main:ecb6c303` | `main:72ada0a1` | `98ce22a6 + dirty runtime source` | v0.49 |
 | 2026-07-12 | on-device head-gate 恢复（matmul_acc N=16 修复）→ 整网 per-layer gate_r 解除 blocker；whole_decode_faithful_real TP=8 COMPILE OK；L1 A/B 暴露 pre-existing attn NaN | （未改本 session） | `feat/whole-net-n1-fusion:f07da3b`（attention_full/swa Scope 1.f on-device gate + gate_r=block-diag R + 3 probe） | （未改） | （未改） | （未改） | v0.49 |
 | 2026-07-10 | tmov 修复 + 3-scalar layer_idx split（整网多层 gating blocker）committed + push fork stepfun/develop | `stepfun/develop:5e619dc7` | `stepfun/develop:47c260e3`（`d3075ac9` tmov chunk64 + `8b4bf3fa` 3-scalar split + `47c260e3` ST arity；fork `b511da0→47c260e`） | `main:ecb6c303` | `main:72ada0a1` | `71e39623` | v0.49 |
 | 2026-07-07 | MoE-block 精度全 PASS 合并到集成分支 + import_ipc 全网 push + 0162/fork 对齐（L44 shared-swiglu16 clamp + router_bias BF16 补齐到 backend/worker 线；三仓 push；0162 rebase 到最新） | `stepfun/develop:be90f992`（DeviceTensor.__getitem__ slicing + distributed_runner import_ipc glue；submodule→simpler 1aa6efb） | `stepfun/develop:1a6c634`（L44 精度修复 cherry-pick 到 bb9e683 merge 线：routed a2a + INT8 + shared clamp `2b00bec` + router_bias BF16 `1a6c634`） | `stepfun/develop:e25732f0`（未改） | `stepfun/develop:da011a3d`（未改） | `stepfun/develop:1aa6efb`（import_ipc device-IPC key import `c236194`/rebased `1e55bba` + timeout 实验 + comm PID-whitelist fix `25a0544`） | `v0.45` |
@@ -678,14 +713,13 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | # | Blocker | 严重度 | gate 什么 | Owner | 详情 |
 |--:|---------|--------|-----------|-------|------|
-| N1-S | **N=1 standalone random stall** | ✅ RESOLVED 2026-07-16 | ~~standalone P42 release~~ → 0162 20/20 `argmax=303`，commit `0e7a0fdd` | team-lead | [`N1-CANONICAL-TEST.md`](N1-CANONICAL-TEST.md) |
+| N1-S-0162 | **N=1 standalone release gate（0162 scope）** | ✅ RESOLVED 2026-07-16 | `0e7a0fdd` exact-source P42 pull+pull，20/20 `argmax=303` | team-lead | [`N1-CANONICAL-TEST.md`](N1-CANONICAL-TEST.md) |
+| N1-S-0234 | **0234 上 pypto-lib 同步后的 whole-net stall（完整对象未确认）** | 🔴 Active / 未独立复核 | 重新取得 SSH 后核对三仓、runtime binary、环境并重跑 canonical | team-lead | [`blockers.md`](blockers.md) §N1-S-0234 |
 | N1-L | **Phase 28 live：per-layer KV + redundant-weight/3-way HBM** | 🔴 Active | live single-handoff token-exact A/B | team-lead | [`phases/28-n1-live-integration.md`](phases/28-n1-live-integration.md) |
 | G4 | **co-tenancy：whole-decode worker HCCL world 与 vLLM 同卡冲突** | ✅ RESOLVED (dispatch) | ~~live single-handoff~~ → 已解，`SIMPLER_COMM_NO_HCCL=1` | team-lead | [`deployment/cotenancy-simpler-no-hccl.md`](deployment/cotenancy-simpler-no-hccl.md) |
-| 0 | **0234 历史跨卡 IPC poison（507899 ImportByKey）** | 🟡 历史/待复核 | 不再 gate 0162 N=1 standalone；只在复用 0234 时复核 | 需 0234 专项 owner | [`blockers.md`](blockers.md) §NEW 2026-07-10 |
 | 1 | Phase 20 production backend 未接入 | 🟡 功能 | 真实 vLLM 请求走 PyPTO runner | 未指派 | `phases/20-vllm-backend-monkey-patch.md` |
 | 2 | Prefill MoE L1 overflow（TASK-29） | 🟡 功能/性能 | 真实 PyPTO NPU prefill kernel + TTFT | 未指派 | [`blockers.md`](blockers.md) §2 |
 | 3 | head_gate × 1 旁路 — vLLM 原生语义偏离 | 🟡 精度 | 在线 backend L1 layer parity | TASK-L（pto-isa 上游） | [`blockers.md`](blockers.md) §1 |
-| 4 | 0234 driver+firmware 升级未做 | 🟢 基础设施 | 备用部署机 | 未指派 | [`blockers.md`](blockers.md) §3 |
 | 5 | MTP 集成进 `decode_fwd` | 🟢 Deferred | speculative decoding 吞吐 | 未指派 | [`blockers.md`](blockers.md) §6 |
 
 ---
@@ -713,8 +747,16 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 ## `gpu-a910x-0234` 当前状态
 
+> **2026-07-16 审计边界**：本次尝试
+> `ssh infra@gpu-a910x-0234.host.platform.shaipower.com` 返回
+> `Permission denied (publickey,password)`。下文的 0234 运行结果来自既有项目记录，
+> 尚未由本次 session 独立复核；不要把“只拉 pypto-lib”或“core==commit”的
+> 记录当成完整三仓/build/environment manifest。
+
 **已升级（2026-07-10 核对）**：driver `25.5.2` / firmware `7.8.0.7.220` / CANN `9.0.0-beta.1`（三剑合璧齐）。
 Phase 16 cap 缺口**不再是** 0234 的问题（旧记录 25.5.1/7.8.0.6.201 已过时）。0234 曾成功跑多卡
 （2026-06-24 MR-golden dense 8 卡 PASS、2026-06-29 L3 allreduce `max|out-expected|=0`）。
-**当前（2026-07-10）多卡 device 被节点级跨卡 IPC poison 卡住**（507899 ImportByKey，见上方 Blocker #0）——
-是运行期 driver IPC 状态卡死，不是 cap 缺口；需 host 级 reset/reboot。
+**历史纠错**：2026-07-10 曾将 507899 误判为节点级 IPC poison；后续 reboot
+未解决，clean runtime rebuild + 关闭 `SIMPLER_ENABLE_PTO_SDMA_WORKSPACE`
+后 baseline 恢复，证明实际是 stale/mismatched runtime 与配置问题。当前 0234
+因 SSH 权限不可达，既不能继续标为 poisoned，也不能标为已验证健康。

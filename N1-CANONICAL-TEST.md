@@ -107,6 +107,54 @@ argmax=303
 ```
 
 稳定性发布 gate 为同一份最终源码、fresh exporter pool 下连续 20 次全部满足。
+历史候选版本的 2026-07-16 20-run 与最终 release commit 的 source SHA 不同；
+该证据缺口已通过对 `0e7a0fdd` 重新执行完整 20-run 补齐。
+
+### 3.3.1 完整复现对象不是只有 pypto-lib
+
+canonical 命令实际从 source/editable 路径加载：
+
+```text
+pypto-lib 模型/生成器
+pypto editable/source
+simpler/runtime editable/source
+runtime build artifacts / .so
+CANN / PTOAS / pto-isa / Python 环境
+checkpoint / devices / ring 环境变量
+```
+
+历史 exact-source 20-run 的**模型源码**已绑定到 `pypto-lib 0e7a0fdd`，但
+运行时的实际状态是：
+
+```text
+pypto HEAD 5e619dc7 + 未提交的 stacked sub-view / import_ipc_all 源码
+simpler HEAD 98ce22a6 + 未提交的 child-process ACL IPC import 源码
+```
+
+因此该 20-run 证明的是 0162 上模型 release 与当时实际 runtime source 的组合，
+不能误写成“三仓 clean pin 上直接跑了 20 次”。
+
+审计后已将这些实际运行依赖 formalize 为可复现的 clean pin：
+
+```text
+pypto-lib  0e7a0fddc90c4f2348f1d59e015fb817a0877a02
+pypto      e277de9f2a55a686956d66933301204520bd7374
+simpler    36957c6b56700ecba3aeb8dbbedd6240594e01de
+pto-isa    ecb6c303f797749f811a494742c3c08156aacabb
+PTOAS src  72ada0a1
+ptoas-bin  v0.49
+```
+
+其中 pypto 提供 `StackedDeviceTensor` 分层连续 sub-view 和
+`DistributedWorker.import_ipc_all`；simpler 在 forked chip child 的 ACL
+context 内执行 external IPC import。最终 clean pin 另有独立 canonical smoke，
+见 §4；不要把它与历史 20-run 的 runtime commit 状态混为一谈。
+
+所以在 0234 **只执行 `git pull pypto-lib` 不构成同一测试对象**。即使
+`decode_layer.py`、`moe.py` 和 generator byte-match，也可能缺少 stacked
+weight slicing、`import_ipc_all` child-context 路径或使用不同 runtime binary。
+在三仓 clean snapshot 和 binary manifest 对齐前，不得把跨机器差异直接归因于
+model commit 或 512B signal isolation。
 
 ### 3.4 清理
 
@@ -117,13 +165,13 @@ rm -f "$OUT"/ready.rank* "$OUT"/STOP
 
 测试结束后确认设备 8–15 无残留运行进程。
 
-## 4. 当前 release 证据（2026-07-16）
+## 4. 当前 release 证据
 
-20-run 目录：
+release commit `0e7a0fdd` exact-source 20-run 目录：
 
 ```text
 /data/chensiyu/hw_project/pypto/workspace/logs_n1/signal512/
-  signal512_p42_20_20260716_220004
+  signal512_p42_20_20260717_001135
 ```
 
 结果：
@@ -132,7 +180,7 @@ rm -f "$OUT"/ready.rank* "$OUT"/STOP
 FINAL pass=20/20 rc=0
 每次 argmax=303
 TOP5=[303, 9592, 768, 1043, 410]
-runtime min/mean/max = 2.53 / 2.5685 / 2.62 s
+runtime min/mean/max = 2.50 / 2.5605 / 2.62 s
 ```
 
 20 次数值指纹一致：
@@ -144,7 +192,15 @@ max|h_mid|=294.0000
 max|logits|=14.0506
 ```
 
-最终整理后 smoke：
+日志记录的源码 SHA 与 release commit 一致：
+
+```text
+decode_layer.py          9b6c83ca915ca9fcb5b02223e1a733c1c28fabca45dec6019b3b41a5f3fd7d5d
+moe.py                   8a3670a047aff5b5af5d352446d8a35c866708f0eccba2b70904ad18896d5a2a
+_gen_faithful_real.py    bf65295b2167bd96516e8ef2cebd97b69ebc7d46a86e13d304180ebf6a514010
+```
+
+先前整理后 smoke：
 
 ```text
 log = .../signal512_final_smoke_20260716_230225
@@ -153,7 +209,7 @@ argmax = 303
 FINAL_SMOKE = PASS
 ```
 
-20-run 和最终 smoke 的 dmesg 时间窗均未新增：
+20-run 的 20 个逐 worker-run dmesg 窗口与 smoke 的 worker-run 窗口均未新增：
 
 ```text
 devmm/page fault
@@ -163,6 +219,61 @@ DMA/UB fault
 running-stalled
 stranded CQE
 ```
+
+补充边界：exact-source 20-run 在 20 个 worker 全部结束后关闭 fresh exporter
+pool，outer before/after 窗口在 exporter teardown 阶段新增 2 条
+`stranded cqe`（dev8/dev11 exporter PID）；20 个逐 run 窗口均为 0。
+因此它们记录为 exporter cleanup 现象，不归因于 whole-net worker kernel，
+也不得写成“整个进程生命周期 dmesg 绝对无任何相关行”。
+
+### 4.1 最终三仓 clean pin smoke
+
+三仓 clean pin formalize 完成后，在 0162 对最终 manifest 独立执行 canonical
+P42 smoke：
+
+```text
+log:
+  /data/chensiyu/hw_project/pypto/workspace/logs_n1/release_manifest/
+  final_stack_smoke_20260717_015635
+
+pypto-lib = 0e7a0fddc90c4f2348f1d59e015fb817a0877a02
+pypto     = e277de9f2a55a686956d66933301204520bd7374
+simpler   = 36957c6b56700ecba3aeb8dbbedd6240594e01de
+
+P42 / dispatch pull / combine pull
+token 6127 / native W8A8 IPC / KV IPC
+rc=0
+RUN done 2.58s
+argmax=303
+TOP5=[303, 9592, 768, 1043, 410]
+RESULT=REAL_WEIGHT_IPC_RUN_CLEAN
+worker-window added relevant dmesg=0
+```
+
+outer 窗口在 worker 完成、exporter teardown 后新增 1 条 dev14 exporter
+`stranded cqe`；它不在 worker 执行窗口内，按 cleanup 现象归档。
+
+该 clean-pin smoke 绑定的 runtime binary SHA256：
+
+```text
+libhost_runtime.so
+  7b29004b9d047d550ee6689120be83e650a3bcf39b196fd0ea112a3c6271891a
+libaicpu_kernel.so
+  62b8c2430abc9cafe257b758148c22fc1ab6da1085b0a103ae7bc465c57ca390
+libsimpler_aicpu_dispatcher.so
+  1b4b8467f0c899af64ebcd2f0a98e83b89160dca32177d0baecebddd3be4f973
+_task_interface.cpython-311-x86_64-linux-gnu.so
+  318510dfc2a55b27749609fd56850657b77691bc4078d6a7064f6451076f2c53
+```
+
+相关 focused unit tests：
+
+```text
+127 passed
+```
+
+覆盖 `DeviceTensor`/`StackedDeviceTensor` 分层 view、
+`DistributedWorker.import_ipc_all` 和 simpler child IPC import。
 
 ## 5. 发布前静态与生成器 gate
 
@@ -203,6 +314,8 @@ ROUNDTRIP_CMP_RC=0
 根因表述必须保持严谨：
 
 - 32B → 512B control-signal physical isolation 是最终最小布局 A/B 变量；
-- 20/20 相对历史随机 stall 是强因果证据；
+- 在 0162 上，它与历史随机 stall 消失具有强关联，并由 exact-model-source
+  20/20 与最终 clean-pin smoke 支持；
+- 现有材料不是 matched 单变量因果证明，也不证明它是跨机器充分条件；
 - 不得把某个 PUSH/TPUT、某个 signal bit 或某个历史 kernel 位置写成已经由硬件层
   单独证明的唯一根因。

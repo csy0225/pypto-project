@@ -159,9 +159,9 @@ ROUNDTRIP_CMP_RC=0
 20-run：
 
 ```text
-.../signal512_p42_20_20260716_220004
+.../signal512_p42_20_20260717_001135
 20/20 argmax=303
-runtime 2.53/2.5685/2.62s
+runtime 2.50/2.5605/2.62s
 ```
 
 最终 smoke：
@@ -171,7 +171,7 @@ runtime 2.53/2.5685/2.62s
 2.57s, argmax=303
 ```
 
-dmesg 时间窗无 fault、507018、running-stalled 或 stranded CQE。
+20 个逐 worker-run dmesg 窗口无 fault、507018、running-stalled 或 stranded CQE；exporter teardown outer 窗口的 2 条 stranded CQE 单独记录为 cleanup。
 
 ## 8. 结论
 
