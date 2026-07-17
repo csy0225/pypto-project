@@ -37,8 +37,9 @@
 12. [完整准出验证](#12-完整准出验证)
 13. [保留项与因果边界](#13-保留项与因果边界)
 14. [设计阶段如何提前避免](#14-设计阶段如何提前避免)
-15. [可复用排查清单](#15-可复用排查清单)
-16. [原始证据索引](#16-原始证据索引)
+15. [整网项目启动准入标准与最佳实践](#15-整网项目启动准入标准与最佳实践)
+16. [可复用排查清单](#16-可复用排查清单)
+17. [原始证据索引](#17-原始证据索引)
 
 ## 1. 案例摘要
 
@@ -2650,7 +2651,911 @@ padding 行是否进入 route/reduction
 - generator round-trip；
 - final kernel source 中真实 fence/notify/load/store。
 
-## 15. 可复用排查清单
+## 15. 整网项目启动准入标准与最佳实践
+
+本节不是对本案例的又一次时间线复述，而是把本次长期排障暴露的问题转换成
+下一项目可以直接执行的开发门禁。目标不是承诺“以后绝不会有 bug”，而是：
+
+```text
+让架构错误在设计评审阶段暴露；
+让 shape、dtype、索引和 buffer 错误在单层/两层阶段暴露；
+让通信协议错误在最小跨 rank 对照中暴露；
+让生成器漂移在提交前暴露；
+让精度错误在逐算子/逐层阶段暴露；
+让概率性卡死在完整正式对象的重复测试中暴露；
+不要等到完整整网随机卡死后，才从 507018 重新猜根因。
+```
+
+这里定义的是**面向后续整网项目的增强标准**。它比本案例早期实际执行的流程
+更严格，例如要求最终 clean manifest 也完成重复正式测试；这不追溯改写本案例
+已有证据，只用于避免下一项目重复同类弯路。
+
+本节中的术语分工如下，后文不能混用：
+
+- **Gate（准入门）**：设计、实现或发布能否进入下一阶段的检查点；
+- **Level（验证级别）**：从静态审计到完整发布对象重复测试的测试梯度；
+- **SSOT（Single Source of Truth，唯一事实源）**：同一类当前决策只能有一份
+  active 文档，旧结论只能作为历史证据，不能继续充当执行入口；
+- **manifest（复现清单）**：源码、二进制、工具链、模型、机器、环境和命令的
+  完整绑定，详细解释见 §1.2。
+
+本节后续使用的硬件/编译缩写统一解释为：GM（Global Memory，设备全局内存）、
+UB（Unified Buffer，向量核片上统一缓存）、HBM（High Bandwidth Memory，
+设备高带宽显存）、L0A/L0B/L0C（矩阵核的片上输入/累加缓存）、DMA（Direct
+Memory Access，直接内存访问）、ISA（Instruction Set Architecture，指令集
+架构）、ABI（Application Binary Interface，二进制接口）和 DAG（Directed
+Acyclic Graph，有向无环依赖图）。CANN 指 Ascend 软件栈，PTOAS 指本项目设备
+代码使用的编译工具链；不要只写缩写而不记录具体版本。
+
+还必须区分“通用项目模板”和“当前项目既定架构”。模板允许记录一个项目已经
+批准的 program 边界，但不赋予 Agent 重新选择架构的权限。对本 N1 项目，
+**N=1 单个 `@pl.program` 是唯一生产形态，多程序永久排除**；后续 Agent 不得把
+多程序、逐层 host launch 或 resident tensor 串联重新作为卡死绕过方案。
+
+### 15.1 Agent 的总约束：先设计，后编码，证据强度决定结论强度
+
+接手一个新的整网项目时，Agent 必须遵守：
+
+1. **先读顶层设计约束。** 先确认 runtime、memory、task、dependency、
+   communication、shape、valid shape、layout 和 sharding 语义，再读模型局部
+   kernel。若顶层文档缺失或互相冲突，先记录环境/设计缺口，不允许用局部实现
+   猜测框架语义。
+2. **先冻结测试对象。** 在第一次编码前就定义最终模型深度、真实输入、batch、
+   padding、权重格式、KV 来源、并行方式、设备、数值 golden 和稳定性判据。
+3. **先画层边界和通信边界。** 先明确每层的输入、输出、producer、consumer、
+   ownership、数据类型、物理布局和最后使用者，再决定 kernel 如何拆分。
+4. **先建立 buffer ledger。** 没有 logical/physical size、alignment、
+   lifetime、初始化和 alias 记录的 buffer，不允许进入正式实现。
+5. **稳定性与精度是两个独立准入门。** 一次运行完成不能替代数值正确；一次
+   数值正确不能替代重复稳定。
+6. **坚持目标数据类型和目标通信架构。** 如果项目要求 native W8A8、IPC、
+   单程序整网或固定 pull/push 组合，不能通过 BF16 回退、H2D 替代、缩层、
+   retry 或 timeout 增大来宣布完成。
+7. **同一轮证据必须绑定。** task、kernel、生成源码、binary、日志、dmesg、
+   数值输出和 source hash 必须来自同一次 run/build；不能从不同历史运行拼接
+   一条“完整证据链”。
+8. **先做证伪实验。** 对任何根因候选，优先设计能推翻它的最小 A/B，而不是
+   不断给它增加解释。
+9. **结构性正确修改和最终 stall 变量分开记录。** 一个修改即使不是最后的
+   随机卡死根因，只要修复了真实 layer boundary、dtype、索引、初始化或生命周期
+   问题，就应保留；不能为了追求“最小最终 diff”把它删除。
+10. **文档必须跟随证据更新。** 结论发生升级、降级或证伪时，同一会话更新
+    active SSOT；不得把旧的 session prompt、过时“SOLVED”状态继续留作当前入口。
+
+Agent 的默认决策顺序应为：
+
+```text
+框架不变量
+-> 整网拓扑与已批准的 program 边界
+-> layer / communication boundary
+-> buffer / dtype / index / initialization contract
+-> kernel 设计与片上预算
+-> 生成器和编译产物
+-> 分阶段 device 验证
+-> 完整正式对象重复验证
+-> clean release manifest
+```
+
+若当前问题仍停在前一层，禁止跳到后一层。例如：
+
+- task 尚未派发时，不调 AICore kernel；
+- 没有 exact kernel 映射时，不讨论某条 ISA；
+- 单层数值尚未正确时，不用完整整网卡死掩盖数值问题；
+- 完整深度尚未重复通过时，不宣布 release ready。
+
+### 15.2 文档入口：只维护三个 active SSOT
+
+新的整网项目不要按 session 新建大量互相覆盖的“下一步提示词”。建议只维护：
+
+| 文档 | 创建时间 | 作用 |
+|---|---|---|
+| `<PROJECT>-DESIGN-AND-ADMISSION.md` | Day 0 | 唯一 active 设计 SSOT，包含项目定义、架构、layer contract、buffer ledger、通信协议、数值合同和 Gate 状态 |
+| `<PROJECT>-CANONICAL-TEST.md` | Day 0 | 唯一正式测试对象、命令、输入、golden、稳定性和 dmesg 判据 |
+| `<PROJECT>-STABLE-ENV.md` | 第一次 release qualification 前 | 冻结多仓 commit、binary hash、工具链、checkpoint、设备和环境变量 |
+
+原则：
+
+- 设计变化直接更新 design SSOT，不新建另一个相互竞争的 active 版本；
+- 每个 Gate 只在 SSOT 中有一个当前状态：`NOT_READY / READY / PASS / BLOCKED`；
+- 历史判断移入“被证伪/被替代结论”表，不保留为当前执行指令；
+- 原始日志和 build artifact 放到独立 run 目录，由文档记录路径和 hash；
+- 不能只记录模型仓库，必须记录所有实际参与运行的仓库和 runtime binary。
+
+### 15.3 Gate 0：项目定义准入
+
+**目的：** 在写任何 kernel 或 orchestration 前，先回答“最终要交付什么”。
+
+Agent 必须在 design SSOT 中填写：
+
+| 字段 | 必须内容 |
+|---|---|
+| 项目目标 | 是单算子、单层、多层 block、完整 decode，还是 live serving |
+| 模型拓扑 | 总层数、dense/MoE/attention 类型、tail/lm_head、每层顺序 |
+| program 形态 | 项目已批准的 program 数量、边界和架构依据；已有唯一裁定时不得列替代方案 |
+| 并行拓扑 | TP、EP、设备数量、rank 与物理设备映射 |
+| 输入 | 真实 token/request、context、batch、有效行与 padding 行 |
+| 权重与状态 | checkpoint、native dtype、IPC/H2D、KV 来源、是否允许 fallback |
+| 正确性 golden | 单算子、逐层、整网输出和最终 token 判据 |
+| 稳定性 gate | 完整正式对象需要连续多少次、timeout、dmesg 判据 |
+| 发布对象 | 目标机器、设备范围、多仓和 binary manifest |
+| 明确不覆盖 | live/offline、其他机器、其他 batch、其他协议组合等 |
+
+**PASS 条件：**
+
+- 最终 canonical 对象可以用一段无歧义文本复述；
+- `N=1`、层数、batch、并行度等数字不会被误解；
+- 精度和稳定性判据分别定义；
+- 诊断缩减对象和发布对象明确分开。
+
+**NO-GO：**
+
+- “先把代码跑起来，后面再决定 golden”；
+- 用随机输入定义发布；
+- 允许 BF16-dequant、dummy gate、H2D 或缩层静默替代正式对象；
+- 当前 N1 重新提出多程序、逐层 host launch 或 resident tensor 串联；
+- 只写 branch，不写 commit、dirty state 和 runtime；
+- 不知道最终是 push+push、pull+push 还是 pull+pull。
+
+### 15.4 Gate 1：整网架构与 layer 划分准入
+
+**目的：** 在局部 kernel 设计前，冻结整网 program 边界（包括明确不拆分）、
+layer 顺序和索引空间。
+
+Agent 必须提交两张图和一张表。
+
+#### 图 A：整网执行拓扑
+
+至少包含：
+
+```text
+host / orchestrator
+-> program
+-> layer 0
+-> layer 1
+...
+-> tail / lm_head
+-> host-visible output
+```
+
+每个 layer 标明：
+
+- attention、dense MLP、MoE、normalization、tail；
+- 所属 orchestration 和 InCore kernel 边界；
+- 是否有 TP/EP collective；
+- 输入和输出由谁持有；
+- 哪些结果跨 layer、跨 rank 或跨 process。
+
+#### 图 B：每个 collective 的通信状态机
+
+统一使用：
+
+```text
+producer compute
+-> payload publish
+-> visibility fence
+-> notify / generation update
+-> peer wait
+-> local or remote load
+-> consumer compute
+-> completion / recycle
+```
+
+不能只画“dispatch -> expert -> combine”，必须画出 signal、payload 和代次。
+
+#### 表 C：layer/index namespace 表
+
+| absolute layer | layer type | attention local index | dense local index | MoE position | norm index | weight keys | buffer suffix |
+|---:|---|---:|---:|---:|---:|---|---|
+
+这一张表必须覆盖所有层，不允许用一个含义模糊的 `layer_idx` 同时表示：
+
+- 模型绝对层号；
+- attention 类型内局部索引；
+- dense 权重索引；
+- MoE position；
+- KV offset。
+
+**PASS 条件：**
+
+- 每层只属于一个明确的执行边界；
+- 所有索引空间可从表中唯一计算；
+- 所有跨层 handoff 有命名接口；
+- program 形态符合顶层框架约束；
+- 不依赖“后面生成器大概会做对”。
+
+**NO-GO：**
+
+- 还未决定 layer boundary 就开始复制内联 kernel；
+- 用源码调用顺序代替生成后的 task 顺序；
+- 把单层已验证实现直接假设为整网内联实现；
+- 把多个索引空间压成同一个整数；
+- 只验证前几层就认为全层索引正确。
+
+### 15.5 Gate 2：每层接口合同准入
+
+**目的：** 把 layer boundary 当成正式 API，而不是一组临时 tensor。
+
+每一个 layer 或 communication phase 必须填写：
+
+| 字段 | 必须内容 |
+|---|---|
+| 输入对象 | 名称、producer、ownership、rank 语义 |
+| 输出对象 | 名称、consumer、是否 host-visible、是否跨层 |
+| logical contract | logical shape、valid shape、batch/padding 语义 |
+| numerical contract | dtype、量化 scale、累加 dtype、允许误差 |
+| physical contract | storage shape、layout、tile、bytes、alignment |
+| communication contract | self/peer、local/remote、publish/wait generation |
+| initialization | 谁在何时初始化，初始化范围是 logical 还是 whole allocation |
+| lifetime | first writer、last reader、何时允许回收或复用 |
+| failure observation | 可导出的 debug Out、phase marker、对应日志 |
+
+以 MoE 为例，dispatch 的正式输出应包括：
+
+```text
+recv_x
+recv_scale
+recv_counts
+local expert offsets/counts
+inverse_map
+dispatch completion generation
+```
+
+combine 只能消费上述正式输出。若 combine 重新读取另一份 distributed count
+matrix 并重算 route mapping，就已经产生第二个不受约束的事实源。
+
+**PASS 条件：**
+
+- 每一个输出都有唯一 producer 和明确 last consumer；
+- `pl.Out`、return value 和实际写回对象一致；
+- self route 和 peer route 的访问语义分别定义；
+- padding、empty tail、partial tile 和 multi-batch 都有行为定义；
+- 可在不改变主 DAG 的前提下导出关键阶段输出。
+
+**NO-GO：**
+
+- output 参数被局部 tensor 同名遮蔽；
+- 依靠 orchestration 内 early return 做“阶段隔离”却不检查生成 DAG；
+- 同一逻辑结果在 dispatch 和 combine 两处分别重建；
+- 未定义 padding 行是否参与 route/reduction；
+- 只对单 batch 有意义，多 batch 地址公式尚未设计。
+
+### 15.6 Gate 3：buffer ledger、内存预算与对齐准入
+
+**目的：** 在编码前决定每一个 buffer 的逻辑用途、物理空间、地址约束和生命周期。
+
+每个 buffer 必须有一行 ledger：
+
+| 字段 | 说明 |
+|---|---|
+| layer/phase | 所属层和协议阶段，必须有唯一层后缀 |
+| name | signal、payload、scratch、scale、output |
+| logical | shape、valid shape、dtype、有效元素 |
+| physical | storage shape、nbytes、region、relative offset |
+| alignment source | ISA、allocator ABI、memory descriptor、性能 hint |
+| actual address | 运行时 `base + offset`，不能只验证 relative offset |
+| ownership | local、peer-readable、writer ranks、reader ranks |
+| lifetime | first write、last read、recycle point |
+| initialization | whole-window zero、logical zero、producer overwrite |
+| protocol | Set/AtomicAdd、Eq/Ge、generation |
+| alias | 是否跨层/跨 phase 复用，为什么安全 |
+
+必须分别审计四类容易混淆的约束：
+
+1. **tensor storage shape 对齐**：来自 tensor/ISA correctness 规则；
+2. **UB Vec 行宽对齐**：来自片上向量操作 correctness 规则；
+3. **GM 与 UB 搬运 tile 对齐**：来自 DMA/静态检查规则；
+4. **cache-line isolation**：来自 control-plane atomic/一致性和平台 descriptor。
+
+这里必须把两类 512B 约束分开：
+
+- 对本 PyPTO 项目，tensor storage shape 的 512B 对齐和 GM 与 UB 搬运 tile 的
+  512B 规则来自顶层设计/静态检查，仍是必须满足的既定约束；
+- 不应跨平台硬编码的是**控制信号物理隔离粒度**。它必须从目标平台
+  `MemoryRegionDescriptor`、allocator ABI（分配器二进制接口）或正式架构文档
+  读取：
+
+```text
+natural_alignment
+cache_line_bytes
+atomic_same_line_serialized
+```
+
+然后决定 control signal 是否需要：
+
+```text
+alignment = cache_line_bytes
+physical bytes >= cache_line_bytes
+isolate_cache_line = true
+```
+
+同时验证实际地址：
+
+```text
+(actual_base + relative_offset) % required_alignment == 0
+```
+
+内存预算必须同时覆盖：
+
+- host 峰值，不允许在单 driver 中无意 stack 全 rank 权重；
+- 每卡 HBM：权重、KV、communication window、ring arena、固定 runtime 组件；
+- 每层 communication window 累计；
+- 每个 kernel 的 UB、L1、L0A、L0B、L0C；
+- debug Out 和 instrumentation 的额外空间。
+
+**PASS 条件：**
+
+- 所有中间 buffer 在 ledger 中存在；
+- 所有跨层 buffer 的 first/last use 可证明；
+- control plane 和 data plane 的物理布局可审计；
+- host/HBM/on-chip budget 均在限制内并留有余量；
+- 运行时 actual address 检查方案已设计；
+- 未证明安全的跨层复用默认禁止。
+
+**NO-GO：**
+
+- 只按逻辑 shape 分配，不记录物理 isolation；
+- 只验证 `size % alignment == 0`，不验证实际地址；
+- signal 和 payload 紧邻但没有平台依据；
+- 用相同名字不同 SSA 假装不别名，或不同名字实际指向同一 offset；
+- 认为“上一层看起来执行完了”就可以复用，而没有 last remote reader 证明；
+- 只检查 HBM，不检查 host 峰值和片上 buffer。
+
+### 15.7 Gate 4：通信协议准入
+
+**目的：** 在写跨 rank kernel 前，把协议写成状态机并逐项证明。
+
+每个 signal 必须回答：
+
+```text
+谁写？
+写几个 cell？
+是否多 writer？
+使用 Set 还是 AtomicAdd？
+初始值是什么？
+每一层/每一轮的 expected generation 是什么？
+consumer 使用 Eq 还是 Ge？
+payload 在 notify 前如何保证可见？
+self route 是否绕开 remote path？
+何时允许 signal/payload 被下一代复用？
+completion 如何传播和回收？
+```
+
+建议为每个 collective 建立表：
+
+| step | rank role | payload operation | signal operation | fence | expected generation | next step |
+|---:|---|---|---|---|---:|---|
+
+并覆盖以下最小 case：
+
+- self producer / self consumer；
+- peer producer / peer consumer；
+- 单 writer / 多 writer；
+- 无 token、partial token、满载 token；
+- 第一次 generation、连续第二次 generation；
+- 两个相邻模型层同时存在于同一 program；
+- 正常完成后的 buffer recycle。
+
+**PASS 条件：**
+
+- 每个 wait 都能找到同代 producer；
+- 每个 producer 都有唯一可解释的 consumer 集合；
+- payload visibility 在 notify 之前建立；
+- generation 递增/重置不会被 padding 或旧值提前满足；
+- self/peer offset 来自同一份 route snapshot；
+- 两层连续运行不会共享未释放状态。
+
+**NO-GO：**
+
+- 看到 wait 卡住就只改 timeout；
+- 看到 PUSH 失败就直接改 PULL，而不写新协议；
+- completion wave、barrier 或 fence 没有对应状态机；
+- notify/wait 使用不同 generation；
+- signal 初始化依赖 allocator“可能是零”；
+- 只验证单层 collective，不验证相邻两层。
+
+### 15.8 Gate 5：数值、数据类型与 native W8A8 准入
+
+**目的：** 在整网集成前证明每一个数学边界和 dtype 转换都与目标模型一致。
+
+Agent 必须提交逐算子 numerical contract：
+
+| stage | input dtype | accumulation dtype | output dtype | scale/bias dtype | quant/dequant boundary | golden |
+|---|---|---|---|---|---|---|
+
+对于 native W8A8 路径，至少明确：
+
+- 权重是否原生 INT8 存储；
+- activation 在哪里做 per-token dynamic quant；
+- scale shape、dtype、广播方向和初始化；
+- gate/up/down matmul 的输入、累加和输出 dtype；
+- 中间 clamp 后是否需要第二次 requant；
+- shared expert 是否保持 BF16；
+- router bias、EPS、clamp 等模型常量是否与 oracle 一致；
+- padding 行和 empty tail 是否参与 amax、route、matmul、reduction；
+- 禁止用 BF16-dequant 版本掩盖 native W8A8 错误。
+
+数值验证至少分三层：
+
+1. **单算子 golden**：sort、matmul、quant/dequant、activation、reduce；
+2. **单层/边界 golden**：attention 输出、dispatch 输出、routed/shared expert、
+   combine 输出、residual；
+3. **完整整网 golden**：真实输入的最终 logits/token。
+
+**PASS 条件：**
+
+- standalone validated source 与 whole-net 实际内联/生成 source 一致；
+- 第一个异常 stage 可以由独立输出定位；
+- 所有 scale 有有限范围和正确 shape；
+- 正式路径没有 silent fallback；
+- 单层数值正确后才扩大到多层。
+
+**NO-GO：**
+
+- “运行完成”就认为数学正确；
+- 只看最终 argmax，不看首次异常 stage；
+- 用 orchestration early return 代替真实独立输出；
+- standalone `moe.py` 已修，但 generator 内联副本仍是旧代码；
+- 为了消除 NaN 回退到 BF16 权重路径。
+
+### 15.9 Gate 6：kernel 边界与片上 buffer 准入
+
+**目的：** 先设计每个 kernel 做什么、用多少片上空间，再开始写 kernel body。
+
+每个 kernel 需要一张设计卡：
+
+```text
+kernel name
+所属 layer/phase
+输入/输出 tensor
+logical/physical shape
+tile shape / valid shape
+UB/L1/L0A/L0B/L0C 预算
+循环轴和 pipeline stage
+跨核 split 策略
+load/compute/store 顺序
+tail/padding 行为
+是否含 wait/fence/notify
+预期运行时间和拆分依据
+```
+
+设计原则：
+
+- kernel 边界应与数据所有权和 lifetime 边界一致；
+- 不为了“少一个 task”把互不相关的 TP/EP、control/data 或不同 lifetime 强行
+  fuse；
+- 也不把一个有明确局部复用的算子拆成大量微小 kernel；
+- 片上 buffer 必须按实际 live range 预算，不能只把每个 tensor 大小单独相加；
+- partial tile、空尾和多 batch 必须在 kernel 设计卡中有独立 case；
+- 所有 wait/fence/notify 都属于通信协议 Gate，而不是随手写进计算 kernel。
+
+**PASS 条件：**
+
+- memory report 预算与设计卡一致；
+- 每个片上 buffer 有明确创建/释放 scope；
+- 不存在未定义的 padded row；
+- split/fuse 决定有架构和 memory 依据；
+- kernel probe 可以独立验证其输入契约。
+
+**NO-GO：**
+
+- 编译到 UB overflow 后才决定 tile；
+- 为了规避一个错误随机拆 kernel；
+- 把所有逻辑塞入一个超大 orchestration 后依靠 early return 调试；
+- kernel 中的 signal wait 没有对应 producer 设计；
+- 只验证 full tile，不验证 partial/empty tail。
+
+### 15.10 Gate 7：生成器和生成物准入
+
+**目的：** 保证“审阅的源码”就是“设备实际运行的源码”。
+
+Agent 必须指定唯一 source of truth：
+
+```text
+generator
+-> active builder
+-> generated host orchestration
+-> kernel_config.py
+-> generated kernel source
+-> compiled binary
+```
+
+提交前必须执行真实 round-trip：
+
+```text
+剥离/删除 active generated block
+-> 运行 generator
+-> 与提交前 active block 做 byte compare
+-> 结果必须一致
+```
+
+还必须审阅：
+
+- `host_orch.py` 中实际 layer 顺序、buffer SSA 和参数；
+- `kernel_config.py` 中 func id；
+- orchestration C++ 中 task 顺序；
+- dependency dump 中 fanin/fanout；
+- memory report 中地址、offset 和 live range；
+- final kernel 中真实 load/store/fence/notify/wait。
+
+**PASS 条件：**
+
+- generator round-trip 完全一致；
+- 没有 standalone 和 whole-net 两份长期漂移的实现；
+- 所有 debug knob 默认关闭且不会改变生成边界；
+- build directory、generator hash 和 source hash 被记录。
+
+**NO-GO：**
+
+- 只验证 generator “拒绝覆盖已有代码”；
+- 手改生成文件但不改 generator；
+- 用 substring 搜索脆弱地截取生成 body；
+- build 结束后删除唯一失败生成物；
+- 按源码函数顺序猜 func id。
+
+### 15.11 Gate 8：可观测性准入
+
+**目的：** 第一次真机运行前就具备定位能力，而不是卡死后才补日志。
+
+每个 run 必须自动产生独立 evidence bundle：
+
+```text
+run id / timestamp
+source commits / dirty diff / source hash
+generator hash / build directory / binary hash
+machine / device / runtime / toolchain
+canonical or diagnostic object
+stdout / stderr / return code / runtime
+all-rank device logs
+TASK / CLUSTER / dependency snapshot
+dmesg before / after / delta
+numeric fingerprints / argmax / intermediate debug outputs
+actual communication window base and relevant offsets
+exporter process ids and lifecycle
+```
+
+在第一个 device run 前预留：
+
+- 不改变主数学路径的 phase marker；
+- 可选独立 `pl.Out` debug output；
+- task 到 kernel 的 exact mapping 工具；
+- all-rank 日志收集，而不是只看 rank0；
+- worker 执行窗口和 exporter teardown 窗口分离；
+- 自动打印最终执行层数和通信组合，防止环境变量残留。
+
+**PASS 条件：**
+
+- 任意失败都能回答发生在 export/compile/prepare/import/dispatch/run/teardown；
+- 任意 S1 都能绑定同轮 TASK 和 exact build；
+- dmesg 只归因当前 before/after 增量；
+- 日志中明确写出完整或缩减测试对象。
+
+**NO-GO：**
+
+- 共享全局日志目录；
+- 只保存 host 的 507018；
+- 失败 build 被下一轮覆盖；
+- 只看完成比例猜 kernel；
+- 用旧 dmesg 或旧 device 日志补当前证据。
+
+### 15.12 Gate 9：验证梯度准入
+
+**目的：** 每一级测试只回答它能回答的问题，不能相互替代。
+
+| Level | 测试对象 | 主要回答 | 不能证明 |
+|---:|---|---|---|
+| 0 | 静态设计审计 | shape、dtype、index、buffer、protocol 是否定义完整 | device 可运行 |
+| 1 | compile / generator round-trip | 前端、生成器和代码生成可成立 | task 已派发 |
+| 2 | prepare / dispatch smoke | runtime 资源和 task mapping 建立 | kernel 完成、数值正确 |
+| 3 | 单算子真实 device probe | kernel 输入合同和局部数值 | layer handoff、跨层 lifetime |
+| 4 | 单层真实权重 | 一层数学和通信基本成立 | 第二层复用安全、完整深度稳定 |
+| 5 | 两个连续层 | layer handoff、generation、跨层 alias | 完整深度、概率稳定 |
+| 6 | 中间深度 | 深度趋势、内存预算、诊断候选 | 正式 release |
+| 7 | 完整深度单次 | 正式对象有机会完成并得到 golden | 概率问题已关闭 |
+| 8 | 完整深度重复正式测试 | 稳定性和精度同时满足 | 另一机器/另一 manifest |
+| 9 | 最终 clean manifest 重复测试 | 发布对象可复现 | 未覆盖的 live/其他 batch 场景 |
+
+新的整网项目至少要求：
+
+```text
+单算子 golden
+-> 单层真实权重
+-> 两个连续层
+-> 完整深度单次且数值正确
+-> 最终 clean manifest 上完整深度重复测试
+```
+
+重复次数由 canonical 文档定义；对于本类概率性卡死，工程上默认建议连续 20 次
+作为发布稳定性门槛，但这不是框架常量。项目可以根据失败概率和置信要求定义
+更严格的次数，不能由 Agent 为了尽快通过而临时降低。
+
+每次升级到下一 Level 前必须记录：
+
+```text
+本级对象
+实际结果
+能证明什么
+不能证明什么
+下一阶段新增了哪些变量
+```
+
+**NO-GO：**
+
+- 用单层或中间深度替代完整深度；
+- 一次正确 token 就宣布稳定；
+- 20 次使用的 source 与 release source 不同；
+- exact model source 重复测试与 clean runtime smoke 混写；
+- logging 开启和关闭的不同对象混成同一组样本。
+
+### 15.13 Gate 10：release manifest 准入
+
+**目的：** 确保另一台机器拉取的不只是模型仓库，而是完整运行对象。
+
+release manifest 至少冻结：
+
+```text
+所有 Git 仓库 commit / branch / clean status / submodule
+模型源码与 generator SHA256
+runtime binary 路径与 SHA256
+driver / firmware / CANN
+PTOAS / ptoas binary / pto-isa
+Python / package environment
+checkpoint 路径与 hash
+machine / devices / topology
+全部环境变量
+canonical command
+fresh exporter command and lifecycle
+正式日志路径
+dmesg worker-window 与 teardown-window 结果
+golden 与数值指纹
+未覆盖范围
+```
+
+未来项目的发布门槛应为：
+
+```text
+all repos clean and pinned
+AND
+runtime binaries hashed
+AND
+generator round-trip pass
+AND
+complete canonical repeated pass
+AND
+numerical golden pass
+AND
+worker-window dmesg clean
+```
+
+如果 clean commit 是在历史 dirty source 通过后才 formalize，必须在 clean
+manifest 上重新执行完整重复测试，不能只做一次 smoke 就追溯成旧 20-run。
+
+### 15.14 Agent 在每个阶段必须输出什么
+
+Agent 不应只回复“正在定位”或“已经修复”。每个阶段的更新必须包含：
+
+```text
+1. 当前 exact object
+2. 当前通过的 Gate
+3. 当前 blocker 属于哪个阶段
+4. 直接观测
+5. 为什么提出当前假设
+6. 下一决定性实验
+7. 本轮唯一变量
+8. 实际结果
+9. 结论证据等级
+10. 保留/撤回/仅诊断的修改
+11. canonical 是否已恢复
+12. 文档和 commit 是否已同步
+```
+
+编码前的实现计划还必须列出：
+
+- 将修改的文件和 generator；
+- 每个 layer/kernel 的边界；
+- 新增/复用的 buffer 及 ledger 行；
+- 地址对齐和内存预算；
+- dtype、padding、tail、single/multi-batch 行为；
+- 测试梯度和停止条件；
+- 回滚不等于修复，禁止把旧概率版本当基线。
+
+### 15.15 Agent 必须停止并重新设计的 NO-GO 条件
+
+遇到以下任一情况，Agent 应停止继续堆局部 patch，回到设计 Gate：
+
+- 顶层设计文档与当前方案冲突；
+- layer boundary 无法说明唯一 producer/consumer；
+- buffer lifetime 或 actual address 无法证明；
+- 一个 `layer_idx` 承担多个索引空间；
+- signal generation、initial value 或 writer 数量不明确；
+- native W8A8 只能靠 BF16 fallback 才能通过；
+- 单层 source 与 whole-net 生成副本不同；
+- generator 不能 round-trip；
+- 只能通过 retry、timeout、logging 或缩层提高通过率；
+- 一次修改同时改变协议、数学、layout 和测试输入，无法形成 A/B；
+- 当前日志不能绑定 exact build；
+- 完整正式对象没有可复现命令；
+- 多仓/runtime dirty 状态未记录；
+- 文档中的“已修复”已被新结果推翻但未撤回。
+
+### 15.16 新项目 Day 0（项目启动日）可直接复制的设计模板
+
+后续 Agent 可以把下面模板放入 `<PROJECT>-DESIGN-AND-ADMISSION.md`：
+
+```text
+# <Project> Whole-Net Design and Admission
+
+## A. Canonical object
+program:
+model topology:
+total layers:
+parallel topology:
+machine/devices:
+input/context:
+batch/valid rows/padding:
+weights dtype/source:
+KV source:
+dispatch/combine:
+numerical golden:
+stability gate:
+not covered:
+
+## B. Top-level constraints reviewed
+runtime architecture docs:
+memory docs:
+task/dependency docs:
+communication docs:
+shape/layout/sharding docs:
+applicable ADRs:
+known deviations:
+
+## C. Layer and index table
+absolute layer | type | attention index | dense index | MoE pos |
+norm index | KV offset | weight keys | program/method | buffer suffix
+
+## D. Layer contracts
+layer/phase | input | output | logical shape | valid shape | dtype |
+scale | producer | consumer | self/peer | initialization | last use
+
+## E. Buffer ledger
+layer/phase | buffer | logical | physical bytes | alignment source |
+relative offset | actual base check | owner | first write | last read |
+init | protocol/generation | alias/reuse
+
+## F. Communication state machines
+collective:
+producer:
+payload:
+fence:
+notify:
+wait:
+generation:
+self path:
+peer path:
+completion/recycle:
+
+## G. Kernel design cards
+kernel | role | input/output | tile | on-chip budget | loop/pipeline |
+tail/pad | synchronization | probe golden
+
+## H. Numerical contract
+stage | input dtype | accumulation | output dtype | scale/bias |
+quant boundary | golden | tolerance
+
+## I. Observability
+isolated run dir:
+all-rank logs:
+TASK/kernel mapper:
+dmesg before/after:
+phase markers:
+debug Out:
+actual address dump:
+numeric fingerprints:
+
+## J. Validation ladder
+Level 0 static:
+Level 1 compile/round-trip:
+Level 2 prepare/dispatch:
+Level 3 op probes:
+Level 4 one layer:
+Level 5 two layers:
+Level 6 intermediate:
+Level 7 full depth once:
+Level 8 full depth repeated:
+Level 9 clean manifest repeated:
+
+## K. Repository and release manifest
+repo commits/dirty:
+submodules:
+runtime binary hashes:
+toolchain:
+checkpoint hashes:
+environment:
+canonical command:
+evidence paths:
+
+## L. Gate status
+Gate 0 project definition:
+Gate 1 architecture/index:
+Gate 2 layer contract:
+Gate 3 buffer/memory:
+Gate 4 communication:
+Gate 5 numerical/dtype:
+Gate 6 kernel/on-chip:
+Gate 7 generator:
+Gate 8 observability:
+Gate 9 validation:
+Gate 10 release manifest:
+
+## M. Decisions and refutations
+date | object | hypothesis | decisive experiment | result |
+evidence level | keep/revert/diagnostic | scope
+```
+
+### 15.17 从本案例反推：这些 Gate 能提前避免什么
+
+| 本案例暴露的问题 | 如果新项目按本标准启动，最早在哪个 Gate 暴露 |
+|---|---|
+| stale `pyc`、runtime `.so`、SDMA 配置漂移 | Gate 0/8/10：环境与 binary manifest、独立日志 |
+| `TaskMapSize=0` 被当成 AICore kernel 错误 | Gate 8/9：先标失败阶段，再进入 kernel 定位 |
+| 两个 MoE 层复用 communication window | Gate 2/3/4：layer contract、lifetime ledger、两层协议测试 |
+| `gate_topk` standalone 已修、whole-net 内联副本仍旧 | Gate 5/7：source-of-truth 和 generator round-trip |
+| task3 被猜成 all-to-all | Gate 8：同轮 TASK + exact `kernel_config.py` |
+| `pl.Out` 被局部 tensor 遮蔽 | Gate 2：唯一 producer、真实 writeback 和 debug Out |
+| `local_routed_y` 首先出现 1e11 | Gate 5：逐算子 numerical contract 和独立输出 |
+| dense L2 使用错误 `attn_layer_idx` | Gate 1：完整 layer/index namespace 表 |
+| 只执行 20/31 层通过，被误作完整深度结论 | Gate 0/9：canonical object 和验证梯度 |
+| completion-wave 短样本通过后过早宣布修复 | Gate 9：matched、无额外 logging、完整深度重复测试 |
+| 32B signal 与相邻对象共线风险 | Gate 3/4：logical/physical 分离、平台 cache-line descriptor |
+| 只拉 pypto-lib 无法在另一机器复现 | Gate 10：多仓 commit、runtime binary、工具链和 checkpoint manifest |
+| 全局 dmesg 旧错误被归因当前 run | Gate 8：before/after 和 worker/teardown 窗口分离 |
+
+### 15.18 最终启动判定：什么时候 Agent 才可以进入正式编码
+
+新整网项目只有满足以下条件，才可以从设计阶段进入正式实现：
+
+```text
+Gate 0 项目定义 PASS
+AND
+Gate 1 整网架构和索引表 PASS
+AND
+目标 slice 的 Gate 2 layer contract PASS
+AND
+目标 slice 的 Gate 3 buffer ledger / memory budget PASS
+AND
+目标 collective 的 Gate 4 communication state machine PASS
+AND
+Gate 5 numerical/dtype contract READY
+AND
+目标 kernel 的 Gate 6 design card PASS
+AND
+Gate 7 source-of-truth / generator round-trip plan READY
+AND
+Gate 8 observability plan READY
+AND
+canonical test 文档已创建
+```
+
+开始编码后，也不是所有代码一次性铺开。推荐顺序：
+
+```text
+实现并验证单算子
+-> 实现单层
+-> 验证两个连续层和跨层 lifetime
+-> 扩展 generator
+-> 生成物 round-trip
+-> 扩展到完整深度
+-> 完整对象单次精度
+-> 完整对象重复稳定性
+-> clean manifest 重复准出
+```
+
+一句话总结：
+
+> **整网开发不是“把单层 kernel 拼起来再调”，而是先冻结整网合同、层边界、
+> 内存生命周期、通信状态机、数值语义和准出对象，再让每一个 kernel 成为这些
+> 合同的局部实现。**
+
+## 16. 可复用排查清单
 
 遇到新的整网 hang，按顺序回答：
 
@@ -2675,13 +3580,13 @@ padding 行是否进入 route/reduction
 17. 最终是否同时通过稳定性、精度、dmesg delta 和 generator gate？
 
 
-## 16. 原始证据索引
+## 17. 原始证据索引
 
 以下索引按“先看当前事实、再看过程、最后看架构约束”的顺序排列。旧的
 `NEXT-SESSION-N-1.md` 已经清理了 active prompt；需要恢复被删除的阶段记录时，
 应从 Git history 按提交读取，而不是把历史快照当作当前状态。
 
-### 16.1 当前 stable / canonical
+### 17.1 当前 stable / canonical
 
 - [`N1-CANONICAL-TEST.md`](../../../../N1-CANONICAL-TEST.md)：唯一 standalone canonical 命令、完整 42 个 MoE 层、
   fresh exporter、20-run gate、dmesg 窗口和三仓复现边界。
@@ -2692,7 +3597,7 @@ padding 行是否进入 route/reduction
 - [`N1-W8A8-ROUTED-BOUNDARY-DESIGN-20260716.md`](../../../../develop/N1/N1-W8A8-ROUTED-BOUNDARY-DESIGN-20260716.md)：
   attention→dispatch→expert→combine 的 native W8A8 layer contract。
 
-### 16.2 主过程记录
+### 17.2 主过程记录
 
 - [`phases/27-n1-whole-net-fusion.md`](../../../../phases/27-n1-whole-net-fusion.md)：从全网 compile、
   runtime/SDMA、comm-window alias、IPC bring-up 到最终 release 的主 phase 记录。
@@ -2703,7 +3608,7 @@ padding 行是否进入 route/reduction
 - [`notes/09-cache-line-and-signal-isolation.md`](../../../../notes/09-cache-line-and-signal-isolation.md)：
   signal 物理隔离、512B line、base/offset 约束的设计背景。
 
-### 16.3 早期 blocker 和部署背景
+### 17.3 早期 blocker 和部署背景
 
 - [`archive/prototype-phase-01-19-summary.md`](../../../../archive/prototype-phase-01-19-summary.md)：Phase 15/16/19 的
   单卡、多卡 capability、MoE 早期 507018 和 stale-pyc 经验。
@@ -2718,7 +3623,7 @@ padding 行是否进入 route/reduction
 - [`deployment/moe-block-nextwork-and-constraints.md`](../../../../deployment/moe-block-nextwork-and-constraints.md)：
   native W8A8、DeepSeek 对齐、不得绕过 gate 和测试纪律。
 
-### 16.4 Git 历史恢复点
+### 17.4 Git 历史恢复点
 
 以下提交是恢复 07-12～07-16 过程记录的主要锚点；读取时使用：
 
@@ -2744,7 +3649,7 @@ git show <commit> -- NEXT-SESSION-N-1.md STATUS.md phases/27-n1-whole-net-fusion
 | `2e46485` | 512B isolation 与 release | final pull+pull、20/20、因果边界 |
 | `8bbb9cc` / `0ef0109` | stable manifest formalize | release manifest 和 clean environment scope |
 
-### 16.5 顶层设计约束
+### 17.5 顶层设计约束
 
 设计或复查 buffer、通信和层间边界时，优先读取：
 

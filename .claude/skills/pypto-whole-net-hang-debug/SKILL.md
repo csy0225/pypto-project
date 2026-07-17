@@ -1,6 +1,6 @@
 ---
 name: pypto-whole-net-hang-debug
-description: 使用隔离日志、PTO2 stall 分类、scheduler TASK/CLUSTER 寄存器快照、task→kernel→生成源码映射、可选 AICore PC 映射、跨 rank 通信边界审计和 buffer 布局 A/B，定位 PyPTO/Ascend 整网程序的 507018、running-stalled、依赖死锁、随机 hang 或 kernel 不完成问题。适用于整模型、多层单 program、跨卡 collective、W8A8 MoE、间歇性卡死，以及需要复核地址对齐、dtype、padding、batch、初始化、buffer 生命周期和发布稳定性的场景。
+description: 使用隔离日志、PTO2 stall 分类、scheduler TASK/CLUSTER 寄存器快照、task→kernel→生成源码映射、可选 AICore PC 映射、跨 rank 通信边界审计和 buffer 布局 A/B，定位 PyPTO/Ascend 整网程序的 507018、running-stalled、依赖死锁、随机 hang 或 kernel 不完成问题。适用于整模型、多层单 program、跨卡 collective、W8A8 MoE、间歇性卡死，以及需要复核地址对齐、dtype、padding、batch、初始化、buffer 生命周期和发布稳定性的场景；也适用于新整网项目编码前建立 layer/index contract、buffer ledger、通信状态机、数值合同、验证梯度和 release manifest。
 ---
 
 # PyPTO 整网 Hang 定位
@@ -64,6 +64,11 @@ batch 或优先级混淆。项目术语的通俗解释见案例文档 §1.2。
 §2～§4：不要只读最终 512B 结果；先按时间区分环境、dispatch、alias、OOM、
 deterministic kernel bug、精度 bug 和 probabilistic stall，再复用后半部分的
 task/kernel、跨 rank、buffer 和 release 方法。
+
+启动一个新的整网项目时，先读该案例 §15“整网项目启动准入标准与最佳实践”。
+该节不是本案例的 active prompt，而是一套可复制的 Day-0 设计门禁：要求在编码
+前冻结 canonical object、layer/index contract、buffer ledger、通信状态机、
+native W8A8 数值合同、生成器 round-trip、可观测性和 validation ladder。
 
 ## 0. 先冻结被测对象
 
