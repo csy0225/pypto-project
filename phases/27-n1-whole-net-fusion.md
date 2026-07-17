@@ -5,6 +5,8 @@
 > 最终 release 验证机：`gpu-a910x-0162`，devices `8..15`。
 > 本文较早的 0234 环境重建与历史 bisect 章节保留作历史证据；当前 release
 > 状态以本文顶部与 `N1-CANONICAL-TEST.md` 为准。
+> 0162 clean 环境的唯一 stable 版本记录见
+> [`develop/N1/N1-STABLE-ENV-0162-20260717.md`](../develop/N1/N1-STABLE-ENV-0162-20260717.md)。
 
 ## Pin snapshot（升级栈，2026-07-09 从 0162 只读 bundle 导入 + 重建）
 
@@ -15,7 +17,7 @@
 | pypto-lib | `feat/whole-net-n1-fusion` @ `0e7a0fdd` | final standalone P42 release：native W8A8/KV-IPC，dispatch-pull + combine-pull，512B signal isolation |
 | pto-isa | `ecb6c303` | origin/main |
 | PTOAS | `72ada0a1` | origin/main |
-| ptoas-bin | **v0.49** | PTOAS release `ptoas-bin-x86_64.tar.gz` |
+| ptoas-bin | **self-report 0.45** (`fe7949daa62c…`) | 0162 stable binary；历史 `v0.49` 标签不用于当前环境重建 |
 
 ## Goal
 

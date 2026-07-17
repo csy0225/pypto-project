@@ -3,6 +3,9 @@
 > 这是本轮 stall 修复的最终事实记录。旧 prompt、旧冻结状态、4/5 残余
 > stall 和中间层数结论已删除。
 
+> 0162 clean 环境的唯一 stable 版本记录：
+> [`N1-STABLE-ENV-0162-20260717.md`](N1-STABLE-ENV-0162-20260717.md)。
+
 ## 1. Release 结论
 
 ```text
@@ -80,7 +83,7 @@ pypto   e277de9f2a55a686956d66933301204520bd7374
 simpler 36957c6b56700ecba3aeb8dbbedd6240594e01de
 ```
 
-最终三仓 clean-pin smoke：
+最终三仓 clean-pin smoke（独立的 1 次 smoke，不是 clean-pin 20-run）：
 
 ```text
 .../release_manifest/final_stack_smoke_20260717_015635

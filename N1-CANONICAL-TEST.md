@@ -4,6 +4,11 @@
 > 只能由本文定义的真实权重、真实 token、完整 P42 测试给出。禁止用随机输入、
 > `RUN_CLEAN`、P1/P20、中间态、compile-only 或自造 harness 替代。
 
+> **Stable environment SSOT（0162）**：
+> [`develop/N1/N1-STABLE-ENV-0162-20260717.md`](develop/N1/N1-STABLE-ENV-0162-20260717.md)。
+> 本文定义测试准出标准；stable 文档冻结完整三仓、runtime binary、工具链、
+> checkpoint、设备和环境变量。
+
 ## 1. 被测对象与固定组合
 
 ```text
@@ -95,6 +100,7 @@ python -m tests.step3p5._stage_whole_faithful_real_ipc \
   --reuse-exporters \
   --kv-ipc \
   --hidden-token 6127 \
+  --out "$OUT" \
   --ckpt "$CKPT"
 ```
 
@@ -142,8 +148,12 @@ pypto      e277de9f2a55a686956d66933301204520bd7374
 simpler    36957c6b56700ecba3aeb8dbbedd6240594e01de
 pto-isa    ecb6c303f797749f811a494742c3c08156aacabb
 PTOAS src  72ada0a1
-ptoas-bin  v0.49
+ptoas-bin  self-report 0.45
+ptoas-bin  sha256 fe7949daa62cdf787958101df35fe15dfa430bd18bf7e880353935a29b966076
 ```
+
+当前稳定 binary 实际自报 `ptoas 0.45`；历史 `v0.49` 仅保留在历史记录中，
+不能作为当前环境重建 pin。
 
 其中 pypto 提供 `StackedDeviceTensor` 分层连续 sub-view 和
 `DistributedWorker.import_ipc_all`；simpler 在 forked chip child 的 ACL
@@ -160,10 +170,16 @@ model commit 或 512B signal isolation。
 
 ```bash
 touch "$OUT/STOP"
+```
+
+等待所有 exporter 进程退出后，再执行：
+
+```bash
 rm -f "$OUT"/ready.rank* "$OUT"/STOP
 ```
 
-测试结束后确认设备 8–15 无残留运行进程。
+测试结束后确认设备 8–15 无残留运行进程。不要在 exporter 仍存活时删除
+`"$OUT"`。
 
 ## 4. 当前 release 证据
 

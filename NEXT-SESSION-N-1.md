@@ -3,6 +3,9 @@
 > 2026-07-16 更新。旧的 4/5、残余 stall、P20、push/pull 组合提示和阶段性
 > prompt 已删除，不得再作为当前状态使用。
 
+> 0162 clean 环境的唯一 stable 版本记录：
+> [`develop/N1/N1-STABLE-ENV-0162-20260717.md`](develop/N1/N1-STABLE-ENV-0162-20260717.md)。
+
 ## 1. 当前结论
 
 N=1 standalone whole-net canonical gate 已完成：
@@ -85,7 +88,8 @@ pypto      n1fusion-base             e277de9f2a55a686956d66933301204520bd7374
 simpler    n1fusion-base             36957c6b56700ecba3aeb8dbbedd6240594e01de
 ```
 
-0162 的这三个 release 工作树均 clean。最终 clean-pin canonical smoke：
+0162 的这三个 release 工作树均 clean。最终 clean-pin canonical smoke（独立的
+1 次 smoke，不是 clean-pin 20-run）：
 
 ```text
 /data/chensiyu/hw_project/pypto/workspace/logs_n1/release_manifest/

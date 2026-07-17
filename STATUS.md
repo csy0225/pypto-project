@@ -3,7 +3,12 @@
 pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状态
 变化都更新这里**。历史细节查 [`archive/`](archive/)。
 
-**最后更新**：2026-07-16
+**最后更新**：2026-07-17
+
+> **0162 clean 环境唯一 stable 版本记录**：
+> [`develop/N1/N1-STABLE-ENV-0162-20260717.md`](develop/N1/N1-STABLE-ENV-0162-20260717.md)。
+> checkpoint SHA256、pip freeze、三仓/runtime binary、PTOAS/CANN、设备和
+> canonical 命令全部内嵌在该单一文档中。
 
 > **2026-07-16 runtime manifest 审计 + clean-pin formalize**：
 > - **旧 20-run 的真实范围**：`pypto-lib 0e7a0fdd` 模型源码 exact-match；
@@ -690,7 +695,8 @@ BF16 回归数据包：`/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler（submodule） | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------------------|-----------|
-| 2026-07-16 | N=1 standalone runtime manifest formalize：相关 pypto/simpler dirty runtime 支持已提交；最终 clean stack 在 0162 P42 pull+pull smoke `rc=0,argmax=303` | `n1fusion-base:e277de9f` | `feat/whole-net-n1-fusion:0e7a0fdd` | `main:ecb6c303` | `main:72ada0a1` | `n1fusion-base:36957c6b` | v0.49 |
+| 2026-07-17 | N=1 stable environment freeze：唯一 SSOT 见 `develop/N1/N1-STABLE-ENV-0162-20260717.md`；clean stack 在 0162 P42 pull+pull smoke `rc=0,argmax=303` | `n1fusion-base:e277de9f` | `feat/whole-net-n1-fusion:0e7a0fdd` | `main:ecb6c303` | `main:72ada0a1` | `n1fusion-base:36957c6b` | `0.45 (sha fe7949da…)` |
+| 2026-07-16 | N=1 standalone runtime manifest formalize：相关 pypto/simpler dirty runtime 支持已提交；最终 clean stack 在 0162 P42 pull+pull smoke `rc=0,argmax=303` | `n1fusion-base:e277de9f` | `feat/whole-net-n1-fusion:0e7a0fdd` | `main:ecb6c303` | `main:72ada0a1` | `n1fusion-base:36957c6b` | historical label `v0.49`（实际 binary 见 stable SSOT） |
 | 2026-07-16 | N=1 model exact-source canonical closure：`0e7a0fdd` 在 0162 P42 native W8A8/KV-IPC pull+pull 20/20 `argmax=303`；当时 runtime 实际为 pypto `5e619dc7` + dirty support、simpler `98ce22a6` + dirty support，后由上一行 clean pins formalize | `5e619dc7 + dirty runtime source` | `feat/whole-net-n1-fusion:0e7a0fdd` | `main:ecb6c303` | `main:72ada0a1` | `98ce22a6 + dirty runtime source` | v0.49 |
 | 2026-07-12 | on-device head-gate 恢复（matmul_acc N=16 修复）→ 整网 per-layer gate_r 解除 blocker；whole_decode_faithful_real TP=8 COMPILE OK；L1 A/B 暴露 pre-existing attn NaN | （未改本 session） | `feat/whole-net-n1-fusion:f07da3b`（attention_full/swa Scope 1.f on-device gate + gate_r=block-diag R + 3 probe） | （未改） | （未改） | （未改） | v0.49 |
 | 2026-07-10 | tmov 修复 + 3-scalar layer_idx split（整网多层 gating blocker）committed + push fork stepfun/develop | `stepfun/develop:5e619dc7` | `stepfun/develop:47c260e3`（`d3075ac9` tmov chunk64 + `8b4bf3fa` 3-scalar split + `47c260e3` ST arity；fork `b511da0→47c260e`） | `main:ecb6c303` | `main:72ada0a1` | `71e39623` | v0.49 |
