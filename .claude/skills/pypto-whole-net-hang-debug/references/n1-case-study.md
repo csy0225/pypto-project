@@ -120,6 +120,34 @@ argmax=303 once
 
 只能说明一次精度路径正确，不能升级成稳定 release。
 
+### 2.1.1 本案例的结论应该怎样读
+
+本文中每个阶段的“结论”都要回答四个不同问题，不能只看最后一句：
+
+1. **当时到底观察到了什么？**
+   例如 `completed=4/32`、`TASK state=RUNNING`、`argmax=303` 或
+   `TaskMapSize=0`。这些是现象，不是根因。
+2. **为什么这个现象支持某个假设？**
+   例如 dummy H2D clean、IPC weight stall 会自然支持“IPC/VA 有关”，但它
+   仍然没有证明具体卡在哪个 kernel。
+3. **什么实验把假设从相关性提升或降级？**
+   exact `TASK kernels=[aiv0:3]` 加同轮 `kernel_config.py`，比“MoE 内部
+   task3 看起来像 a2a”强得多；同理，P42 20/20 比 P1 clean 强得多。
+4. **结论的作用域和保留项是什么？**
+   一个修改可能同时是“架构上必须保留”“数值上必须保留”“与 stall 消失
+   强关联”，但不一定是同一个根因。本文会把这些作用域分开。
+
+因此，阅读任何一段时应按如下顺序复述：
+
+```text
+对象是什么？
+失败在哪个阶段？
+证据直接指向什么？
+还有哪些替代解释没有排除？
+后续哪次实验改变了结论？
+最终保留的是代码、诊断方法，还是仅仅一条历史经验？
+```
+
 ### 2.2 本文回顾的不是一个根因
 
 长期事件的共同外观是 `507018`、timeout、hang 或“运行不前进”，但至少经历了
@@ -331,13 +359,21 @@ exact source/manifest
 - TP=1 monkey patch；
 - dynamic shape/stride workaround。
 
-这证明单卡数据流能前进，不证明完整模型语义、TP=8 或 MoE runtime 已就绪。
-后续真实 head gate 恢复后 NaN 才流出，说明“为了 bring-up 屏蔽输出”会推迟
-问题暴露。
+**当时能回答的问题。** 这组结果只证明：在简化 gate、单 rank 和临时
+shape/stride 语义下，前端、代码生成和一部分单卡数据流可以前进。它没有进入
+TP=8/EP=8 的跨 rank 协议，也没有覆盖完整 native W8A8 MoE，所以不能回答整网
+稳定性或 token-exact 精度。
+
+**为什么必须保留这段前史。** 后续恢复真实 head gate 后，NaN 才从被乘零的
+下游流出。也就是说，identity/zero bypass 可以作为 bring-up 旋钮，但会改变
+可观测性：被旁路的结果 clean，不能证明被旁路的边界正确。
+
+**最终作用域。** 保留“先标清临时语义和未覆盖面”的方法，不把 06-15 的单卡
+pass 当作后续 TP=8、MoE 或 P42 的稳定基线。
 
 #### 2026-06-19：跨卡 IPC capability 是独立基础设施 blocker
 
-**[直接证实于历史部署记录]** 旧 driver/firmware 下
+**失败阶段和现象。** **[直接证实于历史部署记录]** 旧 driver/firmware 下
 `support_shmem_map_exbus=0`，`aclrtIpcMemImportByKey` 返回 507899。升级到：
 
 ```text
@@ -349,7 +385,14 @@ CANN     9.0.0-beta.1
 后，跨卡 same-VA IPC 和 simpler L3 allreduce 才能通过。CANN GA 又会因
 AICPU 扩展库未下发，在 BootstrapDispatcher 阶段表现为 507018。
 
-经验不是“507018 都是 CANN”，而是：
+**为什么先查环境而不是 kernel。** 这些失败发生在 IPC capability、
+comm/bootstrap 或 AICPU 扩展装载阶段，尚未出现已提交到 AICore 的 RUNNING
+TASK；因此即使外层也显示 507018，证据链仍停在环境/派发前置层。
+
+**决定性对照和作用域。** capability 和软件栈补齐后，same-VA IPC 与
+known-good allreduce 恢复，证明该阶段存在真实基础设施 blocker。但这只为后续
+kernel 调试建立前提，不能解释后来已经进入 `rt.run` 的 S1 stall。经验不是
+“507018 都是 CANN”，而是：
 
 ```text
 如果在 Bootstrap/comm init 前失败，先查环境；
@@ -364,15 +407,23 @@ AICPU 扩展库未下发，在 BootstrapDispatcher 阶段表现为 507018。
 - 清理/刷新 Python source mtime 后 smoke 恢复；
 - 同时 MoE device runtime 仍在 5 秒内 507018。
 
-这一天已经暴露出后来反复出现的方法论问题：
+**为什么重启和错误码都不足以分类。** frontend smoke 的恢复与 device runtime
+继续失败同时存在，说明它们是两个并行 blocker：一个是 Python/source identity，
+另一个才进入 device 路径。若只记录“重启后仍 507018”，会把已消除的 stale
+source 和尚未消除的 device 问题压成一个故障。
+
+**最终保留的规则。** 每次先绑定 import path、source mtime/hash 和 build，
+再解释当前 run 的 device 行为：
 
 > 先证明正在运行的源码和环境，再解释 device 行为。
 
 #### 2026-06-24：第一个 MoE runtime 507018 来自 empty-tail 提交
 
 **[历史记录，未独立复核]** 8 卡 `DecodeLayerMoE` 在 runtime 继续 507018。
-dispatch-cut 显示 dispatch-only 能过、dispatch+routed 失败；最终定位到 routed
-expert 对 `tile_valid <= 0` 的空尾 tile 仍提交 kernel。补：
+当时先用 dispatch-cut 把失败边界从“整个 MoE block”缩到 routed expert：
+dispatch-only 能过，而 dispatch+routed 失败。检查 tail 计算后发现
+`tile_valid <= 0` 的空尾 tile 仍会走 index/cast/submit；signed remainder 一旦
+在无效范围内继续转成 index，可能产生下溢、越界或无意义 kernel 提交。补：
 
 ```text
 if tile_valid > 0:
@@ -381,8 +432,13 @@ if tile_valid > 0:
 
 后 8 卡 runtime 通过。
 
+**证据边界。** dispatch-cut、代码条件和修复后的 8 卡 runtime pass 共同支持：
+这是该 `DecodeLayerMoE` 对象的确定性 tail/submit bug。本文没有在 2026-07-17
+重新运行原始 build，因此按历史证据记录；它也没有覆盖 token golden 或重复
+whole-net P42。
+
 这与 07-06 的 `gate_topk` mrgsort hang、07-10 的跨层 alias 和 07-16 的随机
-signal-layout stall 都不是同一个问题。它提供的长期经验是：
+signal-layout stall 都不是同一个问题。最终保留的是：
 
 - signed tail 和 empty tile 必须在 cast/index/submit 前处理；
 - `507018` 可以来自确定性的局部 shape 逻辑；
@@ -396,8 +452,13 @@ signal-layout stall 都不是同一个问题。它提供的长期经验是：
 权重完成 device 精度验证。这里复用了 06-24 已补齐的 empty-tail guard；
 本阶段主要证明单独 routed 计算和真实权重数学可以正确。
 
-这说明一部分 507018 可以来自非常局部的 shape/tail 逻辑，但不能据此推导
-整网后来也挂在同一位置。
+**它为什么重要。** 这建立了一个局部数学基线：真实 W8A8 权重并非天然无法在
+device 上计算，empty-tail guard 也确实属于应保留的输入契约。
+
+**它为什么不够。** 该 probe 不包含整网 generator 内联副本、42 层调度、
+dispatch/combine 跨 rank 协议、IPC 权重池和 KV IPC。后来 whole-net 的
+`_expert_routed` 正是因为与 standalone `moe.py` 漂移而出错，所以“独立 kernel
+通过”只能作为对照，不能替代内联生成物审计。
 
 #### 与 active vLLM 同卡后出现另一类 507018
 
@@ -409,8 +470,14 @@ ring heap=4GB -> 16GB static arena OOM 207001
 降低 vLLM gpu memory -> OOM 消失，但 507018 仍在部分 rank 出现
 ```
 
-**[历史判断]** 当时把它归为独立 runtime/device-context co-tenancy blocker。
-该对象是 live 双 runtime 共卡，不是之后的 standalone single program P42。
+**为什么当时会怀疑 co-tenancy。** 故障只在 vLLM 与独立 ChipWorker 共卡的
+对象中出现，并且 arena 扩大后首先暴露 207001，说明容量和双 runtime/device
+context 是必须单独控制的变量。
+
+**决定性区分。** 降低 vLLM HBM 后，207001 消失但部分 rank 的 507018 仍在，
+证明“HBM 不足”不是所有失败的统一解释；同时该测试对象没有固定成后来
+standalone P42 的 single-program、pull+pull 和 fresh-exporter 组合。因此
+**[历史判断]** 只把它归为独立 co-tenancy blocker，不把其根因外推到 07-16。
 
 保留的经验：
 
@@ -420,7 +487,11 @@ ring heap=4GB -> 16GB static arena OOM 207001
 
 ### 4.4 2026-07-06～07-07：第一次用 TASK→kernel 真正抓到 `gate_topk`
 
-EpTpMoE 单块 8 卡真实 W8A8 出现：
+**前置对象。** 这里是 EpTpMoE 单块 8 卡真实 W8A8，不是 07-12 的 N1
+whole-net build。两个 build 的 `gate_topk` func id 不同：本阶段是 `func_id=2`，
+N1 real IPC 后来是 `func_id=3`。
+
+**现象和定位链。** EpTpMoE 出现：
 
 ```text
 sched_error_code=100
@@ -434,7 +505,9 @@ kernels=[aiv0:2]
 func_id 2 -> gate_topk
 ```
 
-**[直接证实]** 根因是 sort pipeline：
+`TASK` 证明已有 AIV task 被分配到 core 且不完成；同轮 exact
+`kernel_config.py` 才把它从“MoE 内某个 task”收敛到 `gate_topk`。检查生成 kernel
+后，sort pipeline 为：
 
 ```text
 sort32
@@ -445,7 +518,12 @@ sort32
 format2 要求左右输入各自已经是完整有序序列，但当时每个半块仍包含多个
 64-run。输入不满足状态机前置条件，分散分数下 kernel 不终止。
 
-修为 DeepSeek 风格的 format1 渐进链后，gate 运行和 top-k 数值都通过。
+**决定性实验。** 修为 DeepSeek 风格的 format1 渐进链后，同一 gate 对象可以
+完成，且 top-k 结果与 torch 对齐。forward progress 与数值两个 gate 同时通过，
+才把这次问题从“task 位于 gate”提升为：
+
+> **[直接证实]** 该单块 build 的 mrgsort 输入前置条件错误，是
+> `gate_topk` deterministic RUNNING hang 的代码级原因。
 
 这个修复后来极其关键：N1 whole-net 的 inlined generator 又保留或重新引入了
 同类错误，2026-07-12 的 `task_id=3` 最终再次映射到 `gate_topk`。这不是
@@ -455,6 +533,10 @@ format2 要求左右输入各自已经是完整有序序列，但当时每个半
 standalone validated source
 != generator 内联副本
 ```
+
+**最终保留与不覆盖。** 保留 format1 merge、sort-only golden 以及
+TASK→exact func→generated source 的定位方法；不能把本阶段 `func_id=2` 直接
+套到 N1 的 `func_id=3`，也不能用 gate 修复解释后来的随机 signal-layout stall。
 
 ### 4.5 2026-07-08～07-09：compile、prepare、dispatch 和底座漂移交织
 
@@ -477,13 +559,23 @@ standalone validated source
 TaskMapSize=0 / AICPU idle
 ```
 
-说明 host→AICPU dispatch 没建立；不能去调某个 AICore kernel。
+**因果解释。** `prepare` 能前进只说明编译结果和部分 runtime 资源已建立；
+`TaskMapSize=0` 加 AICPU idle 说明任务映射/派发没有形成，尚不存在可供分析的
+AICore RUNNING kernel。增大 ring 配置从“太小”走到约 64GiB arena OOM，也说明
+容量旋钮只是在移动失败阶段，不是产品修复。
+
+**最终作用域。** 这类失败归入 host/runtime dispatch 组织，不进入 S1 kernel
+stall；保留“先读 TaskMap/dispatcher，再决定是否看 kernel”的分类规则。
 
 #### fused attention+MoE 的 compile/device 混淆
 
 一度 attention 重写 compile clean，但 device 验证仍被同一个
 `TaskMapSize=0` 路径挡住。后来 separate program/Option-C 路径能运行，
 说明“编译成功”只清除了前端 blocker。
+
+这里没有证明 attention 重写的数值或 device 协议正确；它只说明同一个源码可以
+在 compile bar 通过、在 dispatch bar 失败。后续文档因此把
+compile/prepare/dispatch/run/numerical/repeated-release 六个 bar 分开。
 
 #### 07-09 升级栈带来新的漂移
 
@@ -502,14 +594,22 @@ runtime binary，而不能只写 pypto-lib 分支。
 #### 45 层单 program compile milestone
 
 `WholeDecodeNetwork`、`WholeDecodeFaithful` 等全 45 层结构先后 compile clean。
-这证明前端、链接和大规模 host orchestration 可生成，不证明 device 已运行。
+**可证明的范围**是前端能够展开 45 层、链接 method，并生成大规模 host
+orchestration；**不可证明的范围**包括 device task 是否真正派发、跨 rank
+协议是否前进、权重是否正确以及 P42 精度。后续 507899、K=2 alias 和 S1
+正是这些更高 bar 才暴露的问题。
 
 #### 507899 曾被误判为 0234 node poison
 
 首次 canonical TP=8 device run 在 comm-domain allocation 报 507899。由于连
 known-good allreduce 也失败，当时一度判断节点 IPC poison，并尝试 reboot。
 
-**[后续证伪]** reboot 无效。真正是两个独立问题：
+**为什么这个假设当时合理但不充分。** model run 和 known-good allreduce
+同时失败，确实把嫌疑从模型源码移到共享环境；但“共享环境”仍包含硬件、driver、
+runtime `.so` 和 SDMA workspace 配置，不能直接跳到“节点硬件 poison”。
+
+**决定性实验。** reboot 无效；随后 clean rebuild runtime、关闭 SDMA workspace，
+得到：
 
 1. 单卡 hello 507018：stale/mismatched runtime `.so`；
 2. 多卡 507899：升级栈把 `SIMPLER_ENABLE_PTO_SDMA_WORKSPACE` force-on。
@@ -522,7 +622,9 @@ multi-card allreduce PASS
 whole-net comm domain allocation PASS
 ```
 
-这一步证明了为什么“重启后仍失败”不能自动叫硬件坏。
+因此 **[后续证伪]** “0234 节点硬件 poison”不是已证实根因；恢复来自可重复的
+软件栈/config 改变。clean runtime 和 SDMA-OFF 是该环境阶段的必要修复，但不能
+解释后续已经进入 whole-net mid-run 的 scheduler timeout。
 
 #### dispatch clean 后出现 mid-run scheduler timeout
 
@@ -575,7 +677,12 @@ dense/MoE local weight index
 把 8 rank 全部权重 stack 到一个 driver 进程，host 瞬时占用约 752GiB，进程
 exit 137。这个失败发生在 device kernel 之前。
 
-架构因此改为：
+**为什么这不是 stall。** 日志停在 host 权重构造/进程被 OOM killer 终止，
+没有 `rt.run` 中的 TASK/CLUSTER 快照；因此不能把 exit 137 和后面的 507018
+写成一个设备故障。
+
+**架构决策。** N1 单 program 又要求一次拿到全 42 层权重，无法靠逐层 host
+streaming 回避 8× stack。于是改为：
 
 ```text
 8 per-rank exporter
@@ -585,6 +692,9 @@ exit 137。这个失败发生在 device kernel 之前。
 -> N1 single-program rt.run
 ```
 
+该改造解决 host ownership 和内存峰值，同时保留真实 IPC 权重约束；它是完整
+复现对象的一部分，不是 07-16 随机 stall 的单独根因。
+
 #### IPC import 成功后，先修 runtime contract
 
 依次出现：
@@ -592,8 +702,14 @@ exit 137。这个失败发生在 device kernel 之前。
 - host tensor 未在 prepare 前 `.share_memory_()`；
 - `StackedDeviceTensor[r,k]` 不支持 trailing contiguous sub-view。
 
-增强 `StackedDeviceTensor` 后，权重可以按层产生正确 device sub-view。这个
-runtime 支持后来必须提交到 pypto clean pin；只拉 pypto-lib 无法复现。
+**为什么这些是 runtime contract，而不是模型数学。** exporter 已创建正确的
+per-rank pool，但 prepare 需要跨进程可见的 host metadata；模型按层索引又要求
+从 stacked device view 取得 trailing contiguous sub-view。任一合同缺失，都会
+在进入目标 kernel 前失败或取不到合法参数。
+
+增强 `StackedDeviceTensor` 和 `import_ipc_all` 后，权重可以按层产生正确 device
+sub-view。这个支持后来必须提交到 pypto/simpler clean pin；因此只拉 pypto-lib
+即使三个模型文件 byte-match，也不是同一复现对象。
 
 #### 进入 device 后先撞 arena OOM
 
@@ -607,6 +723,10 @@ running=1
 waiting=3
 ```
 
+**因果边界。** 207001 有明确的 `rtMalloc`/容量证据，降低 ring heap 后 OOM
+消失；随后出现的 S1 又有 RUNNING task，所以这是“先移除容量 blocker，才暴露
+kernel blocker”，不是 OOM 变成了 S1，也不是调小 heap 修好了后者。
+
 #### IPC/VA/a2a 的中间归因
 
 同一 program、同 heap：
@@ -618,6 +738,15 @@ P=0 -> clean
 P>=1 -> stall
 ```
 
+**为什么这个现象会把嫌疑引向 IPC/VA 或 EP all-to-all。** dummy H2D 和 real
+IPC 的主要可见差异是权重的物理存储类型；P0 与 P1 的分界又恰好在第一层
+MoE。因此，当时合理的工作假设是：大块 peer-mapped child memory 可能改变
+AICore 对权重或通信 window 的可达性，或者首个 EP all-to-all 先触发了该地址
+空间冲突。
+
+但这组对照仍有两个未控制变量：P0/P1 改变了生成的 task 图和层数，dummy H2D
+也不只是“换了数据”，还改变了 allocation、VA 和 IPC import 路径。它能建立
+相关性，不能告诉我们具体是哪一个 task、哪一个 kernel 或哪一种同步操作失败。
 于是历史上一度把根因写成：
 
 ```text
@@ -626,7 +755,8 @@ large child-memory IPC pool / VA interaction
 ```
 
 **[后续证伪]** 当时没有 exact TASK→func 映射，只是按 MoE 内部顺序猜 task3。
-第二天 exact device log 证明 task3 实际是 `gate_topk`。
+第二天 exact device log 证明 task3 实际是 `gate_topk`；因此“IPC/VA 与首个
+EP all-to-all 的相关性”不能升级成该 deterministic stall 的代码级根因。
 
 ### 4.8 2026-07-12：exact TASK 映射推翻 IPC/VA 假设
 
@@ -652,6 +782,11 @@ fanin=3/3
 func_id 3 -> gate_topk
 ```
 
+**为什么这条证据具有决定性。** `state=RUNNING`、`core=28` 说明设备确实已
+领取并执行该 task；`fanin=3/3` 说明它的输入依赖在采样时已经满足，因此不能
+用“host DAG 缺依赖”解释这个快照。只有把同轮 `kernels=[aiv0:3]` 与同一 build
+的 `kernel_config.py` 绑定，才能确定观察到的 task 不是凭源码顺序猜出来的。
+
 **[直接证实]** N1 inlined gate 使用：
 
 ```text
@@ -664,13 +799,16 @@ sort32
 ```
 
 最后两个半块各自仍含两个有序段，不满足 format2 输入契约。修为完整的
-format1 渐进 merge chain 后：
+format1 渐进 merge chain 后，同一对象得到：
 
 - P42 真 native W8A8 IPC 约 3.48s clean；
 - sort-only probe 与 torch top-k 对齐；
 - 权重 IPC + KV IPC 双路径进入 clean device run。
 
-这一步同时推翻：
+这组结果把“挂在哪里”和“为什么挂”分成了两层：exact TASK 直接定位到
+`gate_topk`，format1 修复后的 forward-progress 与 top-k golden 共同支持
+mrgsort 输入契约错误是 deterministic bug；它并没有证明所有 N1 后续 stall 都
+来自 gate，也没有证明 IPC memory 从此在任何组合下都无风险。这一步同时推翻：
 
 ```text
 IPC child-memory 是唯一根因
@@ -692,7 +830,9 @@ logits=NaN
 argmax=0
 ```
 
-说明 forward progress 与 numerical correctness 已分离。
+这里的 `RUN_CLEAN` 只回答“host/device 调度完成”，而 `NaN` 和 `argmax=0`
+回答“结果不正确”。这不是同一次测试互相矛盾，而是恢复真实语义后暴露了原来
+被 zero path 遮蔽的数值错误；从此稳定性和精度必须作为两个独立 gate。
 
 #### P0 finite、P1 NaN 的第一次解释仍然错了
 
@@ -706,7 +846,10 @@ P1 -> NaN
 当时自然怀疑第一层 INT8 MoE。A-operand padding mask 实验仍 NaN，进一步把
 嫌疑放到 routed expert、dispatch、combine 和 shared。
 
-但随后发现真正的第一层边界 bug：
+**为什么这些候选仍不能直接定案。** “P0 finite/P1 NaN”只把边界缩到第一层
+MoE 的完整路径；padding mask 只覆盖 partial-tile A operand 的一种解释，不能
+区分 attention handoff、Out writeback、routed arithmetic 或 combine protocol。
+随后发现真正的第一处边界 bug：
 
 ```text
 attn_only_orch 的 resid3_out 局部 tensor
@@ -716,6 +859,11 @@ attn_only_orch 的 resid3_out 局部 tensor
 ```
 
 修复 Out writeback 后 NaN 消失，但仍出现 1e11～1e12 幅值。
+
+这两个结果必须按先后关系理解：Out writeback 修复的是“attention 结果没有
+发布到 `h_mid_out`”这一 handoff 错误；它没有证明后续 routed expert 的数学
+已经正确。NaN 消失后仍有巨大有限值，正是说明下一个独立 blocker 已经被暴露，
+而不是说明前一个判断“完全错误”。
 
 #### 三个 ordering/FUSE 判断又被诊断工具污染
 
@@ -765,6 +913,12 @@ validated dispatch-side quant + materialized INT8
 
 修复方向因此明确为原生 W8A8 对齐，而不是回退 BF16-dequant。
 
+**保留边界。** 这组 dump 直接支持“第一处数值异常在 routed expert 输出”
+以及“whole-net 内联实现没有遵循 validated native W8A8 边界”；它不等于证明
+所有 INT8 问题都已消失，也不等于证明 routed expert 是后续随机 stall 的位置。
+修复必须落在 generator/active builder 的共同源头，并以生成物 round-trip 防止
+standalone `moe.py` 修好、inline 副本仍旧错误。
+
 ### 4.10 2026-07-13：native W8A8 修复正确，但 P42 stall 的解释继续变化
 
 对齐 validated routed expert 后：
@@ -795,6 +949,11 @@ dispatch-side INT8 缩小 `recv_x` 为“确定修法”。
 - **保留**：因为 native W8A8、带宽、内存和已验证 `moe.py` 边界正确；
 - **撤回根因措辞**：不能声称它独立证明了“comm pool byte limit”。
 
+**为什么仍然保留这个修改。** dispatch-side INT8 使 routed payload、scale 和
+native matmul 的 dtype/size 契约与已验证 `moe.py` 一致，也降低了 HBM 和通信
+footprint；这些是设计和精度要求，不依赖“固定 byte cap”是否存在。因此撤回的
+只是“它证明了 P42 stall 的唯一上限”这句话，不是撤回 native W8A8 实现本身。
+
 ### 4.11 2026-07-14：首次得到 token 303，但发生两次过早闭环
 
 #### dense L2 `attn_layer_idx` 是真实精度 bug
@@ -814,6 +973,12 @@ L2 cos -> 0.999999
 ```
 
 **[直接证实]** 这是独立的精度根因，应保留。
+
+**为什么这个修复不能顺带关闭 stall。** L2 cosine 从 `0.931` 恢复到
+`0.999999`，证明单层权重索引边界确实读错并已纠正；但它发生在数值路径，
+并没有改变跨 rank signal、generation 或 pull protocol。随后仍能在正确
+`argmax=303` 后 stall，正好说明“精度修复完成”与“forward progress 稳定”是
+不同的准出条件。
 
 随后在 logging 时序扰动下 P42 跑通一次：
 
@@ -837,6 +1002,12 @@ P42 7 次 RUN_CLEAN
 argmax 303 3/3
 ```
 
+**为什么当时容易把它过早升级成结论。** completion-wave 的结构与正确的
+collective protocol 相似，且短样本同时改善 rc 和 argmax，所以它有资格作为
+候选协议修复；但“7 次 clean”没有说明每次是否是同一 source、同一 exporter
+生命周期和同一无 logging 条件，也没有把概率性 clean 与 matched baseline
+区分开。
+
 随后 vector diff 又把残余数值抖动指向 combine/routed gather，并尝试
 `_serialize_after_shared`；该串行化在 P42 又造成 507018。
 
@@ -852,6 +1023,10 @@ run3 STALL
 
 **[直接证实]** completion-wave 没有可靠关闭随机 stall。历史 7 次 clean 是概率
 样本或环境/对象差异，不能作为 release。
+
+它仍可能是独立 collective 中有价值的 completion/publication 正确性增强；
+被证伪的是“它足以解释并消除本 N1 随机 stall”，不是“two-wave 机制在所有
+协议中都无效”。
 
 这一晚形成最重要的流程规则：
 
@@ -909,6 +1084,11 @@ func29 = _dispatch_stage
 **[直接证实]** 输入依赖已经满足，`_dispatch_push` 已在 core 上 RUNNING 但不完成；
 下游 `_dispatch_stage` 只是等待它。它不是 S4 fanin dependency deadlock。
 
+这一步回答的是“哪一个已提交 task 没有 forward progress”，还没有回答该 task
+内部是计算、DMA、fence、notify 还是 wait 在等待。后一个问题必须继续依赖
+生成 kernel、上一对 producer/consumer 操作以及跨 rank 的同轮快照，不能从
+`func28` 名字直接跳到某条 ISA。
+
 #### 有 kernel 位置，不等于有子指令根因
 
 当时先后怀疑：
@@ -927,7 +1107,8 @@ func29 = _dispatch_stage
 - count/data done 加 two-wave；
 - AtomicAdd/Set/read-back 等变体。
 
-这些实验会改变挂率或挂点，但没有给出稳定修复。特别是：
+这些实验会改变挂率或挂点，但没有给出稳定修复。它们的证据等级是“削弱某个
+候选机制”，而不是“确认另一个机制”。特别是：
 
 - local-write 后仍可挂，削弱“bulk TPUT 是唯一根因”；
 - two-wave 后仍约三分之二 stall，推翻“单波就是最终原因”；
@@ -953,6 +1134,10 @@ offset/handoff 问题，不能以“pull 原语在别处 clean”替代整网验
 
 应保留的不是“pull 天生不会挂”，而是最终 fixed-slot pull 的清晰边界、
 self local-load/peer remote-load 和 dispatch-produced inverse map。
+
+这里还要区分两个结论：pull 重写改善了路由边界、offset 可复算性和 self/peer
+语义，是架构上可审计的最终形态；但某一次 pull 版本仍然 stall，说明实现和
+buffer/signal 生命周期必须一起验证，不能把“原语名称是 pull”当作稳定性证明。
 
 #### 0162 二次复现
 
@@ -988,6 +1173,12 @@ rank 15   -> _dispatch_pull
 未完成的 publish/fence/notify/wait/load generation 反推，而不是选择出现次数
 最多的 kernel。
 
+**为什么这会把排查方向从 kernel 内部拉回 buffer ledger。** 若 rank 15 还在
+dispatch pull，而 rank 8–14 已经进入 `_pull_routed_y`，两者可能不是两个独立
+故障，而是同一 generation 的 producer/consumer 在不同阶段停住。此时要同时
+核对 payload 是否已发布、signal 是否是当前 generation、consumer offset 是否
+来自同一份 count snapshot，以及 layer window 是否仍被上一层占用。
+
 #### 回到 buffer ledger 后发现 control signal 物理共线风险
 
 逻辑 signal：
@@ -997,8 +1188,10 @@ rank 15   -> _dispatch_pull
 ```
 
 此前物理 allocation 也只有 32B。多个 signal 以及 signal/payload 在一个巨大
-comm window 中紧密排列。静态布局审计显示 control-plane hotspot 可能共享
-512B line。
+comm window 中紧密排列。按照顶层 memory/tensor-layout 约束，必须把
+**logical signal bytes、storage-size 对齐、control-plane cache-line isolation、
+allocator 的 base/offset 对齐**分开检查；它们不是同一个概念。静态布局审计显示
+control-plane hotspot 可能共享 512B line。
 
 最终只改物理分配：
 
@@ -1026,7 +1219,9 @@ window size 766525440 %512=0
 ```
 
 **[强关联]** 应用该最小 layout 变量后，0162 fresh exporter pool 的随机 stall
-收敛为连续 20 次 clean 且每次 `argmax=303`。
+收敛为连续 20 次 clean 且每次 `argmax=303`。这说明在这个固定对象上，物理
+signal isolation 是一个有效的 release 变量；它不说明 512B 是所有平台的硬编码
+常数，也不说明已经观察到某个丢失的 signal bit。
 
 #### 最终 layer boundary 被固定
 
@@ -1128,6 +1323,305 @@ worker-window relevant dmesg=0
 | PUSH/TPUT 是最终唯一根因 | push 探针和 func28 线索 | pull+pull 也 stall，kernel 跨 rank 漂移，无 PC |
 | P20 clean 可以代替 P42 | 迭代快、概率低 | 完整深度改变 layout/generation/stall 概率 |
 | 一次 argmax303 表示 ready | 数学路径正确 | 同版本下一轮仍 stall |
+
+### 4.17 关键结论的完整因果链
+
+前面的时间线回答“哪一天发生了什么”。本节进一步回答“为什么当时会这样判断、
+什么证据把判断升级或降级、最后哪些内容进入了 release”。后续 session 复用
+本案例时，应优先参考本节，而不是只摘取某个阶段最后一句“根因”。
+
+#### 4.17.1 为什么 07-10 的 per-layer communication window 是确定性真修复
+
+**前置约束。** N1 选择把 42 个 MoE layer 放进同一个 `@pl.program`。因此，
+多个 layer 的通信操作进入同一个 host orchestration 和同一个调度 DAG。按照
+RAW-only-v1 的设计，仍可能被上一层远端 rank 访问的中间 buffer，不能在下一层
+直接复用为另一个逻辑对象；否则 SSA/lifetime 描述和硬件实际访问会不一致。
+
+**观测。** 复用一套 comm/scratch window 时，P1 可以完成，K=2 开始出现
+`507018`/scheduler timeout。生成的 `host_orch.py` 明确显示 layer-3 和
+layer-4 的 `chip_orch` 复用了同一个 `combine_done_buf`、`recv_x`、
+`pub_counts`、`routed_y` 和相关 signal SSA。这个证据比“层数变大所以概率
+变差”更具体：它直接显示相邻 layer 指向了相同的 communication object。
+
+**为什么提出 alias 假设。** K=1 与 K=2 的主要结构差异就是是否引入第二个
+使用者；失败发生在下一层进入时，而不是 compile、prepare 或首个 dispatch。
+如果上一层的远端 reader 仍在使用窗口，下一层重新写 signal/payload，正好会
+表现为下一层等待不满足、旧 generation 提前通过或下游读到错误数据。
+
+**决定性实验。**
+
+```text
+shared window K=2       -> deterministic STALL
+per-layer distinct K=2  -> RUN_CLEAN
+per-layer distinct K=42 -> RUN_CLEAN
+```
+
+**结论。** 这组对照直接证明 07-10 的 shared-window alias 是一个独立的、
+确定性的架构 bug；per-layer distinct window 是针对它的真修复。它解决的是
+“跨层 communication object 生命周期重叠”，不等于证明 07-16 的随机 stall
+也是同一个 alias。后续随机问题发生在已经逐层 distinct 的版本上，所以两者
+必须拆开。
+
+**保留与不覆盖。**
+
+- 保留每层独立的 communication window、signal、payload 和 hidden handoff；
+- 保留 writer/reader/lifetime ledger；
+- 不再用“上一层看起来完成了”作为下一层复用依据；
+- 不能因为 K=2 alias 修复通过，就断言所有后续 stall 都是 alias；
+- 不能用不同 buffer 名称替代实际生成 SSA、physical offset 和 lifetime 审计。
+
+#### 4.17.2 为什么 07-12 的 exact TASK 证据推翻了 IPC/VA/EP all-to-all 归因
+
+**前置背景。** 真实权重改为 per-rank exporter + IPC 导入后，dummy H2D
+weight 版本可以运行，而 real IPC weight 版本在早期停住；P0 不进入 MoE 时
+可以完成，P≥1 时失败。仅凭这些结果，最自然的候选是“大 IPC pool 与 MoE
+EP all-to-all 存在 VA/peer-access 冲突”。
+
+**为什么这个假设当时合理。**
+
+1. H2D 和 IPC 的内存类型确实不同；
+2. P0/P1 的分界恰好落在 MoE 入口；
+3. 当时 `stuck_task_id` 的低位曾被错误地当作 task/func 顺序；
+4. 按 MoE 源码顺序看，a2a 确实接近第一个重通信操作。
+
+但这四点只能建立候选关系，不能说明 device 实际执行的 kernel。
+
+**决定性证据。** 打开 V0 device 日志后，同轮快照为：
+
+```text
+TASK task_id=3 state=RUNNING
+kernels=[aiv0:3]
+fanin=3/3
+core=28
+```
+
+再用同一次 build 的 `kernel_config.py` 查询 `func_id=3`：
+
+```text
+func_id=3 -> gate_topk
+```
+
+这条证据来自实际提交到 device 的 kernel 列表和 exact build 映射，比“task3
+在 MoE 源码中看起来像 a2a”强得多。`fanin=3/3` 还说明该 task 的输入依赖
+已经满足；它不是简单的 host DAG missing dependency。
+
+**代码级原因。** N1 内联 generator 使用了错误的 sort pipeline：
+
+```text
+sort32
+-> mrgsort(block_len=64)
+-> 4 x 256-run
+-> format2 merge two half-blocks
+```
+
+format2 的前提是每个输入本身已经是一条完整有序序列，但两个半块内部仍各有
+多个有序 run，因此输入契约被破坏。分散 gate score 会让 merge state machine
+不终止，最终表现为 `S1/RUNNING`，而不是一个清晰的 host-side 越界错误。
+
+**修复和边界。** 改成完整的 DeepSeek 风格 format1 渐进 merge chain 后，
+P42 native W8A8 IPC 运行通过，sort-only probe 也与 torch top-k 对齐。因此：
+
+- [直接证实] 这一次 deterministic task3 stall 的具体 kernel 是 `gate_topk`；
+- [直接证实] 代码问题是 mrgsort 输入前置条件错误；
+- [后续证伪] “IPC child-memory/VA 是这一次 task3 stall 的根因”；
+- [后续证伪] “task3 就是 EP all-to-all”。
+
+保留 V0 日志隔离、同轮 `kernel_config.py` 映射、format1 merge 实现，以及
+“standalone validated kernel 不代表 generator 内联副本相同”的审计要求。
+
+#### 4.17.3 为什么 P0 finite/P1 NaN 不能直接证明 INT8 MoE kernel 是首个根因
+
+**观测。**
+
+```text
+P_FAITHFUL_MOE_LAYERS=0 -> finite
+P_FAITHFUL_MOE_LAYERS=1 -> NaN
+```
+
+它只说明错误首次出现在“引入第一层 MoE 的完整路径”之后，并不能区分：
+
+```text
+MoE arithmetic
+attention -> MoE handoff
+pl.Out writeback
+未初始化 buffer
+dispatch/combine protocol
+```
+
+**为什么先怀疑 INT8 MoE。** 当时正从 BF16-dequant bring-up 迁移到 native
+W8A8，且 whole-net 内联 routed expert 与 standalone validated `moe.py`
+并不完全相同；因此“第一层 MoE 一打开就 NaN”与 INT8 path 存在合理相关性。
+
+**为什么 padding 实验不够。** 对 routed input/hidden tile 做 zero-fill 后仍然
+NaN，只能排除一种 A-operand padding 解释，不能证明 MoE arithmetic 是首个
+错误点。
+
+**决定性 op-level dump。** 使用独立 `pl.Out dbg_out` 把阶段输出导出：
+
+```text
+post_norm       -> 1.45       正常
+local_routed_x  -> 1.45       正常
+shared expert   -> 1.62       正常
+local_routed_y  -> 3.99e11    首个异常
+moe_out         -> 1.95e11    继承异常
+```
+
+这组数据揭示了两个先后叠加的问题：
+
+1. 早期 NaN 的第一处边界错误是 `attn_only_orch` 的 `pl.Out` 被局部 tensor
+   遮蔽，导致 attention 结果没有写进 `h_mid_out`，MoE handoff 读取未初始化值；
+2. 修复 writeback 后残留的 1e11 幅值，才由 whole-net inlined
+   `_expert_routed` 与 validated `moe.py` 的 native W8A8 实现漂移产生。
+
+因此，“P1 NaN”不是单一根因，而是至少两个不同边界问题先后叠加后的共同外观。
+
+最终保留：
+
+- `attn_only_orch` 的真实 Out writeback；
+- 独立 op-level dump，而不是 orchestration 内 early return；
+- whole-net routed path 对齐已在 device 验证的 dispatch-side native W8A8；
+- 禁止用 BF16-dequant 回退把 NaN/幅值错误隐藏起来。
+
+#### 4.17.4 为什么 completion-wave 曾经看起来修好，却不能作为最终结论
+
+**当时结果。** 在 hand-written `tp_all_reduce` 中加入 completion wave，并对
+combine 做 zero/publication 调整后，历史记录得到：
+
+```text
+P42 7 次 RUN_CLEAN
+argmax=303 3/3
+```
+
+**为什么这个解释看似成立。** 修改形式与框架中已验证的 two-wave collective
+相似，且短期同时改善了稳定性和精度；从局部协议看，它不像单纯提高 timeout
+的 workaround。
+
+**决定性反例。** 同一 clean tree、不开 logging、同一 P42 真输入复验：
+
+```text
+run1 STALL
+run2 CLEAN argmax=303
+run3 STALL
+```
+
+所以 7 次 clean 不能证明 completion-wave 消除了随机问题。可能的解释包括
+概率性短样本、logging/运行时序扰动、exporter/runtime 对象差异，或其他同时
+存在的 layout/protocol 修改。
+
+**最终作用域。** completion-wave 可以作为某些独立 collective protocol 的
+正确性增强，但不能写成 N1 随机 stall 的最终根因或完整修复。后续验证必须
+回到无 logging、exact source、P42 和 canonical 重复测试。
+
+#### 4.17.5 为什么“kernel 位置漂移”本身也是证据
+
+不同失败 build/rank 曾出现：
+
+```text
+push baseline: func28 = _dispatch_push
+pull build:    _dispatch_pull / _pull_routed_y / combine / residual
+rank 8-14:     _pull_routed_y
+rank 15:       _dispatch_pull
+```
+
+如果只看某一次日志，容易直接写成“stall root cause = 这个 kernel”。但跨 rank
+collective 实际是一条：
+
+```text
+producer -> publish -> fence/notify -> peer wait -> load -> consumer
+```
+
+不同 rank 在采样时可能处于同一条协议链的不同位置：一个仍在发布，另一个已
+进入 pull，第三个正在等待下游 combine。后面的 kernel 可能只是比前面多走了
+几步，并不是新的独立根因。
+
+因此 kernel 位置漂移说明：
+
+1. 不能按出现次数最多的函数宣布统一挂点；
+2. 要按 layer/generation 排序，寻找所有 rank 最早共同失去 forward progress
+   的边界；
+3. 没有真实 PC 时，结论只能停在 kernel/通信边界；
+4. physical layout、signal generation、offset、zero-init 和 producer/consumer
+   lifetime 必须回到同一个 ledger。
+
+这也是最终不能把 PUSH/TPUT、`_pull_routed_y` 或某个 signal bit 写成唯一硬件
+根因的原因。
+
+#### 4.17.6 为什么 512B 是强关联，而不是已经证明的唯一根因
+
+**修改前。** signal 的逻辑对象是：
+
+```text
+[8,1] INT32 = 32B
+```
+
+此前物理 allocation 也只有 32B。不同 control signal、signal 与 payload 可能
+紧密排列；逻辑上是不同 tensor，但底层一致性/互联管理可能以 512B 粒度处理
+相邻地址。于是 `AtomicAdd/Set`、payload load/store 和其他 control signal
+可能共享同一物理 line。
+
+**为什么它成为最后的候选。** 到 07-16 时，per-layer alias 已修、gate_topk
+deterministic bug 已修，但 P42 仍有随机 stall；push 和 pull 都曾失败，
+不同 rank 的最早未完成 kernel 会漂移，同时 dmesg 没有 fault、illegal VA 或
+真实 PC。继续修改某个 kernel 内部指令已经无法形成干净的最小 A/B，于是回到
+buffer ledger 检查 control plane 的 physical isolation。
+
+**A/B 不变量。**
+
+```text
+只改：physical signal allocation 32B -> 512B
+不改：P42、token、native W8A8、KV IPC、pull+pull、
+      AtomicAdd/Ge、layer boundary、数学和 route mapping
+```
+
+生成物检查：
+
+```text
+216/216 signals nbytes=512
+all relative offsets %512=0
+window size %512=0
+```
+
+结果是 0162 fresh exporter pool 的 exact release source 连续 20 次：
+
+```text
+20/20 rc=0
+20/20 argmax=303
+worker-run dmesg 无新增 fault/507018/running-stalled
+```
+
+**为什么仍不能写成唯一根因。**
+
+1. 没有完整归档 matched 32B A 组和 512B B 组的逐项 source/build/run 表；
+2. 没有真实 AICore PC 或 bit-level signal trace；
+3. 0234 历史记录没有完整绑定同样的三仓/runtime manifest；
+4. 512B 同时改变了物理地址间距和潜在一致性行为，不能仅凭结果推断是
+   某个 signal bit、cache line 还是某个协议操作起作用。
+
+准确措辞是：
+
+> 在 0162 固定 release object 上，512B control-signal physical isolation 是
+> 最终最小 layout 变量，并与历史随机 stall 消失具有强关联；它由 exact-source
+> P42 20/20 支持，但现有材料没有证明它是跨机器充分条件、某个具体 bit 的丢失
+> 机制，或某个 TPUT/WAIT 指令的唯一硬件根因。
+
+#### 4.17.7 为什么最终必须同时保留 pull、inverse_map、per-layer buffer 和 512B
+
+最终 release 不是“只把 32 改成 512”后随便跑出来的版本。它包含几类来源不同、
+不能互相替代的修改：
+
+| 修改 | 解决的问题/提供的价值 | 证据 | 删除后的风险 | 是否可称为最终 stall 根因 |
+|---|---|---|---|---|
+| fixed-slot dispatch pull | 固定 source/destination 路由和可复算 offset，减少 push/pull 边界歧义 | pull wiring、P42 release | 重新引入 push 远端写路径或旧边界 | 不能单独称唯一根因 |
+| dispatch-produced `inverse_map` | 让 combine 消费同一份 dispatch 路由结果 | generator round-trip、final boundary | combine 重算状态，可能产生 offset/order 不一致 | 架构正确性 |
+| self local-load / peer remote-load | 明确本地与跨卡访问语义，避免 self route 走错误 peer 路径 | design doc、device/canonical | self/peer 路径混淆、地址或同步错误 | 边界正确性 |
+| per-layer distinct window | 解决 07-10 已证实的 RAW-only alias | K=2/K=42 A/B | 重新出现 deterministic cross-layer alias | 早期独立 blocker，不是最终唯一根因 |
+| native W8A8 dispatch-side quant | 修复 whole-net routed expert 与 validated `moe.py` 漂移 | op-level dump、P1/P20/P31 | NaN/1e11、违反用户精度约束 | 精度/设计修复 |
+| signed tail、zero-init、padding 语义 | 防止 empty tile、旧 generation、padding 行污染 | shape/tail/layout 审计 | 越界、NaN、提前 wait 或错误 route | 正确性前提 |
+| 512B control-signal isolation | 最终最小物理 layout A/B | 0162 exact P42 20/20 | 重新暴露历史随机 stall 风险 | 强关联，非唯一硬件证明 |
+
+因此，最终代码不能只保留 512B 一行：512B 只改变 control signal 的物理隔离，
+不能替代 layer boundary、native W8A8、route mapping、tail/initialization 或
+已经解决的 per-layer lifetime 问题。
 
 ## 5. 固定被测对象
 
