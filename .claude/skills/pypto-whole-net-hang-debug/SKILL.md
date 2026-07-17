@@ -47,6 +47,10 @@ description: 使用隔离日志、PTO2 stall 分类、scheduler TASK/CLUSTER 寄
 多个 blocker 压成一个“根因”。长时间、多 session 的实践案例见
 `references/n1-case-study.md` 的时间线和 blocker 演化矩阵。
 
+面向新读者时，正文首次出现 `P1/P20/P42/K2` 等历史简写必须写出完整变量、
+MoE 层数和中文含义；日志原文可保留缩写，但不能让其与 task、kernel、rank、
+batch 或优先级混淆。项目术语的通俗解释见案例文档 §1.2。
+
 处理 N1 类问题时，同时读取：
 
 - `../pypto-dev-constraints/SKILL.md`；
