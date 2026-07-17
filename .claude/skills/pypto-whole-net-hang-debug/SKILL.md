@@ -40,6 +40,10 @@ description: 使用隔离日志、PTO2 stall 分类、scheduler TASK/CLUSTER 寄
   代替顶层设计约束。
 
 详细实践见 [references/n1-case-study.md](references/n1-case-study.md)。
+处理持续多个 session、同一错误码反复出现的 N1 类事件时，先读该案例的
+§2～§4：不要只读最终 512B 结果；先按时间区分环境、dispatch、alias、OOM、
+deterministic kernel bug、精度 bug 和 probabilistic stall，再复用后半部分的
+task/kernel、跨 rank、buffer 和 release 方法。
 
 ## 0. 先冻结被测对象
 
