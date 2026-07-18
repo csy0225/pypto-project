@@ -365,6 +365,27 @@ _task_interface.cpython-311-x86_64-linux-gnu.so
 覆盖 `DeviceTensor`/`StackedDeviceTensor` 分层 view、
 `DistributedWorker.import_ipc_all` 和 simpler child IPC import。
 
+
+### 4.2 stepfun/develop clean regression
+
+N1 single-submit 已合入三仓 `stepfun/develop` 后，在独立 clean source tree 上完成完整回归：
+
+```text
+simpler   stepfun/develop = c7fdc574fb0637fda581398e5064994734d913c5
+pypto     stepfun/develop = 9ec303f6f984b96a70d467cd46185b7b9157d3ec
+pypto-lib stepfun/develop = e1513d22e2ac10ad97f7c9811122edf03bb78a8f
+
+log = /data/chensiyu/hw_project/pypto/workspace/logs_n1/
+      stepfun_final_clean_p42_repeat20_20260718_191643
+rc=0
+repeat pass=20/20
+argmax=303 for every run
+TOP5=[303, 9592, 1043, 768, 2086]
+runtime min/mean/max = 0.5559 / 0.6684 / 2.3542 s
+fingerprints_unique=1
+dmesg relevant=0 for all 20 worker-run windows
+```
+
 ## 5. 发布前静态与生成器 gate
 
 ```bash

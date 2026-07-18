@@ -10,6 +10,18 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 > checkpoint SHA256、pip freeze、三仓/runtime binary、PTOAS/CANN、设备和
 > canonical 命令全部内嵌在该单一文档中。
 
+
+> **2026-07-18 ✅ N1 single-submit 已合入三仓 stepfun/develop 并完成干净回归**：
+> - **合入目标**：`stepfun/develop`。
+> - **三仓远端 pin**：simpler `c7fdc574fb0637fda581398e5064994734d913c5`；
+>   pypto `9ec303f6f984b96a70d467cd46185b7b9157d3ec`；
+>   pypto-lib `e1513d22e2ac10ad97f7c9811122edf03bb78a8f`。
+> - **合入内容**：simpler 合入 N1 runtime 支持（child-context IPC import、no-HCCL / SDMA workspace 等）并同步 fork stepfun 的 raised watchdog timeout；pypto 合入
+>   `InlineOrchestrationHelpers`、native W8A8 heterogeneous tuple return、DeviceTensor reshape、CommContext propagation，并将 runtime gitlink 指向 simpler `c7fdc574`；pypto-lib 合入瘦身后的 single-submit 唯一入口。
+> - **干净回归对象**：使用独立 clean source tree `/tmp/stepfun_final_regression_20260718_191500`，强制导入该 tree 的 pypto/pypto_core/simpler/pypto-lib，避免 venv editable 旧路径污染。
+> - **回归日志**：`workspace/logs_n1/stepfun_final_clean_p42_repeat20_20260718_191643`。
+> - **结果**：P42 complete whole-net、token 6127、native W8A8 IPC weights、KV IPC、single-submit；`rc=0`、`pass=20/20`、每次 `argmax=303`、`TOP5=[303,9592,1043,768,2086]`、runtime min/mean/max=`0.5559/0.6684/2.3542s`、fingerprints_unique=1；20 个 worker-run dmesg 窗口 relevant=0。
+
 > **2026-07-18 ✅ N1 whole-net rank-local single-submit 已在 0162 通过 canonical P42 20/20**：
 > - **当前 stable 对象**：`models.step3p5.decode_layer_single_chip:
 >   whole_decode_faithful_real_single_chip`，dispatch pull + combine pull，
