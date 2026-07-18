@@ -15,7 +15,7 @@
 program = whole_decode_faithful_real_single_chip
 layer module = models.step3p5.decode_layer_single_chip
 branch = sync/whole-net-mtp3-53a6732
-release commit = 369e8f91b8b51a9a11dd1df04a69a4a8b1b45d0e
+release commit = 3af13f4facbe8db5cd4a6c769e8b9e07e351c7b9
 compiler/runtime commit = pypto e49ce111c1503f4fb3e898af4223560cab907a62
 machine = gpu-a910x-0162
 devices = 8,9,10,11,12,13,14,15
@@ -195,7 +195,7 @@ rm -f "$OUT"/ready.rank* "$OUT"/STOP
 
 ```text
 /data/chensiyu/hw_project/pypto/workspace/logs_n1/
-  single_submit_final_p42_repeat20_20260718_105051
+  single_submit_cleanup_p42_repeat20_20260718_174948
 ```
 
 结果：
@@ -205,7 +205,7 @@ rc=0
 REPEAT summary pass=20/20
 每次 argmax=303
 TOP5=[303, 9592, 1043, 768, 2086]
-runtime min/mean/max = 0.5530 / 0.6624 / 2.2906 s
+runtime min/mean/max = 0.5536 / 0.6607 / 2.2766 s
 fingerprints_unique=1
 ```
 
@@ -221,20 +221,34 @@ build_output/WholeDecodeFaithfulRealSingleChip_20260718_105511/orchestration/hos
 `507018`、`running-stalled`、`stranded CQE`、devmm/page fault、illegal VA
 或 timeout。
 
+
+cleanup 后的瘦身入口 repeat20：
+
+```text
+log = /data/chensiyu/hw_project/pypto/workspace/logs_n1/
+      single_submit_cleanup_p42_repeat20_20260718_174948
+rc=0
+repeat pass=20/20
+argmax=303 for every run
+TOP5=[303, 9592, 1043, 768, 2086]
+host_orch still has exactly one _submit_chip call site
+dmesg relevant=0
+```
+
 最终源码与 binary 指纹：
 
 ```text
 pypto-lib commit:
-  369e8f91b8b51a9a11dd1df04a69a4a8b1b45d0e
+  3af13f4facbe8db5cd4a6c769e8b9e07e351c7b9
 pypto commit:
   e49ce111c1503f4fb3e898af4223560cab907a62
 simpler/runtime:
   36957c6b56700ecba3aeb8dbbedd6240594e01de
 
 39e2ffdbf1b2ecb8ba7969f6b7d9376248ca72fcafa2735028ea843a3f238a45  models/step3p5/decode_layer.py
-514e25deb5cd05a6cd876085c39704d6b7babc2ea3a77ce7dc3de4f4b50e7f23  models/step3p5/decode_layer_single_chip.py
-b1c4f85100dfc9fb1e6fbb3bae540ca81059a162373bc13325cf488ad21ab757  tools/step3p5/_gen_single_chip_real.py
-1b3848a06438a5c1db37ab2e773ec841497f78ead883d114a2a263f65b00d184  tests/step3p5/harnesses/_stage_whole_faithful_real_ipc.py
+90894315cc1c6499b3e269a2afc376153009a7a35b7f208d5e686d9256ab6e0b  models/step3p5/decode_layer_single_chip.py
+525e755f7aa9f66624f55dfaddbeb48e5738fda1d4948383e51e8640132ed21b  tools/step3p5/_gen_single_chip_real.py
+b4c2a0eed6d341fa3aba993f614e28d17e31cd3a0061fd519b9b2731cd30aef8  tests/step3p5/harnesses/_stage_whole_faithful_real_ipc.py
 0d3ce0e5c355f87d8e0b9f5593477b6893841c99367fb0c434ba0be5fac825b8  pypto_core.cpython-311-x86_64-linux-gnu.so
 ```
 

@@ -18,8 +18,8 @@ flowchart TB
 
 | 要验证的事实 | 先看 | 再看 |
 |---|---|---|
-| 当前 0162 single-submit canonical、20/20 | `N1-CANONICAL-TEST.md` | `workspace/logs_n1/single_submit_final_p42_repeat20_20260718_105051/` |
-| 当前 0162 stable pins / clean scope | `N1-STABLE-ENV-0162-20260717.md` §1.0 | pypto `e49ce111` + pypto-lib `369e8f91` |
+| 当前 0162 single-submit canonical、20/20 | `N1-CANONICAL-TEST.md` | `workspace/logs_n1/single_submit_cleanup_p42_repeat20_20260718_174948/` |
+| 当前 0162 stable pins / clean scope | `N1-STABLE-ENV-0162-20260717.md` §1.0 | pypto `e49ce111` + pypto-lib `3af13f4f` |
 | latest MTP3 的 synthetic 64K resident NPU timing（历史 non-canonical） | `N1-STABLE-ENV-0162-20260717.md` §11 | `workspace/logs_n1/synth64k_resident_20260717/` |
 | 某个 stall 是否真的发生在 kernel | [stall 定位入口](n1-stall-localization.md) | 同轮 run 目录、TASK/CLUSTER 和 build |
 | 512B isolation 的因果边界 | [关键因果链](n1-causal-chains.md) | `notes/09-cache-line-and-signal-isolation.md` |

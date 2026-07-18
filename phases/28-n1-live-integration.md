@@ -8,14 +8,14 @@
 >
 > **组件 pin（2026-07-18）**：standalone 当前 stable 已升级为
 > rank-local single-submit：pypto-lib
-> `sync/whole-net-mtp3-53a6732@369e8f91b8b51a9a11dd1df04a69a4a8b1b45d0e`
+> `sync/whole-net-mtp3-53a6732@3af13f4facbe8db5cd4a6c769e8b9e07e351c7b9`
 > + pypto
 > `fix/n1-inline-orchestration-helpers@e49ce111c1503f4fb3e898af4223560cab907a62`
 > + simpler/runtime `36957c6b56700ecba3aeb8dbbedd6240594e01de`。程序为
 > `models.step3p5.decode_layer_single_chip:whole_decode_faithful_real_single_chip`，
 > whole-net 底座仍是 `dispatch fixed-slot pull + combine pull`、native W8A8
 > IPC weights、KV IPC。0162 P42 repeat20 全部 `argmax=303`，日志
-> `workspace/logs_n1/single_submit_final_p42_repeat20_20260718_105051`。
+> `workspace/logs_n1/single_submit_cleanup_p42_repeat20_20260718_174948`。
 >
 > **提交边界**：`0e7a0fdd` 只发布 standalone 核心的
 > `decode_layer.py`、`moe.py`、`_gen_faithful_real.py`。下表中的

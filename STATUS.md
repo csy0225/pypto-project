@@ -18,17 +18,17 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 >   pypto `fix/n1-inline-orchestration-helpers`
 >   `e49ce111c1503f4fb3e898af4223560cab907a62`；
 >   pypto-lib `sync/whole-net-mtp3-53a6732`
->   `369e8f91b8b51a9a11dd1df04a69a4a8b1b45d0e`；
+>   `3af13f4facbe8db5cd4a6c769e8b9e07e351c7b9`；
 >   simpler/runtime 仍为 `36957c6b56700ecba3aeb8dbbedd6240594e01de`。
 > - **single-submit 证据**：生成物
 >   `WholeDecodeFaithfulRealSingleChip_20260718_105511/orchestration/host_orch.py`
 >   只有一个实际 `_submit_chip(whole_chip_orch, device=r)` 调用点；TP=8 下是
 >   8 个 rank-local submission，不再是 46 个 layer-level submission/rank。
 > - **canonical 20-run**：
->   `workspace/logs_n1/single_submit_final_p42_repeat20_20260718_105051`，
+>   `workspace/logs_n1/single_submit_cleanup_p42_repeat20_20260718_174948`，
 >   `rc=0`、`pass=20/20`、每次 `argmax=303`、
 >   `TOP5=[303,9592,1043,768,2086]`，
->   runtime min/mean/max=`0.5530/0.6624/2.2906s`，fingerprint 唯一；
+>   runtime min/mean/max=`0.5536/0.6607/2.2766s`，fingerprint 唯一；
 >   20 个 worker-run dmesg 窗口新增 relevant=0。
 > - **纠偏**：2026-07-17 64K synthetic 记录里的 `46 dispatches/rank` 是旧
 >   main decode 版本的 L3 host→chip control dispatch 数，现在只能作为历史性能
