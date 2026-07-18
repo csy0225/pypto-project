@@ -12,9 +12,11 @@
 ## 1. 被测对象与固定组合
 
 ```text
-program = whole_decode_faithful_real
-branch = feat/whole-net-n1-fusion
-release commit = 0e7a0fddc90c4f2348f1d59e015fb817a0877a02
+program = whole_decode_faithful_real_single_chip
+layer module = models.step3p5.decode_layer_single_chip
+branch = sync/whole-net-mtp3-53a6732
+release commit = 369e8f91b8b51a9a11dd1df04a69a4a8b1b45d0e
+compiler/runtime commit = pypto e49ce111c1503f4fb3e898af4223560cab907a62
 machine = gpu-a910x-0162
 devices = 8,9,10,11,12,13,14,15
 P_FAITHFUL_MOE_LAYERS = 42
@@ -26,8 +28,12 @@ token = 6127
 golden argmax = 303
 ```
 
-当前 whole-net 是 **dispatch pull + combine pull**。PUSH 探针或历史 push
-版本不是当前准出对象。
+当前 whole-net 是 **dispatch pull + combine pull**，且采用 **rank-local
+single-submit**：`host_orch.py` 中每个 rank 只调用一次
+`_submit_chip(... whole_chip_orch ...)`。TP=8 时仍然是 8 个 rank-local
+submission；这不是 8 卡全局只提交一次，也不是合并 CHIP 内部 InCore/Group/SPMD
+kernel。PUSH 探针、历史 push 版本、以及旧 46 layer-level submission 版本都不是
+当前准出对象。
 
 ## 2. 输入、batch 与精度标准
 
@@ -100,6 +106,8 @@ python -m tests.step3p5._stage_whole_faithful_real_ipc \
   --reuse-exporters \
   --kv-ipc \
   --hidden-token 6127 \
+  --layer-module models.step3p5.decode_layer_single_chip \
+  --layer-name whole_decode_faithful_real_single_chip \
   --out "$OUT" \
   --ckpt "$CKPT"
 ```
@@ -182,6 +190,58 @@ rm -f "$OUT"/ready.rank* "$OUT"/STOP
 `"$OUT"`。
 
 ## 4. 当前 release 证据
+
+当前 single-submit release 证据目录：
+
+```text
+/data/chensiyu/hw_project/pypto/workspace/logs_n1/
+  single_submit_final_p42_repeat20_20260718_105051
+```
+
+结果：
+
+```text
+rc=0
+REPEAT summary pass=20/20
+每次 argmax=303
+TOP5=[303, 9592, 1043, 768, 2086]
+runtime min/mean/max = 0.5530 / 0.6624 / 2.2906 s
+fingerprints_unique=1
+```
+
+首轮包含首次 graph/run 开销；第 2～20 轮稳定在约 0.55～0.59s。生成的
+`host_orch.py` 只有一个实际 `_submit_chip` 调用点：
+
+```text
+build_output/WholeDecodeFaithfulRealSingleChip_20260718_105511/orchestration/host_orch.py
+  line 200: _submit_chip(orch, callables["whole_chip_orch"], ...)
+```
+
+20 个 worker-run dmesg before/after 窗口新增 relevant=0；未新增
+`507018`、`running-stalled`、`stranded CQE`、devmm/page fault、illegal VA
+或 timeout。
+
+最终源码与 binary 指纹：
+
+```text
+pypto-lib commit:
+  369e8f91b8b51a9a11dd1df04a69a4a8b1b45d0e
+pypto commit:
+  e49ce111c1503f4fb3e898af4223560cab907a62
+simpler/runtime:
+  36957c6b56700ecba3aeb8dbbedd6240594e01de
+
+39e2ffdbf1b2ecb8ba7969f6b7d9376248ca72fcafa2735028ea843a3f238a45  models/step3p5/decode_layer.py
+514e25deb5cd05a6cd876085c39704d6b7babc2ea3a77ce7dc3de4f4b50e7f23  models/step3p5/decode_layer_single_chip.py
+b1c4f85100dfc9fb1e6fbb3bae540ca81059a162373bc13325cf488ad21ab757  tools/step3p5/_gen_single_chip_real.py
+1b3848a06438a5c1db37ab2e773ec841497f78ead883d114a2a263f65b00d184  tests/step3p5/harnesses/_stage_whole_faithful_real_ipc.py
+0d3ce0e5c355f87d8e0b9f5593477b6893841c99367fb0c434ba0be5fac825b8  pypto_core.cpython-311-x86_64-linux-gnu.so
+```
+
+P1 diagnostic 仍保留一个边界事实：single-submit 与旧 baseline 在 padding /
+physical rows 的 routed path 上不逐元素等价；row0 canonical argmax 不受影响。
+该诊断不能替代 P42 release，也不能反向否定当前 canonical gate。若后续要做
+padding-row 完全等价，应继续从 `local_routed_x_scale` / route metadata 开始排查。
 
 release commit `0e7a0fdd` exact-source 20-run 目录：
 

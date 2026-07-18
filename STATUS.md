@@ -3,12 +3,72 @@
 pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状态
 变化都更新这里**。历史细节查 [`archive/`](archive/)。
 
-**最后更新**：2026-07-17
+**最后更新**：2026-07-18
 
 > **0162 clean 环境唯一 stable 版本记录**：
 > [`develop/N1/N1-STABLE-ENV-0162-20260717.md`](develop/N1/N1-STABLE-ENV-0162-20260717.md)。
 > checkpoint SHA256、pip freeze、三仓/runtime binary、PTOAS/CANN、设备和
 > canonical 命令全部内嵌在该单一文档中。
+
+> **2026-07-18 ✅ N1 whole-net rank-local single-submit 已在 0162 通过 canonical P42 20/20**：
+> - **当前 stable 对象**：`models.step3p5.decode_layer_single_chip:
+>   whole_decode_faithful_real_single_chip`，dispatch pull + combine pull，
+>   native W8A8 IPC weights，KV IPC，token 6127。
+> - **代码已提交并推送到 fork**：
+>   pypto `fix/n1-inline-orchestration-helpers`
+>   `e49ce111c1503f4fb3e898af4223560cab907a62`；
+>   pypto-lib `sync/whole-net-mtp3-53a6732`
+>   `369e8f91b8b51a9a11dd1df04a69a4a8b1b45d0e`；
+>   simpler/runtime 仍为 `36957c6b56700ecba3aeb8dbbedd6240594e01de`。
+> - **single-submit 证据**：生成物
+>   `WholeDecodeFaithfulRealSingleChip_20260718_105511/orchestration/host_orch.py`
+>   只有一个实际 `_submit_chip(whole_chip_orch, device=r)` 调用点；TP=8 下是
+>   8 个 rank-local submission，不再是 46 个 layer-level submission/rank。
+> - **canonical 20-run**：
+>   `workspace/logs_n1/single_submit_final_p42_repeat20_20260718_105051`，
+>   `rc=0`、`pass=20/20`、每次 `argmax=303`、
+>   `TOP5=[303,9592,1043,768,2086]`，
+>   runtime min/mean/max=`0.5530/0.6624/2.2906s`，fingerprint 唯一；
+>   20 个 worker-run dmesg 窗口新增 relevant=0。
+> - **纠偏**：2026-07-17 64K synthetic 记录里的 `46 dispatches/rank` 是旧
+>   main decode 版本的 L3 host→chip control dispatch 数，现在只能作为历史性能
+>   对照；当前 main decode 已改为 rank-local single-submit。EP/MoE 内部的
+>   `_dispatch_pack_publish/_dispatch_pull/_dispatch_stage` 仍是 MoE 数据重排任务，
+>   不与 host submit 计数混淆。
+> - **保留诊断边界**：P1 diagnostic 显示 single-submit 与旧 baseline 在 padding /
+>   physical rows 的 routed path 上不逐元素等价，但 canonical row0 argmax 不受影响；
+>   该诊断不是 release PASS，也不是当前 stable 的反证。若后续追求 padding-row
+>   完全等价，应从 `local_routed_x_scale` / route metadata 继续排查。
+
+> **2026-07-17 latest MTP3 synthetic-64K-current-position resident NPU timing（non-canonical）**：
+> - 0162 `pypto-lib` 已同步到
+>   `53a67326ec419b949657c25bc9ebb35d49c14d27`，latest pipeline 为
+>   `whole_decode_faithful_real -> host sampler -> whole_mtp3`。
+> - 用户允许跳过真实 64K prefill；本次精确定义为
+>   `seq_len=65536/current_position=65535`，synthetic zero-init BF16 KV，
+>   fixed `BATCH=16`、仅 row0 meaningful。不是 65,536 个历史 token 后的
+>   position 65,536，也不是 canonical 精度测试。
+> - resident runtime（prepare/register 一次）复测：main warmup 2 +
+>   5 rounds，MTP3 warmup 2 + 10 rounds。只读取 NPU `[STRACE]`：
+>   main `device_wall median=456.952ms`、`effective median=383.609ms`；
+>   MTP3 `device_wall median=11.757ms`、`effective median=11.401ms`。
+> - 当前 main 一步是 `46 dispatches/rank`，MTP3 是 `3 dispatches/rank`。
+>   main + MTP3 的独立中位数算术估算为 `468.709ms` NPU device cost；
+>   因两 program 间有 host sampler，它不是统一 device clock 的 pipeline wall。
+> - `46` 的精确来源是 L3 generated host-orch 的 `45 layer-level
+>   _submit_chip + 1 lm_head`；这是 host-orchestration → rank-local chip
+>   callable 的 control dispatch，不是 MoE EP token dispatch。EP 的
+>   pack/pull/stage/combine 位于每个 MoE layer callable 内部。
+> - 旧的 `runtime.run=2.79s/1.98s/4.77s` 是 outer host wall，禁止再当 NPU
+>   inference latency；旧 cold MTP3 proxy `44.327ms` 也已被 resident
+>   `11.757ms` 替代。
+> - worker dmesg 窗口 relevant=0；exporter teardown 后 outer 窗口新增两条
+>   `stranded cqe`，归 cleanup。cards 8..15 已清空，0..7 baseline 未动。
+> - resident exporter map 同时确认临时 benchmark 的 MTP cache 物理 entry
+>   比 program-visible prefix 大 45 倍；不影响本次访问边界，但不能代表
+>   production compact MTP cache。temporary 64K ABI/harness 未合入 canonical。
+> - 唯一 stable SSOT §11 已修正。resident NPU 证据：
+>   `workspace/logs_n1/synth64k_resident_20260717/`。
 
 > **2026-07-16 runtime manifest 审计 + clean-pin formalize**：
 > - **旧 20-run 的真实范围**：`pypto-lib 0e7a0fdd` 模型源码 exact-match；

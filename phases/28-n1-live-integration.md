@@ -6,13 +6,16 @@
 > whole-net decode **接进 vLLM serving 路径**（M5/M6：live single-handoff A/B）。
 > 严格遵循 SKILL §H：**N=1 单 `@pl.program` 是唯一生产形态**（多程序永久排除）。
 >
-> **组件 pin（2026-07-16）**：standalone 模型源码为 pypto-lib
-> `feat/whole-net-n1-fusion` @ `0e7a0fddc90c4f2348f1d59e015fb817a0877a02`；
-> whole-net 底座 = `dispatch fixed-slot pull + combine pull`，0162
-> standalone P42 exact-source 20/20 `argmax=303`。当前可复现 clean runtime
-> stack 为 pypto `n1fusion-base:e277de9f` + simpler
-> `n1fusion-base:36957c6b`；两者是后续 formalize 的 clean pins，不要将其
-> 误写成旧 20-run 当时直接冻结的 commits。
+> **组件 pin（2026-07-18）**：standalone 当前 stable 已升级为
+> rank-local single-submit：pypto-lib
+> `sync/whole-net-mtp3-53a6732@369e8f91b8b51a9a11dd1df04a69a4a8b1b45d0e`
+> + pypto
+> `fix/n1-inline-orchestration-helpers@e49ce111c1503f4fb3e898af4223560cab907a62`
+> + simpler/runtime `36957c6b56700ecba3aeb8dbbedd6240594e01de`。程序为
+> `models.step3p5.decode_layer_single_chip:whole_decode_faithful_real_single_chip`，
+> whole-net 底座仍是 `dispatch fixed-slot pull + combine pull`、native W8A8
+> IPC weights、KV IPC。0162 P42 repeat20 全部 `argmax=303`，日志
+> `workspace/logs_n1/single_submit_final_p42_repeat20_20260718_105051`。
 >
 > **提交边界**：`0e7a0fdd` 只发布 standalone 核心的
 > `decode_layer.py`、`moe.py`、`_gen_faithful_real.py`。下表中的
@@ -108,6 +111,35 @@ release 已 20/20，但不能自动证明新 KV ABI 正确。
 4. 3-prompt greedy(temp=0) A/B vs 8000 vanilla → L3 top-1≥95%。
 5. hazard：pypto AICore timeout → `aclrtResetDeviceForce` 卡级 nuke 同卡 vLLM（见
    `deployment/cotenancy-simpler-no-hccl.md §hazard`）；停 sidecar 后须 restart 8001。
+
+## Stage HBM — 3-way 冗余权重消除设计（2026-07-17，machine-independent，先设计）
+
+**实测 footprint（0234/0162 一致，per card 64GB）**：
+
+| 常驻块 | 大小/卡 | 来源 |
+|--------|---------|------|
+| pypto exporter 池（native W8A8 IPC） | **25.35 GiB** | `WeightIpcExporter.export`，45 层 packed，routed INT8 + FP32 scale |
+| vLLM 常驻 W8A8 | ~24 GiB | vLLM 自身 model loader（HF `[out,in]` W8A8_DYNAMIC） |
+| whole-net run working set | ~16 GiB | ≈4×`PTO2_RING_HEAP` |
+| **合计** | **~65 GiB > 64** | 三方 OOM 207001（device-proven 2026-07-15） |
+
+**关键判定（读码坐实，`weight_loader.py`）**：pypto↔vLLM 权重**布局不同 → 不能纯 IPC remap**：
+
+- attention `_slice_q/kv/o/g_proj` = **transpose(0,1)** + TP=8 per-rank slice + contiguous（HF `[out,in]` → pypto `[HIDDEN, LOCAL]`）；
+- MoE routed `_transpose_routed_block` = **transpose(-2,-1)** + EP-slice（每卡 36 expert）+ contiguous；
+- g_proj zero-pad 到 16；全部 pack 进 ONE 连续池按 offset 寻址。
+- vLLM 保留 HF `[out,in]` 供其自身 W8A8_DYNAMIC kernel。
+
+→ 直接 import vLLM 常驻权重不可行（转置/切分/pad/pack 全不同）；on-device repack 需第二 buffer（正是要消除的 26GB，自相矛盾）。
+
+**消除方案（选定，反向）**：whole-net **替换** vLLM 的 45 层 decode forward，故 vLLM **不需要**其 decode-layer 权重常驻。vLLM 仅保留 tail：`embed_tokens [VOCAB,HIDDEN]` + `final_norm` + `lm_head [VOCAB_LOCAL,HIDDEN]`（`compute_logits` 用）。
+
+- **tail footprint 精算**（VOCAB=128896, HIDDEN=4096, TP=8, bf16）：per-rank vocab-parallel embed 0.123 + lm_head 0.123 + norm(fp32) 16KB = **0.25 GiB**；worst-case replicated embed = **1.1 GiB**。
+- 消除后预算：exporter 25.35 + tail 0.25 + run 16 ≈ **41.6 GiB < 64** ✅（~22 GiB headroom）。
+- 唯一权重副本 = pypto exporter 池（native W8A8，满足"禁 bf16-dequant"）。
+- **buffer 边界**：decode 权重只在 pypto 池；vLLM tail 与 pypto 池不同 VA、无别名；embed 读 / lm_head 写各自独立 buffer。
+
+**待落地（vLLM 侧，gated on 选定 substrate 机器 + 用户 steer）**：让 vLLM 不 materialize / 加载后释放 45 层 decode module params（只保留 embed+norm+lm_head）。三条候选：(a) patch model loader 跳过 decode-layer 权重加载 + 不构造 decode module（config `num_hidden_layers` 影响 embed/tail 索引，需谨慎）；(b) 加载后 `del` decode 权重 tensor + 触发 allocator 回收（Ascend allocator 释放行为待验证）；(c) 构造期 stub decode module（param=空 view）。**先在 substrate clean 机器上量 vLLM tail-only 实际驻留，再选 (a)/(b)/(c)。**
 
 ## Status
 
