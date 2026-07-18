@@ -15,9 +15,9 @@ pypto step3p5 项目的实时状态板。**任何 phase / sub-task / blocker 状
 >   whole_decode_faithful_real_single_chip`，dispatch pull + combine pull，
 >   native W8A8 IPC weights，KV IPC，token 6127。
 > - **代码已提交并推送到 fork**：
->   pypto `fix/n1-inline-orchestration-helpers`
+>   pypto `n1fusion-base`
 >   `e49ce111c1503f4fb3e898af4223560cab907a62`；
->   pypto-lib `sync/whole-net-mtp3-53a6732`
+>   pypto-lib `feat/whole-net-n1-fusion`
 >   `3af13f4facbe8db5cd4a6c769e8b9e07e351c7b9`；
 >   simpler/runtime 仍为 `36957c6b56700ecba3aeb8dbbedd6240594e01de`。
 > - **single-submit 证据**：生成物

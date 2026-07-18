@@ -8,9 +8,9 @@
 >
 > **组件 pin（2026-07-18）**：standalone 当前 stable 已升级为
 > rank-local single-submit：pypto-lib
-> `sync/whole-net-mtp3-53a6732@3af13f4facbe8db5cd4a6c769e8b9e07e351c7b9`
+> `feat/whole-net-n1-fusion@3af13f4facbe8db5cd4a6c769e8b9e07e351c7b9`
 > + pypto
-> `fix/n1-inline-orchestration-helpers@e49ce111c1503f4fb3e898af4223560cab907a62`
+> `n1fusion-base@e49ce111c1503f4fb3e898af4223560cab907a62`
 > + simpler/runtime `36957c6b56700ecba3aeb8dbbedd6240594e01de`。程序为
 > `models.step3p5.decode_layer_single_chip:whole_decode_faithful_real_single_chip`，
 > whole-net 底座仍是 `dispatch fixed-slot pull + combine pull`、native W8A8

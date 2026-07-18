@@ -14,7 +14,7 @@
 ```text
 program = whole_decode_faithful_real_single_chip
 layer module = models.step3p5.decode_layer_single_chip
-branch = sync/whole-net-mtp3-53a6732
+branch = feat/whole-net-n1-fusion
 release commit = 3af13f4facbe8db5cd4a6c769e8b9e07e351c7b9
 compiler/runtime commit = pypto e49ce111c1503f4fb3e898af4223560cab907a62
 machine = gpu-a910x-0162
