@@ -11,31 +11,31 @@
 
 ## 1. 单 `@pl.program` 结构与生成器
 
-**当前生产入口 = single-chip single-submit 形态**（`pypto-lib-live`，2026-07-18 起）：
+**唯一生产入口**（精简瘦身后，`pypto-lib-live` @ `feat/whole-net-vllm-live`）：
 
-| 元素 | 位置（`models/step3p5/decode_layer_single_chip.py`） |
+| 元素 | 位置（`models/step3p5/decode_layer_single_chip_hidden.py`） |
 |------|------|
-| builder | `:581` `_build_whole_decode_faithful_real_single_chip_program` |
-| `@pl.program` 类 | `:696` `WholeDecodeFaithfulRealSingleChip` |
-| 模块 binding | `:6393` `whole_decode_faithful_real_single_chip = _build_..._program()` |
-| 生成器 | `tools/step3p5/_gen_faithful_real.py`（文本生成，只保留 final single-submit 实现 + 共享 helper，legacy 已剥） |
+| builder | `:523` `_build_whole_decode_faithful_real_single_chip_hidden_only_program` |
+| `@pl.program` 类 | `:615` `WholeDecodeFaithfulRealSingleChipHiddenOnly` |
+| 模块 binding | `:6472` `whole_decode_faithful_real_single_chip_hidden_only = _build_..._program()` |
+| host_orch | `:6311`，输出 `next_hidden_out[tp,BATCH,HIDDEN]` BF16（**pre-final-norm**，无 lm_head） |
+| 生成器 | `tools/step3p5/_gen_faithful_real.py`（文本生成，只保留 final single-submit 实现 + 共享 helper） |
 | bisect 旋钮 | `_FAITHFUL_MOE_LAYERS = int(os.environ.get('P_FAITHFUL_MOE_LAYERS','42'))` |
 
-**hidden-only 变体**（vLLM 集成用）：`decode_layer_single_chip_hidden.py`，binding `:6356`
-`whole_decode_faithful_real_single_chip_hidden_only`；host_orch 返回 `next_hidden_out`
-（末层 hidden，BF16），**不做 lm_head**——tail 归 vLLM（见
-[`../vllm-pypto/02-detailed-design.md`](../vllm-pypto/02-detailed-design.md)）。
+- **strict raw-hidden 边界**：整网跑完 Main 45 层，输出 pre-final-norm hidden；
+  **final RMSNorm + lm_head + sampling 全在下游**（standalone 走 host
+  `tools/step3p5/final_logits_from_vllm.py`：final norm + lm_head → logits → argmax；
+  live 走 vLLM）。**kernel 内无 lm_head、无 per-layer production dispatcher**。
+- host_orch 是**源码 unroll 的 45 层链**（无 Python `for` over layers）；attention /
+  dense MLP / MoE body 全部 inline 进整 program。
+- MTP 有独立 hidden-only fwd `mtp_hidden_fwd.py`（同样 raw-hidden 边界）。
 
-- **两个变体，同一 45 层结构**：full 变体 host_orch 末尾调 `lm_head_orch` → `logits_shard_out`
-  FP32（standalone canonical，argmax=303）；hidden-only 变体末尾直接输出
-  `next_hidden_out`。single-chip vs TP=8 是 `DistributedConfig`（`whole_decode_holder.py`）选择。
-- host_orch 是**源码 unroll 的 45 层链**（无 Python `for` over layers）。
-- MTP（`NUM_NEXTN_PREDICT_LAYERS=3`）不在 whole-decode 内，是独立 `whole_mtp3` program。
-
-> **历史/命名**：single-chip 之前的形态是 `decode_layer.py` 的
-> `whole_decode_faithful_real`（`:24786` builder / `:31636` binding，见 `pypto-lib`
-> 旧 worktree），设计相同、host 侧 per-layer submit。**当前生产已收敛到 single-submit
-> single-chip**，下文 §2–§9 的算法/结构在两者一致，行号以 single-chip 模块符号名为准。
+> **历史/命名**：瘦身前 live 线还并存过全 logits 变体
+> `decode_layer_single_chip.py`（`whole_decode_faithful_real_single_chip`，host_orch 末尾
+> 调 `lm_head_orch` 出 `logits_shard_out`）与更早的 `decode_layer.py:whole_decode_faithful_real`
+> predecessor；`cleanup(step3p5): 收敛 single-submit 为唯一整网入口` 后**均已移除**。
+> 下文 §2–§9 的层内算法/结构（MoE / window / tp_all_reduce / KV / weight）在各形态一致，
+> 行号以本模块符号名为准。
 
 ## 2. host_orch single-submit 与 resident holder
 
@@ -48,7 +48,10 @@
 
 - `A = h_mid_out`，`B = next_hidden_out`，逐层乒乓（见 HLD §5）。
 - 每层 attention/MoE 的中间张量（`h_moe_L{pos}`、`h_mid` 等）**write-once per layer**，不跨层复用 SSA（复用会触发 [scheduler timeout](../../postmortems/07-whole-net-scheduler-timeout.md)）。
-- tail：`lm_head_orch` 读 B → `rms_lm_head_inline`(`rms_lm_head.py:83`) → `logits_shard_out[tp,USER_BATCH,VOCAB_LOCAL]` FP32，**无 in-kernel all-gather**；host 侧 `full_logits = cat([logits_shard_out[r,0] for r in range(tp)])` 再 `argmax`（holder `:286/:290`）。
+- 收尾：末层写 `B = next_hidden_out`（**pre-final-norm** BF16），host_orch 直接输出，
+  **kernel 内无 lm_head / 无 final norm / 无 all-gather**。下游（standalone host /
+  live vLLM）做 final RMSNorm + lm_head + argmax（standalone 见
+  `tools/step3p5/final_logits_from_vllm.py`）。
 
 ## 4. MoE 路径：fixed-slot pull dispatch + pull combine
 
@@ -122,19 +125,20 @@ SiLU / SwigluStep@7）、`expert_shared.py`。
 
 ## 8. 关键 file:line 速查
 
-| 主题 | 位置 |
+| 主题 | 位置（`models/step3p5/decode_layer_single_chip_hidden.py` 除非注明） |
 |------|------|
-| builder / program / binding | `decode_layer.py:24786 / :24897 / :31636` |
-| host_orch | `decode_layer.py:27544` |
-| tp_all_reduce | `decode_layer.py:24905-24980` |
-| 512B signal 常量 | `decode_layer.py:24895` |
+| builder / program 类 / binding | `:523` / `:615` / `:6472` |
+| host_orch（出 pre-final-norm hidden） | `:6311` |
+| bisect 旋钮 `P_FAITHFUL_MOE_LAYERS` | `:570` |
+| 512B signal 常量 | `:609` `COMM_CONTROL_SIGNAL_BYTES=512` |
+| tp_all_reduce / ep_all_to_all | `:619` / `:709` |
 | gate / dispatch / combine | `gate.py:112` / `dispatch.py:140+` / `combine.py:95+` |
-| ep_all_to_all | `collectives.py:451` |
 | INT8 transform | `tools/step3p5/_a5_int8_transform.py` |
 | dispatch/combine pull patch | `tools/step3p5/_patch_moepy_dispatch.py` / `_patch_combine_pull.py` |
 | 两波 barrier patch | `tools/step3p5/_add_allreduce_completion_wave.py` |
 | weight/KV IPC | `tools/step3p5/pypto_weight_ipc.py` / `pypto_kv_ipc.py` |
 | holder | `tools/step3p5/whole_decode_holder.py` |
+| host 侧 final norm+lm_head（standalone argmax） | `tools/step3p5/final_logits_from_vllm.py` |
 | 生成器 | `tools/step3p5/_gen_faithful_real.py` |
 
 ## 9. 不变量清单（改代码前对照）

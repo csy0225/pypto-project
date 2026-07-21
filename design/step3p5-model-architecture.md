@@ -95,6 +95,12 @@ flowchart TD
     class EMB,IN a; class L0,L123 a; class LMOE m; class FN,LM,LOGITS t; class M,MTP x;
 ```
 
+> **pypto 生产程序边界**：整网 `@pl.program`
+> (`whole_decode_faithful_real_single_chip_hidden_only`) 只跑到 **pre-final-norm
+> hidden**；下面各图中的 final RMSNorm + lm_head + sampling 由**下游**（standalone
+> host / live vLLM）承担，**不在 pypto kernel 内**。详见
+> [`whole-net/01-system-design.md`](whole-net/01-system-design.md) §2。
+
 ## 2.1 逐层展开图（全 48 层，同类同色）
 
 同类层用同一颜色，一眼看清每层边界与 `[full, swa, swa, swa]` 的重复节奏：

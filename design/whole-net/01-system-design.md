@@ -7,9 +7,11 @@
 
 ## 1. 目标与边界
 
-**目标**：把 step3p5 的 45 层 decode + tail 融进**一个 `@pl.program`**
+**目标**：把 step3p5 的**完整 Main 45 层 decode 融进一个 `@pl.program`**
 （"N=1 whole-net fusion"），在 8 卡 Ascend 910B 上以 TP=8 / EP=8 跑通，W8A8
-native INT8 权重，token-exact 对齐 vLLM 参考。
+native INT8 权重，token-exact 对齐 vLLM 参考。**strict raw-hidden 边界**：整网只
+输出 pre-final-norm hidden，final RMSNorm + lm_head + sampling 在下游（host/vLLM），
+**不在 pypto program 内**。
 
 **硬边界（不可违反）**：
 
@@ -24,26 +26,31 @@ native INT8 权重，token-exact 对齐 vLLM 参考。
 ```mermaid
 graph TD
     IN["current_hidden[tp,BATCH,HIDDEN]<br/>(已 embed 的 token)"]
-    subgraph PROG["单个 @pl.program: whole_decode_faithful_real"]
+    subgraph PROG["单个 @pl.program: whole_decode_faithful_real_single_chip_hidden_only"]
         direction TB
         L0["L0 · full-dense<br/>attention_full + dense MLP"]
         L12["L1,L2 · swa-dense<br/>attention_swa + dense MLP"]
         LMOE["L3..L44 (×42) · swa-MoE<br/>attention_swa + MoE block"]
-        NORM["final RMSNorm"]
-        HEAD["lm_head (vocab-sliced)"]
     end
-    OUT["logits_shard_out[tp,BATCH,VOCAB_LOCAL] FP32"]
-    ARG["host: concat shards → argmax → token"]
+    HID["next_hidden_out[tp,BATCH,HIDDEN] BF16<br/>pre-final-norm（raw-hidden 边界）"]
+    subgraph DOWN["下游（standalone=host / live=vLLM）"]
+        direction TB
+        NORM["final RMSNorm"]
+        HEAD["lm_head"]
+        ARG["argmax / sample → token"]
+    end
 
-    IN --> L0 --> L12 --> LMOE --> NORM --> HEAD --> OUT --> ARG
+    IN --> L0 --> L12 --> LMOE --> HID --> NORM --> HEAD --> ARG
 
     classDef a fill:#4C6EF5,stroke:#1E3A8A,color:#fff;
     classDef m fill:#12B886,stroke:#0B7285,color:#fff;
     classDef t fill:#BE4BDB,stroke:#6B2178,color:#fff;
-    class L0,L12 a; class LMOE m; class NORM,HEAD,OUT,ARG t;
+    class L0,L12 a;
+    class LMOE m;
+    class HID,NORM,HEAD,ARG t;
 ```
 
-**层表**（`config.py:78-194`，`LAYER_TYPES` 按 `[full,swa,swa,swa]×12` 循环）：
+**层表**（`config.py`，`LAYER_TYPES` 按 `[full,swa,swa,swa]×12` 循环）：
 
 | 层 | attention | FFN | 数量 |
 |----|-----------|-----|------|
@@ -74,8 +81,8 @@ graph TD
             C[combine.py<br/>pull]
         end
     end
-    subgraph TAIL["tail"]
-        RH[rms_lm_head.py]
+    subgraph TAIL["下游 tail（host/vLLM，不在整网 program 内）"]
+        RH["final RMSNorm + lm_head + sample"]
     end
     subgraph COMM["collectives.py"]
         AR[tp_all_reduce<br/>两波 barrier]
@@ -87,7 +94,7 @@ graph TD
     G --> D --> A2A --> ER --> C
     ES --> C
     C --> AR
-    RH -.vocab-sliced.-> RH
+    C -.pre-final-norm hidden.-> RH
 ```
 
 | 模块 | 文件 | 职责 |
@@ -99,7 +106,7 @@ graph TD
 | routed experts | `expert_routed.py` | 每 rank 36 个 local expert（INT8×INT8 W8A8） |
 | shared expert | `expert_shared.py` | 共享专家（BF16） |
 | MoE combine | `combine.py` | 加权 gather + 回填源 rank；**pull** |
-| tail | `rms_lm_head.py:83` | final RMSNorm + vocab-sliced lm_head，出 `logits_shard_out` FP32 |
+| 下游 tail | host / vLLM | final RMSNorm + lm_head + sample（**不在整网 program 内**；整网只出 pre-final-norm hidden） |
 | collectives | `collectives.py` | `tp_all_reduce`(118) / `tp_all_gather`(255) / `tp_reduce_scatter`(346) / `ep_all_to_all`(451) |
 
 ## 4. TP=8 / EP=8 拓扑与权重三分类
@@ -127,13 +134,13 @@ graph TD
     B0 -->|L1 swa| A1["A"] -->|L1 MLP| B1["B"]
     B1 -->|L2 swa| A2["A"] -->|L2 MLP| B2["B"]
     B2 -->|"L3 swa attn-only"| A3["A"] -->|"L3 MoE"| B3["B"]
-    B3 -->|"…L44"| BN["B"] -->|"lm_head reads B"| LOG["logits"]
+    B3 -->|"…L44"| BN["B"] -->|"输出"| HID["next_hidden (pre-final-norm)"]
 ```
 
 - L0：`full_chip_orch`（`current_hidden` → B）
 - L1/L2：`swa_chip_orch`（B → A → B）
 - L3..44：`swa_attn_only_orch`（B → A）后接 `chip_orch` MoE（A → B）
-- tail：`lm_head_orch` 读 B
+- 收尾：末层写 B → `next_hidden_out`（pre-final-norm）；**无 lm_head**，final norm + lm_head 在下游
 
 ## 6. 控制流：host_orch rank-local single-submit
 
@@ -159,9 +166,8 @@ sequenceDiagram
         Chips->>HW: attention → (dense|MoE) → tp_all_reduce / ep_all_to_all
         HW-->>Chips: 层输出写 A/B buffer
     end
-    Host->>Chips: lm_head_orch (读 B)
-    Chips-->>Holder: logits_shard_out[tp,BATCH,VOCAB_LOCAL]
-    Holder->>Caller: next_hidden / concat→argmax→token
+    Chips-->>Holder: next_hidden_out[tp,BATCH,HIDDEN] (pre-final-norm)
+    Holder->>Caller: next_hidden → 下游 final norm + lm_head + argmax
 ```
 
 ## 7. 通信与稳定性（系统级要点）
@@ -178,14 +184,17 @@ sequenceDiagram
 
 ## 9. 生成与调参
 
-- **当前生产入口** = `whole_decode_faithful_real_single_chip`（single-submit，
-  `models/step3p5/decode_layer_single_chip.py`，`pypto-lib-live`）；vLLM 集成用
-  hidden-only 变体 `..._single_chip_hidden_only`（`decode_layer_single_chip_hidden.py`，
-  返回 hidden、不做 lm_head）。更早的 `decode_layer.py:whole_decode_faithful_real`
-  是同结构 predecessor。
+- **唯一生产入口**（精简瘦身后）= `whole_decode_faithful_real_single_chip_hidden_only`
+  （`models/step3p5/decode_layer_single_chip_hidden.py`，`pypto-lib-live`）：完整 Main
+  45 层跑在一个 `@pl.program`，输出 pre-final-norm hidden，**无 lm_head、无 per-layer
+  production dispatcher**。旧 `decode_layer.py:whole_decode_faithful_real` 与全 logits
+  变体 `decode_layer_single_chip.py` 已从 live 线移除。MTP 有独立 hidden-only fwd
+  （`mtp_hidden_fwd.py`）。
 - 整网 builder 由生成器 `tools/step3p5/_gen_faithful_real.py` 文本生成（只保留 final
   single-submit 实现 + 共享 helper）。
 - 调参旋钮 `P_FAITHFUL_MOE_LAYERS`（默认 42 = 全网）控制发射多少 MoE 层，用于 bisect。
+- **argmax 精度校验**（standalone）：hidden → host `final_logits_from_vllm.py`
+  （final RMSNorm + lm_head）→ logits → argmax，**lm_head 不在 kernel 内**。
 
 ## 10. 相关文档
 

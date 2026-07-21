@@ -78,13 +78,14 @@ graph TD
 | **simpler** | PTO runtime | AICPU+AICore dispatch、跨卡 shmem window IPC、collective。最 platform-touchy —— [Phase 16 三剑合璧](../deployment/phase16-three-pillars.md) 绑定就是为它。 |
 | **vLLM stepcast fork** | serving（集成目标） | 含 `vllm/model_executor/models/step3p5.py`。tokenizer/sampler/KV 管理/调度/batching。无我方 fork。 |
 
-> ⚠️ **代码实况纠正**（避免沿用旧文档的过时说法）：
-> 当前生产整网入口是 **`whole_decode_faithful_real_single_chip`**（single-submit，
-> `decode_layer_single_chip.py`，`pypto-lib-live`），**不是**旧文档说的 `decode_fwd`，
-> 也不是更早的 `whole_decode_faithful_real`（`decode_layer.py`，predecessor）。live
-> vLLM 集成用其 **hidden-only 变体** `whole_decode_faithful_real_single_chip_hidden_only`
-> （pypto 返回 hidden，vLLM 拥有 lm_head/sampler）。集成代码在
-> `pypto-lib-live/tools/step3p5/` 的 monkey-patch + sidecar，不在 `models/step3p5/vllm_backend/`。
+> ⚠️ **代码实况（精简瘦身后，`pypto-lib-live` @ `feat/whole-net-vllm-live`）**：
+> 生产整网**唯一入口** = `whole_decode_faithful_real_single_chip_hidden_only`
+> （`models/step3p5/decode_layer_single_chip_hidden.py`）。它把完整 Main 45 层跑在
+> **一个 `@pl.program`** 里，输出 **pre-final-norm BF16 hidden**——**strict raw-hidden
+> 边界**：final RMSNorm + lm_head + sampling 全在下游（standalone 走 host，live 走
+> vLLM）。旧的 `decode_layer.py:whole_decode_faithful_real` 与全 logits 变体
+> `decode_layer_single_chip.py` 已从 live 线移除；无 per-layer production dispatcher。
+> 集成代码在 `pypto-lib-live/tools/step3p5/`，不在 `models/step3p5/vllm_backend/`。
 
 ## 5. 两个子系统（本项目的两条设计主线）
 

@@ -19,8 +19,8 @@ vLLM 原生 step3p5 的 45 层 decoder forward，同 8 卡共驻，IPC 零拷贝
 | 归 vLLM | 归 pypto |
 |---------|----------|
 | tokenizer、scheduler、continuous batching | embed（生成 hidden） |
-| paged KV cache **分配与管理** | 45 层 decoder forward（整网） |
-| tail：lm_head + sampler + OpenAI API | 消费 vLLM 的 paged KV（IPC 导入） |
+| paged KV cache **分配与管理** | Main 45 层 decoder forward → **pre-final-norm hidden** |
+| **tail：final RMSNorm + lm_head + sampler** + OpenAI API | 消费 vLLM 的 paged KV（IPC 导入） |
 
 **硬边界**：只在 backend seam 打补丁（不在 generic vLLM 路径散布 NPU 分支）；
 prefill 仍由 vLLM 原生完成并填充 paged KV；native W8A8 不回退。
@@ -39,7 +39,7 @@ graph TB
             VF["Step3p5Model.forward (monkey-patched)"]
         end
         subgraph P["pypto sidecar 进程 (holder, resident rt)"]
-            H["WholeDecodeHolder<br/>whole_decode_faithful_real"]
+            H["WholeDecodeHolder<br/>whole_decode_faithful_real_single_chip_hidden_only"]
         end
     end
     KVPOOL["vLLM paged KV pool (HBM)"]
@@ -100,7 +100,7 @@ sequenceDiagram
     H-->>SC: next_hidden
     SC-->>R0: reply frame
     R0-->>vLLM: next_hidden (广播回全 rank)
-    vLLM->>Tail: final RMSNorm? → lm_head → sampler
+    vLLM->>Tail: final RMSNorm → lm_head → sampler
     Tail-->>HTTP: next token
 ```
 
