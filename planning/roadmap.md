@@ -59,7 +59,8 @@ graph LR
     A["整网 standalone ✅"] --> B["live token-exact A/B<br/>(需 vLLM 容器 provision)"]
     B --> C["per-layer KV bridge + HBM 精简"]
     C --> D["Phase 26 · perf baseline + 调优"]
-    classDef g fill:#4C6EF5,stroke:#1E3A8A,color:#fff; class A,B,C,D g;
+    classDef g fill:#4C6EF5,stroke:#1E3A8A,color:#fff;
+    class A,B,C,D g;
 ```
 
 1. 恢复/provision 可用 vLLM serving 容器 → 跑 `e2_ab.py` live token-exact A/B。

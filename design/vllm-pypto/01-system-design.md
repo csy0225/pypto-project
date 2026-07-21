@@ -68,7 +68,8 @@ graph LR
     SC["② sidecar<br/>WholeDecodeServer (AF_UNIX)<br/>+ WholeDecodeHolder (resident)"]
     IPC["③ IPC 桥<br/>KV: vllm_kvpool_backend→pypto_kv_ipc<br/>Weight: pypto_weight_ipc"]
     MP --> SC --> IPC
-    classDef x fill:#12B886,stroke:#0B7285,color:#fff; class MP,SC,IPC x;
+    classDef x fill:#12B886,stroke:#0B7285,color:#fff;
+    class MP,SC,IPC x;
 ```
 
 1. **monkey-patch**（`vllm_monkey_patch.py`）：把 `Step3p5Model.forward` 换成 `_pypto_full_forward`（4 模式 tail/shadow/layer_ref/full）。经 `sitecustomize` + `PYPTO_WHOLE_DECODE=1` 自动装载。

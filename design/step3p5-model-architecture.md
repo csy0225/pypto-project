@@ -109,7 +109,8 @@ flowchart LR
     FA --> GATE["head-wise sigmoid gate (g_proj)"]
     GATE --> OP["o_proj"]
     OP --> ADD1["+ residual"]
-    classDef a fill:#4C6EF5,stroke:#1E3A8A,color:#fff; class H,RN1,QKV,QN,ROPE,FA,GATE,OP,ADD1 a;
+    classDef a fill:#4C6EF5,stroke:#1E3A8A,color:#fff;
+    class H,RN1,QKV,QN,ROPE,FA,GATE,OP,ADD1 a;
 ```
 
 ### 3.2 MoE 层 FFN（L3..L44）
@@ -124,7 +125,8 @@ flowchart LR
     EX --> CB["combine (加权求和)"]
     SH --> SUM["+"]
     CB --> SUM --> ADD2["+ residual"]
-    classDef m fill:#12B886,stroke:#0B7285,color:#fff; class X,RN2,GT,SH,DP,EX,CB,SUM,ADD2 m;
+    classDef m fill:#12B886,stroke:#0B7285,color:#fff;
+    class X,RN2,GT,SH,DP,EX,CB,SUM,ADD2 m;
 ```
 
 （dense MLP 层把 §3.2 的 router/dispatch/experts/combine 换成单个 SwiGLU，
