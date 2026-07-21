@@ -11,20 +11,31 @@
 
 ## 1. 单 `@pl.program` 结构与生成器
 
-| 元素 | 位置 |
-|------|------|
-| builder | `decode_layer.py:24786` `_build_whole_decode_faithful_real_program` |
-| `@pl.program` 类 | `decode_layer.py:24897` `WholeDecodeFaithfulReal` |
-| 模块 binding | `decode_layer.py:31636` `whole_decode_faithful_real = _build_..._program()` |
-| 生成器 | `tools/step3p5/_gen_faithful_real.py`（~1908 行，文本生成 builder） |
-| 剥旧副本 | `tools/step3p5/_strip_real_builder.py` |
-| bisect 旋钮 | `decode_layer.py:24856` `_FAITHFUL_MOE_LAYERS = int(os.environ.get('P_FAITHFUL_MOE_LAYERS','42'))` |
+**当前生产入口 = single-chip single-submit 形态**（`pypto-lib-live`，2026-07-18 起）：
 
-- **无 `decode_layer_single_chip.py`**：`whole_decode_faithful_real` 与
-  `..._single_chip` 都指向同一 builder；single-chip vs TP=8 是
-  `DistributedConfig`（`whole_decode_holder.py:123`）选择。
+| 元素 | 位置（`models/step3p5/decode_layer_single_chip.py`） |
+|------|------|
+| builder | `:581` `_build_whole_decode_faithful_real_single_chip_program` |
+| `@pl.program` 类 | `:696` `WholeDecodeFaithfulRealSingleChip` |
+| 模块 binding | `:6393` `whole_decode_faithful_real_single_chip = _build_..._program()` |
+| 生成器 | `tools/step3p5/_gen_faithful_real.py`（文本生成，只保留 final single-submit 实现 + 共享 helper，legacy 已剥） |
+| bisect 旋钮 | `_FAITHFUL_MOE_LAYERS = int(os.environ.get('P_FAITHFUL_MOE_LAYERS','42'))` |
+
+**hidden-only 变体**（vLLM 集成用）：`decode_layer_single_chip_hidden.py`，binding `:6356`
+`whole_decode_faithful_real_single_chip_hidden_only`；host_orch 返回 `next_hidden_out`
+（末层 hidden，BF16），**不做 lm_head**——tail 归 vLLM（见
+[`../vllm-pypto/02-detailed-design.md`](../vllm-pypto/02-detailed-design.md)）。
+
+- **两个变体，同一 45 层结构**：full 变体 host_orch 末尾调 `lm_head_orch` → `logits_shard_out`
+  FP32（standalone canonical，argmax=303）；hidden-only 变体末尾直接输出
+  `next_hidden_out`。single-chip vs TP=8 是 `DistributedConfig`（`whole_decode_holder.py`）选择。
 - host_orch 是**源码 unroll 的 45 层链**（无 Python `for` over layers）。
 - MTP（`NUM_NEXTN_PREDICT_LAYERS=3`）不在 whole-decode 内，是独立 `whole_mtp3` program。
+
+> **历史/命名**：single-chip 之前的形态是 `decode_layer.py` 的
+> `whole_decode_faithful_real`（`:24786` builder / `:31636` binding，见 `pypto-lib`
+> 旧 worktree），设计相同、host 侧 per-layer submit。**当前生产已收敛到 single-submit
+> single-chip**，下文 §2–§9 的算法/结构在两者一致，行号以 single-chip 模块符号名为准。
 
 ## 2. host_orch single-submit 与 resident holder
 

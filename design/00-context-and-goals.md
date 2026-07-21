@@ -79,10 +79,12 @@ graph TD
 | **vLLM stepcast fork** | serving（集成目标） | 含 `vllm/model_executor/models/step3p5.py`。tokenizer/sampler/KV 管理/调度/batching。无我方 fork。 |
 
 > ⚠️ **代码实况纠正**（避免沿用旧文档的过时说法）：
-> 生产整网入口是 **`whole_decode_faithful_real`**（`decode_layer.py:24786` 的
-> `_build_whole_decode_faithful_real_program`），**不是**旧文档说的
-> `decode_fwd`；集成不落在 `models/step3p5/vllm_backend/`，而是
-> `pypto-lib-live/tools/step3p5/` 的 monkey-patch + sidecar。
+> 当前生产整网入口是 **`whole_decode_faithful_real_single_chip`**（single-submit，
+> `decode_layer_single_chip.py`，`pypto-lib-live`），**不是**旧文档说的 `decode_fwd`，
+> 也不是更早的 `whole_decode_faithful_real`（`decode_layer.py`，predecessor）。live
+> vLLM 集成用其 **hidden-only 变体** `whole_decode_faithful_real_single_chip_hidden_only`
+> （pypto 返回 hidden，vLLM 拥有 lm_head/sampler）。集成代码在
+> `pypto-lib-live/tools/step3p5/` 的 monkey-patch + sidecar，不在 `models/step3p5/vllm_backend/`。
 
 ## 5. 两个子系统（本项目的两条设计主线）
 
@@ -109,6 +111,7 @@ graph TD
 
 ## 8. 相关文档
 
+- **step3p5 模型架构（config + 完整层数流程图）**：[`step3p5-model-architecture.md`](step3p5-model-architecture.md)
 - 两子系统架构：[`whole-net/01-system-design.md`](whole-net/01-system-design.md) · [`vllm-pypto/01-system-design.md`](vllm-pypto/01-system-design.md)
 - vLLM↔pypto op 映射：[`vllm-pypto/03-vllm-op-mapping.md`](vllm-pypto/03-vllm-op-mapping.md)
 - 进度/路线图：[`../planning/roadmap.md`](../planning/roadmap.md)

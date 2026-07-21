@@ -34,6 +34,7 @@ vLLM fork（见 [`design/00-context-and-goals.md`](design/00-context-and-goals.m
 | 问题 | 路径 |
 |------|------|
 | 项目背景/目标？ | [`design/00-context-and-goals.md`](design/00-context-and-goals.md) |
+| step3p5 模型本身（config + 层结构）？ | [`design/step3p5-model-architecture.md`](design/step3p5-model-architecture.md) |
 | 整网怎么设计的？ | [`design/whole-net/`](design/whole-net/)（HLD + LLD） |
 | vLLM 集成怎么设计的？ | [`design/vllm-pypto/`](design/vllm-pypto/)（HLD + LLD） |
 | 进度 / 路线图？ | [`planning/roadmap.md`](planning/roadmap.md) |

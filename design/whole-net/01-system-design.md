@@ -178,7 +178,13 @@ sequenceDiagram
 
 ## 9. 生成与调参
 
-- 整网 builder 由生成器 `tools/step3p5/_gen_faithful_real.py` 文本生成后写入 `decode_layer.py`；`_strip_real_builder.py` 先剥旧副本。
+- **当前生产入口** = `whole_decode_faithful_real_single_chip`（single-submit，
+  `models/step3p5/decode_layer_single_chip.py`，`pypto-lib-live`）；vLLM 集成用
+  hidden-only 变体 `..._single_chip_hidden_only`（`decode_layer_single_chip_hidden.py`，
+  返回 hidden、不做 lm_head）。更早的 `decode_layer.py:whole_decode_faithful_real`
+  是同结构 predecessor。
+- 整网 builder 由生成器 `tools/step3p5/_gen_faithful_real.py` 文本生成（只保留 final
+  single-submit 实现 + 共享 helper）。
 - 调参旋钮 `P_FAITHFUL_MOE_LAYERS`（默认 42 = 全网）控制发射多少 MoE 层，用于 bisect。
 
 ## 10. 相关文档

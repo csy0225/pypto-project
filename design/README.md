@@ -8,6 +8,7 @@
 | 文档 | 层级 | 用途 |
 |------|------|------|
 | [`00-context-and-goals.md`](00-context-and-goals.md) | — | 项目背景 / 目标 / 5 仓 + vLLM 全景。对外介绍第一份。 |
+| [`step3p5-model-architecture.md`](step3p5-model-architecture.md) | — | **step3p5 模型本身**：config 参数 + 完整 48 层流程图（模型视角，与实现解耦）。 |
 | [`whole-net/`](whole-net/README.md) | HLD+LLD | 整网集成：单 `@pl.program` 全 45 层、per-layer/block/整网三轴、N≥6 墙、DeepSeek 对照。 |
 | [`vllm-pypto/`](vllm-pypto/README.md) | HLD+LLD | vLLM 与 pypto 同卡共驻：monkey-patch / sidecar / KV·weight IPC / co-tenancy。 |
 
