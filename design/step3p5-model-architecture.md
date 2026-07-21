@@ -222,6 +222,120 @@ flowchart TD
 > dense MLP（深蓝/蓝），L3 起全是 MoE（绿/红）。MTP 3 层（紫）不在主链上，吃末层
 > hidden 做 speculative predict。
 
+## 2.2 分块紧凑图（12 个 4 层 block）
+
+`LAYER_TYPES` 是 `[full, swa, swa, swa] × 12` 的周期结构。下图把 48 层按周期切成
+**12 个 block**（每 block 4 层，横向排列，只 4 列宽 → 不超屏），block 框即层边界；
+颜色同 §2.1。
+
+```mermaid
+flowchart TD
+    subgraph B0["Block 0 · L0–L3"]
+        direction LR
+        N0["L0 · full+dense"]:::fd
+        N1["L1 · swa+dense"]:::sd
+        N2["L2 · swa+dense"]:::sd
+        N3["L3 · swa+moe"]:::sm
+    end
+    subgraph B1["Block 1 · L4–L7"]
+        direction LR
+        N4["L4 · full+moe"]:::fm
+        N5["L5 · swa+moe"]:::sm
+        N6["L6 · swa+moe"]:::sm
+        N7["L7 · swa+moe"]:::sm
+    end
+    subgraph B2["Block 2 · L8–L11"]
+        direction LR
+        N8["L8 · full+moe"]:::fm
+        N9["L9 · swa+moe"]:::sm
+        N10["L10 · swa+moe"]:::sm
+        N11["L11 · swa+moe"]:::sm
+    end
+    subgraph B3["Block 3 · L12–L15"]
+        direction LR
+        N12["L12 · full+moe"]:::fm
+        N13["L13 · swa+moe"]:::sm
+        N14["L14 · swa+moe"]:::sm
+        N15["L15 · swa+moe"]:::sm
+    end
+    subgraph B4["Block 4 · L16–L19"]
+        direction LR
+        N16["L16 · full+moe"]:::fm
+        N17["L17 · swa+moe"]:::sm
+        N18["L18 · swa+moe"]:::sm
+        N19["L19 · swa+moe"]:::sm
+    end
+    subgraph B5["Block 5 · L20–L23"]
+        direction LR
+        N20["L20 · full+moe"]:::fm
+        N21["L21 · swa+moe"]:::sm
+        N22["L22 · swa+moe"]:::sm
+        N23["L23 · swa+moe"]:::sm
+    end
+    subgraph B6["Block 6 · L24–L27"]
+        direction LR
+        N24["L24 · full+moe"]:::fm
+        N25["L25 · swa+moe"]:::sm
+        N26["L26 · swa+moe"]:::sm
+        N27["L27 · swa+moe"]:::sm
+    end
+    subgraph B7["Block 7 · L28–L31"]
+        direction LR
+        N28["L28 · full+moe"]:::fm
+        N29["L29 · swa+moe"]:::sm
+        N30["L30 · swa+moe"]:::sm
+        N31["L31 · swa+moe"]:::sm
+    end
+    subgraph B8["Block 8 · L32–L35"]
+        direction LR
+        N32["L32 · full+moe"]:::fm
+        N33["L33 · swa+moe"]:::sm
+        N34["L34 · swa+moe"]:::sm
+        N35["L35 · swa+moe"]:::sm
+    end
+    subgraph B9["Block 9 · L36–L39"]
+        direction LR
+        N36["L36 · full+moe"]:::fm
+        N37["L37 · swa+moe"]:::sm
+        N38["L38 · swa+moe"]:::sm
+        N39["L39 · swa+moe"]:::sm
+    end
+    subgraph B10["Block 10 · L40–L43"]
+        direction LR
+        N40["L40 · full+moe"]:::fm
+        N41["L41 · swa+moe"]:::sm
+        N42["L42 · swa+moe"]:::sm
+        N43["L43 · swa+moe"]:::sm
+    end
+    subgraph B11["Block 11 · L44–L47"]
+        direction LR
+        N44["L44 · full+moe"]:::fm
+        N45["L45 · swa+dense (MTP)"]:::mtp
+        N46["L46 · swa+dense (MTP)"]:::mtp
+        N47["L47 · swa+dense (MTP)"]:::mtp
+    end
+    N3 --> N4
+    N7 --> N8
+    N11 --> N12
+    N15 --> N16
+    N19 --> N20
+    N23 --> N24
+    N27 --> N28
+    N31 --> N32
+    N35 --> N36
+    N39 --> N40
+    N43 --> N44
+    classDef fd fill:#1E3A8A,stroke:#0B1E4D,color:#fff;
+    classDef sd fill:#4C6EF5,stroke:#1E3A8A,color:#fff;
+    classDef fm fill:#A61E1E,stroke:#5C0000,color:#fff;
+    classDef sm fill:#12B886,stroke:#0B7285,color:#fff;
+    classDef mtp fill:#BE4BDB,stroke:#6B2178,color:#fff;
+```
+
+> **两个特例**：Block 0 是唯一带 dense 前缀的（L0–L2 dense，L3 起 MoE）；Block 11
+> 的后 3 层（L45–47）是 MTP（不在主 decode 链上）。其余 Block 1–10 完全一致
+> （1 红 full-moe + 3 绿 swa-moe）——这就是主网的重复单元。
+
 ## 3. 单层内部结构
 
 ### 3.1 attention 层（full / swa 同构，仅头数/窗口/RoPE 不同）
