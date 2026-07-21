@@ -138,7 +138,7 @@ flowchart TB
         C["🗓 AicpuScheduler<br/>Workers = AICore[ ]　｜　Memory = SRAM"]
     end
     subgraph L0["Core 层　·　ordinal 0　·　leaf（贴近硬件）"]
-        direction LR
+        direction TB
         AIC["AIC · Cube"]
         AIV["AIV · Vector"]
         AIC <-->|"Horizontal↔ TPUSH / TPOP"| AIV
@@ -170,7 +170,7 @@ flowchart TB
 ```mermaid
 flowchart TB
     subgraph Pod["Pod 层　·　ordinal 4　·　root（多机）"]
-        direction LR
+        direction TB
         N0["Node 0"]
         N1["Node 1"]
         N0 <-->|"Horizontal↔ RDMA (all-reduce)"| N1

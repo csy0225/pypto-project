@@ -50,7 +50,7 @@
 ### 1.1 组件图
 
 ```mermaid
-flowchart LR
+flowchart TD
     subgraph V["vLLM / vLLM-Ascend 进程组，TP=8"]
         API["OpenAI API / engine"]
         SCH["scheduler / batcher"]
@@ -278,7 +278,7 @@ row        = layer_base + paged_slot
 ### 4.2 KV pool 图
 
 ```mermaid
-flowchart LR
+flowchart TD
     subgraph Pool["one vLLM KV pool per rank"]
         K0["K L0 slots"] --> K1["K L1 slots"] --> KD["..."] --> K44["K L44 slots"]
         K44 --> V0["V L0 slots"] --> V1["V L1 slots"] --> VD["..."] --> V44["V L44 slots"]

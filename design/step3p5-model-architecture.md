@@ -100,7 +100,7 @@ flowchart TD
 ### 3.1 attention 层（full / swa 同构，仅头数/窗口/RoPE 不同）
 
 ```mermaid
-flowchart LR
+flowchart TD
     H["hidden"] --> RN1["input RMSNorm"]
     RN1 --> QKV["q/k/v proj (GQA: 64或96 q head, 8 kv head)"]
     QKV --> QN["q_norm / k_norm (per-head)"]
@@ -116,7 +116,7 @@ flowchart LR
 ### 3.2 MoE 层 FFN（L3..L44）
 
 ```mermaid
-flowchart LR
+flowchart TD
     X["hidden"] --> RN2["post-attn RMSNorm"]
     RN2 --> GT["router: sigmoid + bias → top-8 renorm × 3.0"]
     RN2 --> SH["shared expert (dim 1280)"]

@@ -131,7 +131,7 @@ graph TD
 ## 🌐 网络分层（带宽/延迟量级）
 
 ```mermaid
-graph LR
+graph TD
     subgraph intra["🟢 卡内 (ns~us)"]
         A["Host↔Device<br/>DMA ~16GB/s (PCIe4) · us"]
         B["Device↔Chip<br/>共享内存 poll · ns"]

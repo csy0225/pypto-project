@@ -8,7 +8,7 @@
 ## 1. 一眼看清
 
 ```mermaid
-graph LR
+graph TD
     P1["Phase 1 · pypto kernel 原型<br/>Phase 01-19"] -->|✅ 2026-06-22| P2
     subgraph P2["Phase 2 · vLLM Ascend 后端集成 🟡"]
         direction TB
@@ -55,7 +55,7 @@ graph LR
 ## 4. 下一步（gate 关系）
 
 ```mermaid
-graph LR
+graph TD
     A["整网 standalone ✅"] --> B["live token-exact A/B<br/>(需 vLLM 容器 provision)"]
     B --> C["per-layer KV bridge + HBM 精简"]
     C --> D["Phase 26 · perf baseline + 调优"]

@@ -59,7 +59,7 @@ graph TD
 ## 3. 模块划分
 
 ```mermaid
-graph LR
+graph TD
     subgraph ATT["attention（每层）"]
         AF[attention_full.py]
         AS[attention_swa.py]
@@ -122,7 +122,7 @@ graph LR
 层间 hidden（避免每层新分配）：`A = h_mid_out`，`B = next_hidden_out`。
 
 ```mermaid
-graph LR
+graph TD
     CH["current_hidden"] -->|L0 full| B0["B"]
     B0 -->|L1 swa| A1["A"] -->|L1 MLP| B1["B"]
     B1 -->|L2 swa| A2["A"] -->|L2 MLP| B2["B"]

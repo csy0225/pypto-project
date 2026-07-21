@@ -63,7 +63,7 @@ graph TB
 ## 3. 集成机制（三块拼装）
 
 ```mermaid
-graph LR
+graph TD
     MP["① monkey-patch<br/>Step3p5Model.forward<br/>= _pypto_full_forward"]
     SC["② sidecar<br/>WholeDecodeServer (AF_UNIX)<br/>+ WholeDecodeHolder (resident)"]
     IPC["③ IPC 桥<br/>KV: vllm_kvpool_backend→pypto_kv_ipc<br/>Weight: pypto_weight_ipc"]
@@ -117,7 +117,7 @@ sequenceDiagram
 ## 5. KV 与权重 IPC（数据面）
 
 ```mermaid
-graph LR
+graph TD
     subgraph EXP["vLLM 侧 exporter"]
         KVE["vllm_kvpool_backend.py<br/>1 pool/rank, 512B align<br/>aclrtIpcMemGetExportKey(0x1)"]
         WE["pypto_weight_ipc.py exporter<br/>native W8A8 pool"]
