@@ -95,6 +95,133 @@ flowchart TD
     class EMB,IN a; class L0,L123 a; class LMOE m; class FN,LM,LOGITS t; class M,MTP x;
 ```
 
+## 2.1 逐层展开图（全 48 层，同类同色）
+
+同类层用同一颜色，一眼看清每层边界与 `[full, swa, swa, swa]` 的重复节奏：
+
+| 颜色 | 类别 | 层 | 数量 |
+|------|------|----|------|
+| 🟦 深蓝 | full + dense | L0 | 1 |
+| 🔵 蓝 | swa + dense | L1, L2 | 2 |
+| 🟥 红 | full + MoE | L4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44 | 11 |
+| 🟩 绿 | swa + MoE | L3 及其余 | 31 |
+| 🟪 紫 | MTP（swa + dense） | L45, L46, L47 | 3 |
+| ⬜ 灰 | embed / final RMSNorm / lm_head | — | — |
+
+```mermaid
+flowchart TD
+    EMB["embed_tokens"]:::io
+    L0["L0 · full+dense"]:::fd
+    EMB --> L0
+    L1["L1 · swa+dense"]:::sd
+    L0 --> L1
+    L2["L2 · swa+dense"]:::sd
+    L1 --> L2
+    L3["L3 · swa+moe"]:::sm
+    L2 --> L3
+    L4["L4 · full+moe"]:::fm
+    L3 --> L4
+    L5["L5 · swa+moe"]:::sm
+    L4 --> L5
+    L6["L6 · swa+moe"]:::sm
+    L5 --> L6
+    L7["L7 · swa+moe"]:::sm
+    L6 --> L7
+    L8["L8 · full+moe"]:::fm
+    L7 --> L8
+    L9["L9 · swa+moe"]:::sm
+    L8 --> L9
+    L10["L10 · swa+moe"]:::sm
+    L9 --> L10
+    L11["L11 · swa+moe"]:::sm
+    L10 --> L11
+    L12["L12 · full+moe"]:::fm
+    L11 --> L12
+    L13["L13 · swa+moe"]:::sm
+    L12 --> L13
+    L14["L14 · swa+moe"]:::sm
+    L13 --> L14
+    L15["L15 · swa+moe"]:::sm
+    L14 --> L15
+    L16["L16 · full+moe"]:::fm
+    L15 --> L16
+    L17["L17 · swa+moe"]:::sm
+    L16 --> L17
+    L18["L18 · swa+moe"]:::sm
+    L17 --> L18
+    L19["L19 · swa+moe"]:::sm
+    L18 --> L19
+    L20["L20 · full+moe"]:::fm
+    L19 --> L20
+    L21["L21 · swa+moe"]:::sm
+    L20 --> L21
+    L22["L22 · swa+moe"]:::sm
+    L21 --> L22
+    L23["L23 · swa+moe"]:::sm
+    L22 --> L23
+    L24["L24 · full+moe"]:::fm
+    L23 --> L24
+    L25["L25 · swa+moe"]:::sm
+    L24 --> L25
+    L26["L26 · swa+moe"]:::sm
+    L25 --> L26
+    L27["L27 · swa+moe"]:::sm
+    L26 --> L27
+    L28["L28 · full+moe"]:::fm
+    L27 --> L28
+    L29["L29 · swa+moe"]:::sm
+    L28 --> L29
+    L30["L30 · swa+moe"]:::sm
+    L29 --> L30
+    L31["L31 · swa+moe"]:::sm
+    L30 --> L31
+    L32["L32 · full+moe"]:::fm
+    L31 --> L32
+    L33["L33 · swa+moe"]:::sm
+    L32 --> L33
+    L34["L34 · swa+moe"]:::sm
+    L33 --> L34
+    L35["L35 · swa+moe"]:::sm
+    L34 --> L35
+    L36["L36 · full+moe"]:::fm
+    L35 --> L36
+    L37["L37 · swa+moe"]:::sm
+    L36 --> L37
+    L38["L38 · swa+moe"]:::sm
+    L37 --> L38
+    L39["L39 · swa+moe"]:::sm
+    L38 --> L39
+    L40["L40 · full+moe"]:::fm
+    L39 --> L40
+    L41["L41 · swa+moe"]:::sm
+    L40 --> L41
+    L42["L42 · swa+moe"]:::sm
+    L41 --> L42
+    L43["L43 · swa+moe"]:::sm
+    L42 --> L43
+    L44["L44 · full+moe"]:::fm
+    L43 --> L44
+    NORM["final RMSNorm"]:::io
+    HEAD["lm_head → logits/token"]:::io
+    L44 --> NORM --> HEAD
+    L44 -. 末层 hidden .-> M45
+    M45["L45 · swa+dense (MTP)"]:::mtp
+    M46["L46 · swa+dense (MTP)"]:::mtp
+    M45 --> M46
+    M47["L47 · swa+dense (MTP)"]:::mtp
+    M46 --> M47
+    classDef fd fill:#1E3A8A,stroke:#0B1E4D,color:#fff;
+    classDef sd fill:#4C6EF5,stroke:#1E3A8A,color:#fff;
+    classDef fm fill:#A61E1E,stroke:#5C0000,color:#fff;
+    classDef sm fill:#12B886,stroke:#0B7285,color:#fff;
+    classDef mtp fill:#BE4BDB,stroke:#6B2178,color:#fff;
+    classDef io fill:#868E96,stroke:#343A40,color:#fff;
+```
+
+> 读图：红色（full attention）每 4 层出现一次（L0,4,8,…,44）；前 3 层（L0–L2）是
+> dense MLP（深蓝/蓝），L3 起全是 MoE（绿/红）。MTP 3 层（紫）不在主链上，吃末层
+> hidden 做 speculative predict。
+
 ## 3. 单层内部结构
 
 ### 3.1 attention 层（full / swa 同构，仅头数/窗口/RoPE 不同）
