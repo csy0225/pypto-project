@@ -59,6 +59,81 @@ python examples/workers/l3/allreduce_distributed/main.py -p a2a3 -d 0-1
 # 期望: max |out - expected| = 0.000e+00 两卡
 ```
 
+### 重启后 RECOVERY.sh 未覆盖的手动步骤（2026-07-20 实测）
+
+1. **挂 NVMe**（RECOVERY.sh 不做；读盘内容确认映射）：
+
+   ```bash
+   sudo mkdir -p /data /mnt/persist /mnt/nvme1
+   sudo mount /dev/nvme1n1 /data          # 含 chensiyu/
+   sudo mount /dev/nvme0n1 /mnt/persist   # 含 Ascend/ RECOVERY.sh ascend-staging/
+   sudo mount --bind /data /mnt/nvme1
+   ```
+
+2. **建 `HwHiAiUser`**（否则 driver 装报 `0x0091 HwHiAiUser not exists`）：
+
+   ```bash
+   sudo groupadd HwHiAiUser
+   sudo useradd -g HwHiAiUser -d /home/HwHiAiUser -m HwHiAiUser -s /sbin/nologin
+   ```
+
+3. **CANN symlink 指 9.0.0 non-GA**（RECOVERY.sh 指 beta.1 是 stale）：
+   `sudo ln -sfn /mnt/persist/Ascend/cann-9.0.0/cann-9.0.0 /usr/local/Ascend/cann`
+4. **env gotcha**：`source activate.sh` 后 `python` 不在 PATH，需补
+   `source <workspace>/.venv311/bin/activate`。
+5. **重建 simpler runtime 前补两个 netboot 丢失的构建依赖**（仅当需要
+   `build_runtimes --platforms a2a3` 时；2026-07-20 实测）：
+
+   ```bash
+   # a) cmake：系统 cmake 随 tmpfs rootfs 丢失，装进持久 venv
+   <workspace>/.venv311/bin/pip install "cmake==3.31.6"
+   # b) libstdc++-12-dev：ccec 的 clang 选中 gcc-12 工具链，找
+   #    /usr/include/c++/12/cstdint；重启后基础镜像只剩 -11-dev →
+   #    AICore kernel 编译报 fatal error: 'cstdint' file not found
+   sudo apt-get install -y libstdc++-12-dev
+   ```
+
+   缺 (a) → `RuntimeError: CMake configuration not found`；缺 (b) →
+   `fatal error: 'cstdint'/'stdexcept' file not found`（ccec 编 aicore_kernel）。
+   两者都不是代码问题，纯 netboot 丢包。验证：
+   `<venv>/bin/cmake --version` + `ls /usr/include/c++/12/cstdint`。
+
+## 0162 —— vLLM serving 容器恢复（重启后）
+
+历史 8000/8001 跑在 docker 镜像 `hub.i.basemind.com/stepcast/stepcast:0.19.0-
+081dd47dd175-fbfe288fe1ee-2026.06.09-141938` 里。netboot 重启后 dockerd/containerd
+（tmpfs）消失，但 **binaries + containerd config 在 `/mnt/persist/k8s-install/
+containerd/`**。重建（2026-07-20 实测 8000 W8A8 oracle boot 成功）：
+
+```bash
+CD=/mnt/persist/k8s-install/containerd; NC="$CD/bin/nerdctl -n k8s.io"
+# 1. runc --no-pivot wrapper（netboot rootfs pivot_root 失败；CRI NoPivotRoot 对 nerdctl 无效）
+sudo mv $CD/bin/runc $CD/bin/runc.real   # 仅第一次
+sudo tee $CD/bin/runc >/dev/null <<'WRAP'
+#!/bin/bash
+newargs=(); for a in "$@"; do newargs+=("$a"); [ "$a" = create ] && newargs+=(--no-pivot); done
+exec /mnt/persist/k8s-install/containerd/bin/runc.real "${newargs[@]}"
+WRAP
+sudo chmod +x $CD/bin/runc
+# 2. 起 containerd（PATH 含 bin/ 让 shim 找到 wrapper runc）
+sudo mkdir -p /var/lib/containerd /run/containerd
+sudo bash -c "PATH=$CD/bin:\$PATH nohup $CD/bin/containerd --config $CD/conf/config.toml >$CD/containerd.thisboot.log 2>&1 &"
+# 3. 镜像 store 在 tmpfs → 重 pull（内网 registry 可达）
+sudo $NC pull hub.i.basemind.com/stepcast/stepcast:0.19.0-081dd47dd175-fbfe288fe1ee-2026.06.09-141938
+# 4. 起容器（--privileged 拿全 NPU；apparmor/seccomp unconfined 绕 apparmor_parser 报错）
+sudo $NC run -d --privileged --security-opt apparmor=unconfined --security-opt seccomp=unconfined \
+  --network host --name vllm-oracle-8000-ctr \
+  -v /data/chensiyu/logs/step3p5_910b_w8a8_v001:/logs \
+  -v /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp:/mnt/hw910test/models/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp:ro \
+  -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro -v /usr/local/sbin:/usr/local/sbin:ro \
+  hub.i.basemind.com/stepcast/stepcast:0.19.0-081dd47dd175-fbfe288fe1ee-2026.06.09-141938 sleep infinity
+# 5. exec serve（镜像自带 CANN 8.5.1 + python3.11.14 + vllm 0.19.0；serve 脚本在 /logs）
+sudo $NC exec -d vllm-oracle-8000-ctr bash /logs/start_8000_oracle.sh
+#    gotcha：不 set -u；export VLLM_USE_V1=1；drop --speculative_config（greedy 下与带 MTP 一致）
+```
+
+8000 oracle 用卡 0-7；PyPTO 8001 用卡 8-15（互不冲突）。
+
 ## 0234 —— 升级未做
 
 当前状态：

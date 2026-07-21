@@ -1,121 +1,83 @@
 # PyPTO Step3p5 项目
 
-在 Ascend NPU 上做 **step3p5** 大模型的端到端服务化。decoder kernel 走
-**pypto** 编程框架，serving / 调度 / batching 走 **vLLM**。
+在 **Ascend 910B NPU** 上把 **step3p5** 大模型端到端服务化：decoder kernel 走
+**pypto** 编程框架，serving/调度/batching/sampling 走 **vLLM**（公司内部 stepcast
+fork）。本仓是**项目级跟踪 + 设计 + 部署 + 复盘仓**——实际代码在 5 个 sub-repo +
+vLLM fork（见 [`design/00-context-and-goals.md`](design/00-context-and-goals.md)）。
 
-本仓库是**项目级跟踪器**，覆盖 5 个代码仓库。实际代码在别处，本仓只放
-状态、阶段跟踪、blocker、部署 spec 和架构 notes。
+## 🧭 给别人介绍本项目，按这条线读
 
-## 项目涉及的仓库（实际代码在哪里）
+1. [`design/00-context-and-goals.md`](design/00-context-and-goals.md) —— **背景/目标/全景**（第一份）
+2. [`design/whole-net/01-system-design.md`](design/whole-net/01-system-design.md) + [`design/vllm-pypto/01-system-design.md`](design/vllm-pypto/01-system-design.md) —— **两个子系统架构**（含流程图/时序图）
+3. [`planning/roadmap.md`](planning/roadmap.md) —— **进度 / 路线图**
+4. [`STATUS.md`](STATUS.md) —— **此刻状态一页纸**
 
-| 仓库 | 角色 | 上游 | 我们的 fork |
-|------|------|------|------------|
-| `pypto` | 编程框架 — multi-level IR + codegen | `hw-native-sys/pypto` | `csy0225/pypto` |
-| `pypto-lib` | tensor 级 kernel + step3p5 模型 | `hw-native-sys/pypto-lib` | `csy0225/pypto-lib` |
-| `pto-isa` | Tile-ISA 虚拟实现 | `hw-native-sys/pto-isa` | `csy0225/pto-isa` |
-| `PTOAS` | LLVM/MLIR PTO 字节码 assembler | `hw-native-sys/PTOAS` | `csy0225/PTOAS` |
-| `simpler` | PTO runtime（AICPU+AICore dispatcher） | `hw-native-sys/simpler`（pypto 的 submodule） | `csy0225/simpler` |
-| **（集成目标）** vLLM stepcast fork | Serving / 调度 / sampler / tokenizer | 公司内部 stepcast fork | 无 fork |
+深入技术再下钻到两份 `02-detailed-design.md`（LLD）。
 
-我们所有的 fork 都在 `stepfun/develop` 分支。pin snapshot 在
-[`STATUS.md`](STATUS.md)。
+## 📁 仓库怎么组织（7 分区）
 
-## 一眼看清现在哪儿
+| 分区 | 放什么 |
+|------|--------|
+| [`design/`](design/) | **软件工程设计**：context + 两子系统的 系统设计(HLD) + 详细设计(LLD) |
+| [`planning/`](planning/) | **整体规划**：roadmap + 活跃 phase + ephemeral handoff |
+| [`postmortems/`](postmortems/) | **工程专项复盘**（12 篇，标准五段：背景/现象/根因/解决/弯路/避免） |
+| [`deployment/`](deployment/) | **生产部署 runbook**：三剑合璧 / 机器恢复 / 版本矩阵 |
+| [`reference/`](reference/) | **参考资料**：canonical 测试、4+1 视图、编程 API、约束 |
+| [`archive/`](archive/) | **历史**（追加式）：session 日志、原型摘要、已完成 phase、交付快照 |
+| 根 | [`STATUS.md`](STATUS.md)（当前状态）· [`blockers.md`](blockers.md)（活跃 open）· [`GLOSSARY.md`](GLOSSARY.md)（术语） |
 
-**Phase 1 — pypto kernel 原型**：✅ **已完成**（2026-06-22）。详见
-[`archive/prototype-phase-01-19-summary.md`](archive/prototype-phase-01-19-summary.md)。
+> `.claude/skills/`（pypto-dev-constraints / pypto-whole-net-hang-debug）与
+> `develop/N1/`（脚本 + 0162 stable env SSOT）是运行工具/冻结环境，原地保留。
 
-**Phase 2 — vLLM Ascend 后端集成**：🟡 **进行中**（设计已落，实现未启动）。
-- Phase 20：vLLM monkey-patch e2e 流程 → [`phases/20-vllm-backend-monkey-patch.md`](phases/20-vllm-backend-monkey-patch.md)
-- Phase 21：与 vLLM 原生精度对比 → [`phases/21-precision-validation.md`](phases/21-precision-validation.md)
-- Phase 22：perf baseline + 调优 → [`phases/22-perf-baseline.md`](phases/22-perf-baseline.md)
-
-**活跃 blocker**（跨阶段遗留）：见 [`blockers.md`](blockers.md)。
-
-**生产部署**：见 [`deployment/`](deployment/)。Phase 16 三剑合璧绑定是多卡
-部署的硬要求。
-
-## 查什么去哪里
+## 🔎 查什么去哪里
 
 | 问题 | 路径 |
 |------|------|
-| 术语 / 缩写看不懂？ | [`GLOSSARY.md`](GLOSSARY.md) |
-| 现在工作状态怎样？ | [`STATUS.md`](STATUS.md) |
-| 当前活跃 phase 的任务从哪挑？ | [`phases/`](phases/) |
-| 哪些卡住了 / 帮忙解什么？ | [`blockers.md`](blockers.md) |
-| 在新机器上怎么部署？ | [`deployment/`](deployment/) |
-| 项目架构怎么拼起来的？ | [`architecture/`](architecture/) |
-| 整网程序 hang / 507018 怎么定位？ | [`.claude/skills/pypto-whole-net-hang-debug/SKILL.md`](.claude/skills/pypto-whole-net-hang-debug/SKILL.md)（通用流程 + N1 案例 + 解析脚本） |
-| Phase 01-19 的原型开发是怎么走过来的？ | [`archive/prototype-phase-01-19-summary.md`](archive/prototype-phase-01-19-summary.md) |
-| 写 pypto kernel 时有哪些坑？ | `pypto-lib/docs/known-pypto-pitfalls.md`（在 pypto-lib 仓） |
-| 开发工作流有什么坑（pyc / 环境 / git）？ | `pypto-lib/docs/dev-workflow-gotchas.md`（在 pypto-lib 仓） |
+| 项目背景/目标？ | [`design/00-context-and-goals.md`](design/00-context-and-goals.md) |
+| 整网怎么设计的？ | [`design/whole-net/`](design/whole-net/)（HLD + LLD） |
+| vLLM 集成怎么设计的？ | [`design/vllm-pypto/`](design/vllm-pypto/)（HLD + LLD） |
+| 进度 / 路线图？ | [`planning/roadmap.md`](planning/roadmap.md) |
+| 此刻状态？ | [`STATUS.md`](STATUS.md) |
+| 撞到 507018/507899/hang/编译报错怎么办？ | [`postmortems/`](postmortems/)（按 error signature 查索引） |
+| 新机器怎么部署？ | [`deployment/`](deployment/) |
+| 验收金标准？ | [`reference/canonical-test.md`](reference/canonical-test.md) |
+| 术语看不懂？ | [`GLOSSARY.md`](GLOSSARY.md) |
+| 每日进展历史？ | [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) |
+| 写 pypto kernel 的坑？ | `pypto-lib/docs/known-pypto-pitfalls.md`（sub-repo） |
 
-## 快速起手（在 Phase 16 合规机器上，如 `gpu-a910x-0162`）
+## 涉及的仓库
+
+| 仓库 | 角色 | 我们的 fork |
+|------|------|------------|
+| `pypto` | 编程框架（IR + codegen） | `csy0225/pypto` |
+| `pypto-lib` | tensor kernel + step3p5 模型 | `csy0225/pypto-lib` |
+| `pto-isa` | Tile-ISA 虚拟实现 | `csy0225/pto-isa` |
+| `PTOAS` | 字节码 assembler | `csy0225/PTOAS` |
+| `simpler` | PTO runtime（pypto submodule） | `csy0225/simpler` |
+| vLLM stepcast fork | serving（集成目标） | 无 fork |
+
+fork 都在 `stepfun/develop` 分支；pin snapshot 见 [`STATUS.md`](STATUS.md)。
+
+## 🚀 快速起手（Phase 16 合规机，如 `gpu-a910x-0162`）
 
 ```bash
-# 1. 三剑合璧环境（CANN 必须是 beta.1，不是 GA）
+# 三件套激活（CANN 必须 beta.1，不是 GA）
 source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh
 source <workspace>/activate.sh
 export PTO_ISA_ROOT=<workspace>/pto-isa
 
-# 2. 验证 pypto 前端
-cd <workspace>/pypto-lib
-python -m models.step3p5._smoke_program_build
-# 期望: === probe rc=0 ===
+# 前端 smoke
+cd <workspace>/pypto-lib && python -m models.step3p5._smoke_program_build   # 期望 rc=0
 
-# 3. 验证多卡 collective baseline
+# 多卡 collective baseline
 cd <workspace>/pypto/runtime
-python examples/workers/l3/allreduce_distributed/main.py -p a2a3 -d 0-1
-# 期望: max |out - expected| = 0.000e+00
-
-# 4. 验证单卡 dense decode_layer ST
-cd <workspace>/pypto-lib
-python -m tests.step3p5.test_decode_layer_full_dense_st -p a2a3 -d 0
-# 期望: ratio_allclose PASS，约 8 秒
+python examples/workers/l3/allreduce_distributed/main.py -p a2a3 -d 0-1     # 期望 max|out-expected|=0
 ```
 
-任何一项失败 → 查 [`blockers.md`](blockers.md) 和 pypto-lib reference docs。
+任一失败 → 查 [`postmortems/`](postmortems/) + [`deployment/machine-recovery.md`](deployment/machine-recovery.md)。
 
 ## 更新协议
 
-phase / sub-task / blocker 状态变化时：
-
-| 触发 | 更新什么 |
-|------|---------|
-| sub-task 完成 | 对应 `phases/NN-*.md` 的 Status 段 |
-| Phase 准入 / 出 | `STATUS.md` 当前 phase + `phases/README.md` |
-| 新 blocker 发现 | `blockers.md` |
-| Blocker 解决 | 从 `blockers.md` 删除，可选追加到 `archive/` |
-| session 末尾总结 | 追加 entry 到 `archive/milestones-2026-Q2.md` |
-| 组件 pin 移动 | `STATUS.md` "Pin snapshot" |
-
-`CLAUDE.md` 只用作 Claude session bootstrap，**保持 50 行以内**。状态 /
-历史不要写进去。
-
-## 仓库目录
-
-```
-pypto-project/
-├── README.md                            本文件
-├── CLAUDE.md                            Claude session bootstrap（精简）
-├── STATUS.md                            实时状态板
-├── blockers.md                          活跃 open issues（SSOT）
-├── deployment/                          生产部署 spec
-│   ├── README.md
-│   ├── phase16-three-pillars.md         driver + firmware + CANN 绑定
-│   ├── machine-recovery.md              0162/0234 runbook
-│   └── version-matrix.md                5 仓库版本兼容
-├── phases/                              活跃 phase 跟踪
-│   ├── README.md
-│   ├── 20-vllm-backend-monkey-patch.md
-│   ├── 21-precision-validation.md
-│   └── 22-perf-baseline.md
-├── archive/                             历史记录
-│   ├── README.md
-│   ├── prototype-phase-01-19-summary.md
-│   └── milestones-2026-Q2.md
-└── architecture/                        跨仓库 design notes
-    ├── README.md
-    ├── overview.md
-    └── vllm-step3p5-mapping.md
-```
+见 [`CLAUDE.md`](CLAUDE.md)「同步协议」。要点：phase 状态改 `planning/` + `STATUS.md`；
+每日流水追加 `archive/milestones-2026-Q2.md`；新 blocker 进 `blockers.md`，解决后转
+`postmortems/`；设计变更改 `design/`。**代码 reference 写 sub-repo `docs/`，本仓只放项目级跟踪/设计/复盘。**

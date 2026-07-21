@@ -214,4 +214,4 @@ v0.3 多卡和 v1.0 全 pypto MoE 还 gate 在 barrier all_reduce + MoE
 - vLLM stepcast fork（Phase 2 集成目标）：
   `<workspace>/pd_sep/update_019/ascend/vllm/vllm/model_executor/models/step3p5.py`
 - 实时跟踪器：`<workspace>/pypto/CLAUDE.md`
-- 仓内 phase docs（Phase 20+）：[`../phases/`](../phases/)
+- 仓内 phase docs（Phase 20+）：[`../phases/`](../planning/phases/)

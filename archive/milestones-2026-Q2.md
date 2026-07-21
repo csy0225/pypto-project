@@ -544,7 +544,7 @@ token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant
   - **step 3**：一 key + `DeviceTensor[block]` 自动 offset，多块 kernel 读取全对（`_stage_vamap_multiblock.py` `VAMAP_MULTIBLOCK_PASS`）。
   - **step 4/5**：45 层 KV 合一 buffer → **1 个 export key** → 1 次 import → **90 条 offset map** → **无 per-tensor MemPool → 无 OOM**；嵌套 offset（层 map + block_table 分页）零拷贝喂 page_attention kernel，跨层 0/22/44 × 块 0/3/7 K/V 全 `bad_ratio=0`（`_stage_kvpool_pageattn.py` `KVPOOL_PAGEATTN_PASS`）。
 - **技术解除**：IPC 主卡点根因 = 旧方案「每 tensor 一个 `torch.npu.MemPool`」→ 45 层 90 pool → `rtReserveMemAddress` **207001 OOM**（只撑 4 层）。正解 = 找到真实分配点 `vllm-ascend model_runner_v1._allocate_kv_cache_tensors`（per-layer int8），KV 合一 buffer → **一 key + offset map**。507899（子指针导出）+ 207001（OOM）**双卡点解除**。
-- **重制定 plan**：范式定为 out-of-process worker + device-IPC 零拷贝（一 key 整池 map）；socket 桥降级为精度 oracle。新 phase：**24**（step6 整层 live 替换）/**25**（step7 真 module 全网 + Wave-3 whole-model orchestration）/**26**（perf，原 22）。详见 [`../phases/23-zero-copy-kv-ipc-validation.md`](../phases/23-zero-copy-kv-ipc-validation.md)。
+- **重制定 plan**：范式定为 out-of-process worker + device-IPC 零拷贝（一 key 整池 map）；socket 桥降级为精度 oracle。新 phase：**24**（step6 整层 live 替换）/**25**（step7 真 module 全网 + Wave-3 whole-model orchestration）/**26**（perf，原 22）。详见 [`../phases/23-zero-copy-kv-ipc-validation.md`](completed-phases/23-zero-copy-kv-ipc-validation.md)。
 - **边界**：验证的是**真实 KV 布局/规模下的机制**；接进 live 8001 服务 loop 是 Phase 24 工程（此前 socket-bridge 已部分打通真实 KV 导出 + decode attention `bad_ratio=0`）。
 - **产出脚本**（0162 staging，未入 sub-repo）：`_stage_va_ipc_probe.py`、`_stage_vamap_multiblock.py`、`_stage_kvpool_pageattn.py`。
 - **0162 现状**：为腾卡验证 kill 了 8001 + 8 个 pypto attn worker（cards 8-15 空）；**8000 baseline 保留**（cards 0-7，200）。
