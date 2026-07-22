@@ -2,6 +2,20 @@
 
 > **⛔ 用户裁定（2026-07-14，覆盖本笔记所有"program 个数 N 三档"权衡）**："多程序从来不考虑…实现不了是代码bug"。**多程序（N≈few per-block / N≈87 每层一个 / DistributedWorker co-prepare）永久排除**，本笔记的"三档取 N≈few"结论作废。**唯一路径 = N=1 整网单 `@pl.program`**；N=1 若跑不通（A2 collective 507018/S1 死锁）= collective handshake **代码 bug**，修它，不换路径。下文三档分析保留仅为历史背景。
 
+> **✅ 现状已落地（2026-07-18，Phase 27）——本笔记下文的"当前形态"描述已过时**：
+> N=1 整网融合**已实现并成为唯一生产形态**：单个 `@pl.program`
+> `whole_decode_faithful_real_single_chip_hidden_only`
+> （`models/step3p5/decode_layer_single_chip_hidden.py`），**45 层在 program 内 chaining**
+> （host_orch source-unroll + rank-local single-submit，层循环在 device/AICPU）。
+> 因此下文（尤其 §一"谁驱动层循环"、第 66 行、§"整网怎么串"/第 253-266 行）关于
+> **"`decode_fwd.host_orch` 是 TAIL-ONLY + 45 层由外部 Python driver 循环
+> `select_decode_layer` 逐层 `rt.run`"** 的说法，是 **pre-N=1-fusion 的历史中间态**，
+> **不是当前程序现状**；`decode_fwd.py` 已从 live 线移除。当前设计以
+> [`01-system-design.md`](01-system-design.md) / [`02-detailed-design.md`](02-detailed-design.md)
+> 为准。本笔记保留价值 = per-layer/block/整网**三轴分析** + **N≥6 运行时墙**的复盘
+> （见 [`../../postmortems/08-multiprogram-coprepare-deadlock.md`](../../postmortems/08-multiprogram-coprepare-deadlock.md)）。
+
+
 > **这是什么**：step3p5 接入 vLLM 做整网推理时，"逐层跑 vs 整网融合"的架构选择，以及项目里真实撞的两堵墙、和参考模型 DeepSeek 的对照。沉淀自多轮讨论。
 > **权威出处**：项目 `CLAUDE.md` Phase 20/25、memory `whole-model-pypto-decode-design`（2026-07-08 定稿）、`models/deepseek/v4/`、`models/deepseek/v3_2/`。
 > **一句话**：这里有**三个正交的粒度轴**别混——一个 program 装几层、装一层里的几块、同类型层复不复用。step3p5 撞墙撞在"轴3 program 个数"，不是"轴1 融合与否"。
