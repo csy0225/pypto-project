@@ -3,18 +3,18 @@
 > **层级**：Detailed / Low-Level Design。系统视角（职责边界 / co-tenancy 拓扑 /
 > 端到端时序）见 [`01-system-design.md`](01-system-design.md)；op 级映射见
 > [`03-vllm-op-mapping.md`](03-vllm-op-mapping.md)。
-> **代码位置**：live 集成实现在 `pypto-lib-live/tools/step3p5/`（比 `pypto-lib`
-> 镜像新）。
+> **代码位置**：集成实现在 `pypto-lib/tools/step3p5/`（`stepfun/develop`）。
 >
-> 目标：把已在 canonical 验证通过的 `whole_decode_faithful_real` N=1 whole-net 接入
-> vLLM serving decode 路径，完成 PyPTO 后端替换。
+> 目标：把已在 canonical 验证通过的整网 hidden-only 入口
+> `whole_decode_faithful_real_single_chip_hidden_only` 接入 vLLM serving decode 路径，
+> 完成 PyPTO 后端替换。
 > 关联：[`../../planning/phases/28-n1-live-integration.md`](../../planning/phases/28-n1-live-integration.md)、
 > [`../../reference/canonical-test.md`](../../reference/canonical-test.md)、
 > [`../../develop/N1/N1-STABLE-ENV-0162-20260717.md`](../../develop/N1/N1-STABLE-ENV-0162-20260717.md)。
 
 本文是 **落地任务导向的详细设计**：说明 vLLM 内如何截获、PyPTO 如何交互、模型/缓存/metadata/buffer 边界在哪里，并把每个可交付项拆成可执行任务。
 
-> ⚠️ **代码实况校正**（据 `pypto-lib-live` 当前代码，供实现时对照）：
+> ⚠️ **代码实况校正**（据 `stepfun/develop` 当前代码，供实现时对照）：
 > monkey-patch 在 `vllm_monkey_patch.py` 的 `_pypto_full_forward`（4 模式
 > tail/shadow/layer_ref/full）；决策广播用 CPU `broadcast_object`（**非** NPU
 > `tp.broadcast`）；`classify_decode_gate` 4 态（FAIL_CLOSED/PROCEED/PROFILE_NOOP/

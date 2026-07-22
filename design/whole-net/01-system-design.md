@@ -185,7 +185,7 @@ sequenceDiagram
 ## 9. 生成与调参
 
 - **唯一生产入口** = `whole_decode_faithful_real_single_chip_hidden_only`
-  （`models/step3p5/decode_layer_single_chip_hidden.py`，`pypto-lib-live`）：完整 Main
+  （`models/step3p5/decode_layer_single_chip_hidden.py`，`stepfun/develop`）：完整 Main
   45 层跑在一个 `@pl.program`，输出 pre-final-norm hidden，**无 lm_head、无 per-layer
   production dispatcher**。MTP 有独立 hidden-only fwd（`mtp_hidden_fwd.py`）。
 - 整网 builder 由生成器 `tools/step3p5/_gen_faithful_real.py` 文本生成（只保留 final

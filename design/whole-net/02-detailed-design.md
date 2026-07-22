@@ -11,7 +11,7 @@
 
 ## 1. 单 `@pl.program` 结构与生成器
 
-**唯一生产入口**（精简瘦身后，`pypto-lib-live` @ `feat/whole-net-vllm-live`）：
+**唯一生产入口**（`pypto-lib` @ `stepfun/develop`）：
 
 | 元素 | 位置（`models/step3p5/decode_layer_single_chip_hidden.py`） |
 |------|------|

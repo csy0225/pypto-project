@@ -47,13 +47,12 @@ binary + 1 个 venv：
 > - 可跑的 **model / test 脚本在代码仓 `$WS/pypto-lib`**（`tests/step3p5/**`、`models/step3p5/**`），
 >   **不在 `pypto-project`**（后者是跟踪/设计/复盘 doc 仓，无可跑脚本）。跑任何
 >   `python -m tests...` / `python -m models...` 前 **先 `cd $WS/pypto-lib`**。
-> - **统一用 stable 线 `stepfun/develop`**（5 仓全部一致）——合入验证过的稳定版本；
->   装环境 + 跑本文 Phase B CI smoke 都在它上面做。
-> - **唯一例外**：live vLLM 集成的 hidden-only 入口 `decode_layer_single_chip_hidden.py`
->   （design/ 文档描述的 raw-hidden 边界那条）**尚未合入 stepfun/develop**，暂在
->   `feat/whole-net-vllm-live`；**只有要做 live vLLM 边界时才临时切到该分支**，合入后一切归
->   stepfun/develop。stepfun/develop 上对应的是 standalone `decode_layer_single_chip.py`
->   （canonical，argmax=303，见 [`reference/canonical-test.md`](../../reference/canonical-test.md)）。
+> - **统一用 stable 线 `stepfun/develop`**（5 仓全部一致）：合入验证过的稳定版本，whole-net
+>   整网入口也已合入这条线——**不再需要 `feat/whole-net-vllm-live` 之类的 dev 分支**。装环境 +
+>   跑本文 Phase B CI smoke 都在 `stepfun/develop` 上做。
+> - whole-net 入口名 / CI 逐 step token 期望，以代码仓当前 `stepfun/develop` 的
+>   `tests/step3p5/ci/WHOLE_NETWORK_CI.md` + 本仓 [`reference/canonical-test.md`](../../reference/canonical-test.md)
+>   为准（canonical 金标准 = `argmax=303` / token `6127`）。
 
 ---
 
@@ -236,16 +235,17 @@ python -m tests.step3p5.ci.run_whole_network_ci \
   --artifact-dir "$WS/logs_n1_0162/ci"
 ```
 
-**期望（通过判据，按分支）**：
-- **stepfun/develop（stable，standalone canonical）**：`argmax=303` / token `6127`，见 [`reference/canonical-test.md`](../../reference/canonical-test.md)。
-- **feat/whole-net-vllm-live（仅做 live 时）**：hidden-only CI → Main tokens `[303,1207,19384,872,428,6127,4231,2636]` / MTP `[6178,410,303]`。
-- 两分支都要求：**无 stall / 无残余 exporter PID**。
+**期望（通过判据）**：
+- canonical 金标准：`argmax=303` / token `6127`（见 [`reference/canonical-test.md`](../../reference/canonical-test.md)）。
+- CI runner 逐 step token 期望 → 以代码仓当前 `stepfun/develop` 的 `tests/step3p5/ci/WHOLE_NETWORK_CI.md` 为准（会随版本更新，别在本文写死）。
+- **无 stall / 无残余 exporter PID**。
 
 > 数值正确与无 stall 是两个独立 gate。step1 对、step2 错 → 先查 token/embedding、
 > metadata、KV 地址、repeated-run state，再查 weights/算子。
 
-> **agent 判定**：① allreduce max=0 且 ② CI smoke 结果匹配**当前分支**的期望 → **环境可用 ✅**，
-> 按 §用法 反馈模板回报。缺 checkpoint / 只有部分卡 → 至少跑 ① 并注明"CI smoke 待 ckpt"。
+> **agent 判定**：① allreduce max=0 且 ② CI runner PASS（token/argmax 匹配 WHOLE_NETWORK_CI.md /
+> canonical-test.md）→ **环境可用 ✅**，按 §用法 反馈模板回报。缺 checkpoint / 只有部分卡 →
+> 至少跑 ① 并注明"CI smoke 待 ckpt"。
 
 ## Step 8 · （深入）N=1 canonical 复现细节
 

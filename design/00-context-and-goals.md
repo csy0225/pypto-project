@@ -72,19 +72,18 @@ graph TD
 | 仓库 | 角色 | 关键内容 |
 |------|------|----------|
 | **pypto** | 编程框架 | Python DSL（`pypto.language[.distributed]`）、multi-level IR、codegen pass。把 `@pl.program` 编成 PTOAS 字节码 + host dispatch `.so`。`pypto/runtime/` 是指向 simpler 的 submodule。 |
-| **pypto-lib** | 模型 + kernel | step3p5 家族。整网入口 `models/step3p5/decode_layer.py` 的 `whole_decode_faithful_real`；attention/MoE/gate/dispatch/combine/expert 组件；`weight_loader.py`。live 集成代码在 **`pypto-lib-live/tools/step3p5/`**。 |
+| **pypto-lib** | 模型 + kernel | step3p5 家族。整网入口 `models/step3p5/decode_layer_single_chip_hidden.py`（`stepfun/develop`）；attention/MoE/gate/dispatch/combine/expert 组件；`weight_loader.py`；集成代码在 `tools/step3p5/`。 |
 | **pto-isa** | tile ISA 虚拟实现 | 定义 tile 算子（matmul/reduce/broadcast…），codegen 下沉到此。硬件特定（910B）。 |
 | **PTOAS / ptoas-bin** | 字节码 assembler | LLVM/MLIR 把 pypto MLIR 转设备字节码 + dispatch metadata。实跑用 `ptoas-bin`（当前 v0.45）。 |
 | **simpler** | PTO runtime | AICPU+AICore dispatch、跨卡 shmem window IPC、collective。最 platform-touchy —— [Phase 16 三剑合璧](../deployment/phase16-three-pillars.md) 绑定就是为它。 |
 | **vLLM stepcast fork** | serving（集成目标） | 含 `vllm/model_executor/models/step3p5.py`。tokenizer/sampler/KV 管理/调度/batching。无我方 fork。 |
 
-> ⚠️ **代码实况（`pypto-lib-live` @ `feat/whole-net-vllm-live`）**：
+> ⚠️ **代码实况（`pypto-lib` @ `stepfun/develop`）**：
 > 生产整网**唯一入口** = `whole_decode_faithful_real_single_chip_hidden_only`
 > （`models/step3p5/decode_layer_single_chip_hidden.py`）。它把完整 Main 45 层跑在
 > **一个 `@pl.program`** 里，输出 **pre-final-norm BF16 hidden**——**strict raw-hidden
 > 边界**：final RMSNorm + lm_head + sampling 全在下游（standalone 走 host，live 走
-> vLLM）。**无 per-layer production dispatcher**。集成代码在
-> `pypto-lib-live/tools/step3p5/`。
+> vLLM）。**无 per-layer production dispatcher**。集成代码在 `pypto-lib/tools/step3p5/`。
 
 ## 5. 两个子系统（本项目的两条设计主线）
 
