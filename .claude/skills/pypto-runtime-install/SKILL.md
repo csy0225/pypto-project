@@ -45,6 +45,26 @@ binary + 1 个 venv：
 
 ---
 
+## 用法（给 agent：分两阶段执行，最终反馈"环境是否可用"）
+
+本 skill 指导 agent 把一台新机器的 pypto 环境弄到**可用**，分两阶段：
+
+- **Phase A · 环境安装**（Step 1–6）：核验/装 driver·firmware·CANN → 拉 5 仓 → venv+pip → build_runtimes → 激活。
+- **Phase B · 安装后 CI smoke**（Step 7）：跑权威 CI runner，**通过即判定"环境可用"**。
+
+agent 执行要点：
+- 按 Step 顺序，每步先跑"检查"命令，达标才继续；不达标按该步「踩坑」修。
+- Phase A 里 driver/firmware/CANN 的 **sudo / 一次性操作**若不达标：**先停下告诉用户**（可能要 root、走 [`machine-recovery.md`](../../deployment/machine-recovery.md)），**不要擅自装驱动**。
+- 最终**反馈模板**（回给用户）：
+  ```
+  环境: 可用 ✅ / 不可用 ❌
+  卡在: <Step N / 无>
+  证据: CI smoke Main tokens=[...]（或多卡 allreduce max=0）
+  待办: <需用户做的一次性事项：升 driver / 挂 checkpoint / …>
+  ```
+
+---
+
 ## Step 1 · 核验硬件 / driver / firmware
 
 ```bash
@@ -166,43 +186,61 @@ source "$WS/activate.sh"
 export PTO_ISA_ROOT="$WS/pto-isa"
 ```
 
+**或直接** `WS=<你的workspace> source .claude/skills/pypto-runtime-install/activate-pypto.sh`
+（本 skill 附带，把上面三件套 + canonical 运行时参数一次性设好，含 python-not-in-PATH 兜底）。
+
 > **踩坑**：
 > - 少 source CANN → KernelCompiler `OSError: 'ASCEND_HOME_PATH' not set`；少 `PTO_ISA_ROOT` → `OSError: PTO_ISA_ROOT not set`。
 > - 个别机器 `source activate.sh` 后 `python` 不在 PATH → 再补 `source "$WS/.venv311/bin/activate"`。
 > - **跑过 monkey-patch 测试（`apply_perrank_patch`/`cfg.X=Y`）后**，下次 fresh run 前清 pyc：`find "$WS"/pypto-lib/models/step3p5 -name "*.py" -exec touch {} +`（否则 patched 全局被序列化进 `.pyc` 污染）。
 
-## Step 7 · 验证（三道，全过才算装好）
+## Step 7 · Phase B —— 安装后 CI smoke（判定"环境可用"）
+
+分两级：先做**不需 checkpoint 的多卡 sanity**，再跑**权威 CI smoke**。
+
+**① 多卡 collective sanity（无需 checkpoint，先跑这个）**
 
 ```bash
-# ① 前端 smoke（编译链通）
-cd "$WS/pypto-lib" && python -m models.step3p5._smoke_program_build
-#   期望：=== probe rc=0 ===
-
-# ② 多卡 collective baseline（Phase 16 三剑合璧真正生效的证据）
 cd "$WS/pypto/runtime"
 python examples/workers/l3/allreduce_distributed/main.py -p a2a3 -d 0-1
-#   期望：max |out - expected| = 0.000e+00（两卡 golden match）
-
-# ③ 单卡 dense decode ST
-cd "$WS/pypto-lib" && python -m tests.step3p5.test_decode_layer_full_dense_st -p a2a3 -d 0
-#   期望：ratio_allclose PASS，约 8 秒
+#   期望：max |out - expected| = 0.000e+00（Phase 16 三剑合璧真正生效的证据）
 ```
 
-- ② 报 `507899` → driver/firmware 没到位（回 Step 1）。
-- ② 报 `507018 (BootstrapDispatcher)` → CANN 是 GA（回 Step 2）。
-- 排查决策树见 [`postmortems/01-multirank-ipc-507899-507018.md`](../../postmortems/01-multirank-ipc-507899-507018.md)。
+- 报 `507899` → driver/firmware 没到位（回 Step 1）。
+- 报 `507018 (BootstrapDispatcher)` → CANN 是 GA（回 Step 2）。
+- 决策树见 [`postmortems/01-multirank-ipc-507899-507018.md`](../../postmortems/01-multirank-ipc-507899-507018.md)。
 
-## Step 8 · （可选）N=1 整网 canonical 验收
+**② 权威 CI smoke（需 checkpoint + cards 8–15）—— 通过即"环境可用"**
 
-装好后跑唯一金标准（真 W8A8 IPC 权重 + KV-IPC + P42 → `argmax=303`）。
-完整命令、checkpoint、8-rank exporter pool + worker、清理铁律见
-[`reference/canonical-test.md`](../../reference/canonical-test.md) 与
-[`N1-STABLE-ENV`](../../develop/N1/N1-STABLE-ENV-0162-20260717.md) §6。核心环境变量：
+当前 live 线唯一权威 runner（preflight ckpt/PTO-ISA/cards → Main 45 层 hidden-only
+8-step → MTP45/46/47 → 清理 exporter；详见
+`pypto-lib/tests/step3p5/ci/WHOLE_NETWORK_CI.md`）：
 
 ```bash
-export PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072
-export P_FAITHFUL_MOE_LAYERS=42
+cd "$WS/pypto-lib"
+python -m tests.step3p5.ci.run_whole_network_ci \
+  --ckpt /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp \
+  --devices 8,9,10,11,12,13,14,15 \
+  --out /tmp/n1_single_chip_hidden_ci \
+  --artifact-dir "$WS/logs_n1_0162/single_chip_hidden_ci"
 ```
+
+**期望（通过判据）**：
+- Main tokens = `[303, 1207, 19384, 872, 428, 6127, 4231, 2636]`
+- MTP  tokens = `[6178, 410, 303]`
+- 无 stall / 无残余 exporter PID。
+
+> 数值正确与无 stall 是两个独立 gate。step1 对、step2 错 → 先查 token/embedding、
+> metadata、KV 地址、repeated-run state，再查 weights/算子。
+
+> **agent 判定**：① allreduce max=0 且 ② CI smoke Main/MTP tokens 匹配 → **环境可用 ✅**，
+> 按 §用法 反馈模板回报。缺 checkpoint / 只有部分卡 → 至少跑 ① 并注明"CI smoke 待 ckpt"。
+
+## Step 8 · （深入）N=1 canonical 复现细节
+
+Phase B ② 的更细粒度复现（fresh exporter pool + worker、清理铁律、环境变量、
+逐 rank 检查）见 [`reference/canonical-test.md`](../../reference/canonical-test.md) 与
+[`N1-STABLE-ENV`](../../develop/N1/N1-STABLE-ENV-0162-20260717.md) §6。
 
 > **踩坑**：exporter 仍存活时**严禁** `rm -rf "$OUT"`（会把 IPC pool 生命周期问题误诊成 kernel stall）；先 `touch "$OUT/STOP"` + `wait` 各 exporter PID 再清 marker。
 
@@ -233,4 +271,4 @@ export P_FAITHFUL_MOE_LAYERS=42
 3. **5 仓一起对齐 pin + simpler 走 submodule**，不单独拉某一个。
 4. **持久盘装**（netboot/tmpfs 机器重启丢 driver/venv，走 machine-recovery）。
 5. **每个新 shell 三件套激活**；monkey-patch 后清 pyc。
-6. 验证以 ①smoke rc=0 + ②allreduce max=0 + ③dense ST PASS 为准，缺一不算装好。
+6. 验证以 **Phase B** 为准：多卡 `allreduce max=0` + CI smoke（`run_whole_network_ci` 的 Main/MTP tokens 匹配）= **环境可用**；缺一不算装好。
