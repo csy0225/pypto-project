@@ -146,6 +146,15 @@ python -m simpler_setup.build_runtimes --platforms a2a3 --clone-protocol https
 > - 缺 cmake → `RuntimeError: CMake configuration not found`：装进 venv `pip install "cmake==3.31.6"`。
 > - 缺 `libstdc++-12-dev` → ccec 编 aicore_kernel 报 `fatal error: 'cstdint' file not found`：`sudo apt-get install -y libstdc++-12-dev`（ccec 的 clang 选 gcc-12 工具链）。
 > - 用 `--clone-protocol https`（容器内 ssh clone 会 hang）。
+> - **a2a3 HOST 编译报 `PLATFORM_ONBOARD_SCHEDULER_TIMEOUT_MS` 未定义**：common HOST 代码
+>   `src/common/platform/onboard/host/device_runner_base.cpp`（`resolve_onboard_timeout_config()`）
+>   引用该宏，某些旧 fork 状态下 **a2a3 的 `src/a2a3/platform/include/common/platform_config.h`
+>   漏定义（a5 有、a2a3 没有）→ 只有 a2a3 HOST 编译挂**。它只是 onboard AICPU 调度
+>   no-progress 超时默认值（compile-time 常量 = `10000` ms），**不影响已建好的旧 `.so`
+>   运行行为**。**当前 stepfun/develop 已修**（a2a3 `platform_config.h` 已定义 =10000，与
+>   a5 一致）；卡在旧 checkout 的两条出路：① 拉到当前 pin；② 一行修复——在 a2a3 的
+>   `platform_config.h` 补 `constexpr int32_t PLATFORM_ONBOARD_SCHEDULER_TIMEOUT_MS = 10000;`
+>   （照抄 a5 的值）。**先判断影响范围**：若已有能跑的旧 runtime `.so`，仅运行不必重编（旧 install 仍可用）；只有要重建 a2a3 runtime 时才需要这个定义。
 
 ## Step 6 · 三件套激活（**每个新 shell 都要**）
 
@@ -212,6 +221,7 @@ export P_FAITHFUL_MOE_LAYERS=42
 | build `buffer_elems -Werror` | `CMAKE_BUILD_TYPE=Release` | 用 dev default，别传（Step 4） |
 | `CMake configuration not found` | venv 缺 cmake | `pip install cmake==3.31.6`（Step 5） |
 | ccec `'cstdint' file not found` | 缺 libstdc++-12-dev | `apt-get install libstdc++-12-dev`（Step 5） |
+| a2a3 HOST 编译 `PLATFORM_ONBOARD_SCHEDULER_TIMEOUT_MS` 未定义 | 旧 fork 状态 a2a3 `platform_config.h` 缺该宏（a5 有），common `device_runner_base.cpp` 引用 | 拉当前 pin（已修=10000）；或在 a2a3 header 补 `constexpr int32_t PLATFORM_ONBOARD_SCHEDULER_TIMEOUT_MS = 10000;`。仅 compile-time，不影响旧 `.so` 运行（Step 5） |
 | ptoas parse error | pypto 越过动 MLIR op 的 commit，ptoas-bin 太旧 | bump ptoas-bin ≥ v0.45（Step 5） |
 | 跑通一次后结果变/污染 | monkey-patch 后 stale `.pyc` | `find models/step3p5 -name "*.py" -exec touch {} +`（Step 6） |
 | git push/pull 130s 超时 | 内网 HTTP/2 | `git -c http.version=HTTP/1.1 ...`（Step 3） |
