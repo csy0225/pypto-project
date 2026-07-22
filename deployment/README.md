@@ -2,6 +2,10 @@
 
 pypto step3p5 栈的**生产 runbook**。部署新机器或升级现有机器之前请读本目录所有文档。
 
+> **从零装环境（拉了 GitHub 仓库后一步步装到跑通）**：见
+> [`../.claude/skills/pypto-runtime-install/SKILL.md`](../.claude/skills/pypto-runtime-install/SKILL.md)
+> —— 分步 + 每步踩坑规避。本目录的三篇是它引用的硬性依据。
+
 ## 内容
 
 | 文档 | 用途 |

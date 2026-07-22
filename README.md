@@ -41,6 +41,7 @@ vLLM fork（见 [`design/00-context-and-goals.md`](design/00-context-and-goals.m
 | 此刻状态？ | [`STATUS.md`](STATUS.md) |
 | 撞到 507018/507899/hang/编译报错怎么办？ | [`postmortems/`](postmortems/)（按 error signature 查索引） |
 | 新机器怎么部署？ | [`deployment/`](deployment/) |
+| 从零装 pypto 运行时环境（拉仓库→跑通）？ | [`.claude/skills/pypto-runtime-install/SKILL.md`](.claude/skills/pypto-runtime-install/SKILL.md) |
 | 验收金标准？ | [`reference/canonical-test.md`](reference/canonical-test.md) |
 | 术语看不懂？ | [`GLOSSARY.md`](GLOSSARY.md) |
 | 每日进展历史？ | [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) |
