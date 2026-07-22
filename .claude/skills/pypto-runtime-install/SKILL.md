@@ -43,6 +43,18 @@ binary + 1 个 venv：
 **硬前提（不满足则多卡必挂，先做 Step 1-2）**：driver `25.5.2` + firmware
 `7.8.0.7.220` + CANN `9.0.0-beta.1`(**非 GA**) —— Phase 16 三剑合璧，缺一不可。
 
+> **⚠ 代码在哪 + 用哪条分支（跑测试前必读）**：
+> - 可跑的 **model / test 脚本在代码仓 `$WS/pypto-lib`**（`tests/step3p5/**`、`models/step3p5/**`），
+>   **不在 `pypto-project`**（后者是跟踪/设计/复盘 doc 仓，无可跑脚本）。跑任何
+>   `python -m tests...` / `python -m models...` 前 **先 `cd $WS/pypto-lib`**。
+> - **统一用 stable 线 `stepfun/develop`**（5 仓全部一致）——合入验证过的稳定版本；
+>   装环境 + 跑本文 Phase B CI smoke 都在它上面做。
+> - **唯一例外**：live vLLM 集成的 hidden-only 入口 `decode_layer_single_chip_hidden.py`
+>   （design/ 文档描述的 raw-hidden 边界那条）**尚未合入 stepfun/develop**，暂在
+>   `feat/whole-net-vllm-live`；**只有要做 live vLLM 边界时才临时切到该分支**，合入后一切归
+>   stepfun/develop。stepfun/develop 上对应的是 standalone `decode_layer_single_chip.py`
+>   （canonical，argmax=303，见 [`reference/canonical-test.md`](../../reference/canonical-test.md)）。
+
 ---
 
 ## 用法（给 agent：分两阶段执行，最终反馈"环境是否可用"）
@@ -212,28 +224,27 @@ python examples/workers/l3/allreduce_distributed/main.py -p a2a3 -d 0-1
 
 **② 权威 CI smoke（需 checkpoint + cards 8–15）—— 通过即"环境可用"**
 
-当前 live 线唯一权威 runner（preflight ckpt/PTO-ISA/cards → Main 45 层 hidden-only
-8-step → MTP45/46/47 → 清理 exporter；详见
-`pypto-lib/tests/step3p5/ci/WHOLE_NETWORK_CI.md`）：
+在 **stable 线 `stepfun/develop`** 上跑权威 CI runner（preflight ckpt/PTO-ISA/cards →
+whole-net 8-step → MTP → 清理 exporter；详见 `pypto-lib/tests/step3p5/ci/WHOLE_NETWORK_CI.md`）：
 
 ```bash
-cd "$WS/pypto-lib"
+cd "$WS/pypto-lib"          # 确认在 stepfun/develop
 python -m tests.step3p5.ci.run_whole_network_ci \
   --ckpt /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp \
   --devices 8,9,10,11,12,13,14,15 \
-  --out /tmp/n1_single_chip_hidden_ci \
-  --artifact-dir "$WS/logs_n1_0162/single_chip_hidden_ci"
+  --out /tmp/n1_ci \
+  --artifact-dir "$WS/logs_n1_0162/ci"
 ```
 
-**期望（通过判据）**：
-- Main tokens = `[303, 1207, 19384, 872, 428, 6127, 4231, 2636]`
-- MTP  tokens = `[6178, 410, 303]`
-- 无 stall / 无残余 exporter PID。
+**期望（通过判据，按分支）**：
+- **stepfun/develop（stable，standalone canonical）**：`argmax=303` / token `6127`，见 [`reference/canonical-test.md`](../../reference/canonical-test.md)。
+- **feat/whole-net-vllm-live（仅做 live 时）**：hidden-only CI → Main tokens `[303,1207,19384,872,428,6127,4231,2636]` / MTP `[6178,410,303]`。
+- 两分支都要求：**无 stall / 无残余 exporter PID**。
 
 > 数值正确与无 stall 是两个独立 gate。step1 对、step2 错 → 先查 token/embedding、
 > metadata、KV 地址、repeated-run state，再查 weights/算子。
 
-> **agent 判定**：① allreduce max=0 且 ② CI smoke Main/MTP tokens 匹配 → **环境可用 ✅**，
+> **agent 判定**：① allreduce max=0 且 ② CI smoke 结果匹配**当前分支**的期望 → **环境可用 ✅**，
 > 按 §用法 反馈模板回报。缺 checkpoint / 只有部分卡 → 至少跑 ① 并注明"CI smoke 待 ckpt"。
 
 ## Step 8 · （深入）N=1 canonical 复现细节
