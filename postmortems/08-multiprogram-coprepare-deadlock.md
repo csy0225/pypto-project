@@ -6,7 +6,7 @@
 | **error signature** | `code -1` (SCOPE_DEADLOCK) / `sched_error_code=100` (SCHEDULER_TIMEOUT) / `HandleTaskTimeout ... Split kernel TaskMapSize=0` / `507018` on first dispatch |
 | **首次出现** | 2026-07-08 |
 | **状态** | ✅ 已解（架构层面裁定：永久放弃多程序路径，整网收敛到单 `@pl.program`） |
-| **相关 skill / doc** | [`../design/whole-net/01-system-design.md`](../design/whole-net/01-system-design.md) · [`../design/whole-net/03-integration-axes.md`](../design/whole-net/03-integration-axes.md) · [`.claude/skills/pypto-whole-net-hang-debug/`](../.claude/skills/pypto-whole-net-hang-debug/) · sibling `07-whole-net-scheduler-timeout.md` |
+| **相关 skill / doc** | [`../design/whole-net/01-system-design.md`](../design/whole-net/01-system-design.md) · [`.claude/skills/pypto-whole-net-hang-debug/`](../.claude/skills/pypto-whole-net-hang-debug/) · sibling `07-whole-net-scheduler-timeout.md` |
 
 ## 1. 背景（Background）
 
@@ -118,7 +118,7 @@ N=1 单程序跑通后，衍生出的新 deterministic bug（跨层 comm window 
 
 **落点**：
 
-- 本复盘 + `design/whole-net/01-system-design.md` §1 + `03-integration-axes.md`（三档分析保留仅为历史背景，顶部有 ⛔ 裁定注释）。
+- 本复盘 + `design/whole-net/01-system-design.md` §1（唯一生产形态 = 单 `@pl.program`）。
 - skill `.claude/skills/pypto-whole-net-hang-debug/`（orchestrator code 表：`code -1` = scope deadlock / `sched=100` = scheduler timeout）。
 - `blockers.md` 2026-07-08 节（⛔ 作废标记，保留仅为历史）。
 - memory `blocker1_coprepare_wall_overcounting_N7.md` / `feedback_align_deepseek_architecture_first.md`。

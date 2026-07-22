@@ -30,13 +30,6 @@
   dense MLP / MoE body 全部 inline 进整 program。
 - MTP 有独立 hidden-only fwd `mtp_hidden_fwd.py`（同样 raw-hidden 边界）。
 
-> **历史/命名**：瘦身前 live 线还并存过全 logits 变体
-> `decode_layer_single_chip.py`（`whole_decode_faithful_real_single_chip`，host_orch 末尾
-> 调 `lm_head_orch` 出 `logits_shard_out`）与更早的 `decode_layer.py:whole_decode_faithful_real`
-> predecessor；`cleanup(step3p5): 收敛 single-submit 为唯一整网入口` 后**均已移除**。
-> 下文 §2–§9 的层内算法/结构（MoE / window / tp_all_reduce / KV / weight）在各形态一致，
-> 行号以本模块符号名为准。
-
 ## 2. host_orch single-submit 与 resident holder
 
 - host_orch 签名/体：`decode_layer.py:27544`（`@pl.function(level=HOST, role=Orchestrator)`）。
@@ -152,7 +145,7 @@ SiLU / SwigluStep@7）、`expert_shared.py`。
 
 ## 10. 相关文档
 
-- 系统设计：[`01-system-design.md`](01-system-design.md) · 三轴与 program 墙：[`03-integration-axes.md`](03-integration-axes.md)
+- 系统设计：[`01-system-design.md`](01-system-design.md)
 - 复盘：[`../../postmortems/07-whole-net-scheduler-timeout.md`](../../postmortems/07-whole-net-scheduler-timeout.md) · [`08`](../../postmortems/08-multiprogram-coprepare-deadlock.md) · [`10`](../../postmortems/10-gap5-attention-quant-scope.md)
 - 强约束 skill：`.claude/skills/pypto-dev-constraints/` · hang 排查：`.claude/skills/pypto-whole-net-hang-debug/`
 - kernel 硬限制：`pypto-lib/docs/known-pypto-pitfalls.md`
