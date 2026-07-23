@@ -106,10 +106,21 @@ RUN --mount=type=secret,id=gl_token \
     cp "$tmp/vllm/vllm/model_executor/models/step3p5_mtp.py" /vllm-workspace/vllm/vllm/model_executor/models/step3p5_mtp.py && \
     rm -rf "$tmp"
 
-# ---- 6) runtime env (每次登录 shell / serve 生效) --------------------------
+# ---- 6) 修 base 镜像 cann-8.5.1 残留 + runtime env --------------------------
+# base 镜像把 CANN 8.5.1 设为默认 (ENV + /etc/profile:29 都硬编码 cann-8.5.1)。
+# 删了 8.5.1 后这些悬空引用会让每个 bash 登录 shell 报错退出 (rc=1)。
+# 覆盖 baked 标量 ASCEND 环境 -> beta.1 (PATH/LD 里 8.5.1 死条目无害, 由 set_env 覆盖)。
+ENV ASCEND_TOOLKIT_HOME=/usr/local/Ascend/cann-9.0.0-beta.1 \
+    ASCEND_HOME_PATH=/usr/local/Ascend/cann-9.0.0-beta.1 \
+    ASCEND_AICPU_PATH=/usr/local/Ascend/cann-9.0.0-beta.1 \
+    ASCEND_OPP_PATH=/usr/local/Ascend/cann-9.0.0-beta.1/opp \
+    TOOLCHAIN_HOME=/usr/local/Ascend/cann-9.0.0-beta.1/toolkit
 ENV PYPTO_PROG_BUILD_DIR=/tmp/pypto_build_output
 ENV PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072
-RUN printf '%s\n' \
+# /etc/profile:29 hardcode 的 cann-8.5.1 set_env.sh -> beta.1 (beta.1 有同名文件),
+# 让登录 shell 不再因缺文件 abort; 然后写 pypto 专属 env (login shell 生效)。
+RUN sed -i 's#/usr/local/Ascend/cann-8.5.1#/usr/local/Ascend/cann-9.0.0-beta.1#g' /etc/profile 2>/dev/null || true; \
+    printf '%s\n' \
   'source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh' \
   'export WS=/workspace' \
   'export PTO_ISA_ROOT=$WS/pto-isa PTOAS_ROOT=$WS/ptoas-bin' \
