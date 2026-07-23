@@ -23,6 +23,9 @@ ARG PTOAS_COMMIT=72ada0a1
 ARG SIMPLER_COMMIT=c7fdc574fb0637fda581398e5064994734d913c5
 ARG PTOAS_BIN_VER=v0.45
 ARG VLLM_PATCH_BRANCH=csy/pypto-tail-mtp-integration
+# github 不在内网直连,需经代理; 内网 (basemind.com: 镜像/pip/gitlab) 直连不走代理。
+ARG GH_PROXY=http://proxy.i.shaipower.com:3128
+ARG NO_PROXY_HOSTS=basemind.com,shaipower.com,shaipower,127.0.0.1,localhost,.svc
 
 ENV WS=/workspace
 ENV PYTHON=/usr/local/python3.11.14/bin/python3
@@ -35,6 +38,7 @@ RUN rm -rf /usr/local/Ascend/cann-8.5.1 && \
 # ---- 2) clone pypto 栈 @ stepfun/develop pins (github csy0225 forks) --------
 WORKDIR ${WS}
 RUN --mount=type=secret,id=gh_token \
+    export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
     GH="$(cat /run/secrets/gh_token)" && \
     for r in pypto pypto-lib pto-isa PTOAS; do \
       git -c http.version=HTTP/1.1 clone "https://${GH}@github.com/csy0225/${r}.git" "${WS}/${r}"; \
@@ -50,6 +54,7 @@ RUN --mount=type=secret,id=gh_token \
 
 # ---- 3) ptoas-bin v0.45 (binary release) -----------------------------------
 RUN --mount=type=secret,id=gh_token \
+    export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
     GH="$(cat /run/secrets/gh_token)" && \
     mkdir -p ${WS}/ptoas-bin && cd ${WS}/ptoas-bin && \
     ( curl -fsSL -H "Authorization: token ${GH}" \

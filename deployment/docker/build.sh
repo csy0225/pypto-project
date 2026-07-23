@@ -19,12 +19,15 @@ BASE=${BASE:-hub.i.basemind.com/stepcast/stepcast:0.19.0-081dd47dd175-fbfe288fe1
 
 echo "[build] BASE=$BASE"
 echo "[build] IMG=$IMG"
-DOCKER_BUILDKIT=1 docker buildx build \
+# 用 --network=host: github clone 需经宿主可达的代理 (proxy.i.shaipower.com),
+# 默认 bridge 到不了 github/proxy。内网 (pip 镜像/gitlab) 直连,不走代理。
+# 用 DOCKER_BUILDKIT=1 docker build (而非 buildx): 同时支持 --secret + --network=host。
+DOCKER_BUILDKIT=1 docker build \
+  --network=host \
   --build-arg BASE="$BASE" \
   --secret id=gh_token,src="$GH" \
   --secret id=gl_token,src="$GL" \
   --progress=plain \
-  --load \
   -t "$IMG" \
   -f Dockerfile \
   .

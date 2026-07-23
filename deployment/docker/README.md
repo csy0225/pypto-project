@@ -16,7 +16,9 @@ vllm + pypto 集成镜像。
   6. env(CANN beta.1 / PTO_ISA_ROOT / PTOAS / PYTHONPATH / PTO2_RING_*)写进 `/etc/profile.d/pypto-env.sh`
 
 > 注:`--mount=type=secret` 用 BuildKit 内置 frontend(不写 `# syntax=` 以免从 docker.io 拉;
-> 内网只有 hub.i.basemind.com)。
+> 内网只有 hub.i.basemind.com)。build 用 `DOCKER_BUILDKIT=1 docker build --network=host`
+> ——github clone 需经宿主可达的代理 `proxy.i.shaipower.com:3128`(Dockerfile 里只在
+> github 相关 RUN 步 inline 设 `http(s)_proxy`;内网 pip 镜像/gitlab 直连不走代理)。
 
 ## Build
 
