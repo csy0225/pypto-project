@@ -131,4 +131,8 @@ RUN sed -i 's#/usr/local/Ascend/cann-8.5.1#/usr/local/Ascend/cann-9.0.0-beta.1#g
   > /etc/profile.d/pypto-env.sh
 
 WORKDIR ${WS}
+# base 镜像的 ENTRYPOINT 在 && 链里 hardcode source cann-8.5.1/.../ascendnpu-ir/set_env.sh,
+# 删了 8.5.1 后该 source 失败 -> && 链中断 -> exec "$@" 不执行 -> 容器 rc=1 起不来。
+# 覆盖为 beta.1 (有同名文件); 另两处 (ascend-toolkit/latest->cann->beta.1, nnal/atb) 本就 OK。
+ENTRYPOINT ["/bin/bash", "-c", "source /usr/local/Ascend/ascend-toolkit/set_env.sh && source /usr/local/Ascend/cann-9.0.0-beta.1/share/info/ascendnpu-ir/bin/set_env.sh && source /usr/local/Ascend/nnal/atb/set_env.sh && exec \"$@\"", "--"]
 CMD ["/bin/bash", "-l"]
