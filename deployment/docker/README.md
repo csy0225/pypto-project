@@ -181,6 +181,39 @@ sudo $NC run -d --name vllm-pypto-serve --net host --ipc host --privileged \
 
 ---
 
+## 6.5 decode ITL 性能(64k context)
+
+harness 的 perf-only 模式(pypto-lib ≥ `7cb2a6b3`):固定 context 长度 pin metadata 到
+`seq_len=L`,计每步 `holder.run()` 耗时。attention 计算/带宽与 KV *内容* 无关,故无需
+prefill 即可测大 context 的稳态 ITL;**KV-IPC 全程开启**(holder `kv_ipc=True`,`block_table`
+在 `--num-blocks 512` 下可寻址到 512 块 → 64k),所以 attention 真实遍历 64k KV。
+
+```bash
+# 已发布镜像 stepfun-develop-20260723 bake 的是 pypto-lib 4c48215b(无此 harness);
+# 用 -v 挂载新 harness, 或用带 7cb2a6b3 的新 build。
+sudo $NC run --rm --net host --ipc host --privileged --security-opt apparmor=unconfined \
+  $DEVS --device /dev/davinci_manager --device /dev/hisi_hdc --device /dev/devmm_svm \
+  -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro -v "$CKPT":"$CKPT":ro \
+  -v /data/chensiyu/itl_out:/tmp/itl --shm-size 32g \
+  "$IMG" bash -lc "cd /workspace/vllm-pypto && python -m tests.step3p5.harnesses._stage_main_hidden_only \
+    --device 8,9,10,11,12,13,14,15 --ckpt $CKPT --out /tmp/itl --num-blocks 512 \
+    --itl-context-lens 1024,4096,16384,32768,65536 --itl-iters 20 --itl-warmup 3"
+```
+
+**2026-07-23 0162 实测**(整网 45 层 hidden-only decode,W8A8,TP=8,active batch=1):
+
+| context | ITL mean (ms) | p50 | min | max |
+|--------:|:-:|:-:|:-:|:-:|
+| 1024 | 635.3 | 644.4 | 617.4 | 648.6 |
+| 4096 | 639.3 | 645.3 | 617.5 | 652.3 |
+| 16384 | 640.0 | 640.3 | 620.7 | 658.2 |
+| 32768 | 646.7 | 651.2 | 624.5 | 688.7 |
+| **65536** | **654.0** | 658.9 | 632.1 | 677.6 |
+
+**结论:64k decode ITL ≈ 654 ms/step;1k→64k 仅 +19ms,整网 decode 计算受限
+(45 层 W8A8 MLP/MoE),非 attention/KV 受限。** 报告 `itl_report.json`。
+> 注:这是**未做性能调优**的整网 baseline(Phase 22 才做 tuning),数值仅作当前参考。
+
 ## 7. 已知坑(都已修进本镜像 / Dockerfile)
 
 - **删 CANN 8.5.1 的悬空引用**:base 镜像把 8.5.1 设成默认——**ENTRYPOINT** 的 `&&` 链、
