@@ -39,12 +39,14 @@ containerd/nerdctl)。**
 
 ```bash
 cd deployment/docker
-GH=/data/chensiyu/secrets/github.env \
-GL=/data/chensiyu/secrets/gitlab.env \
-IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260723 \
-bash build.sh
-docker push "$IMG"          # base 层已在 hub, 只传增量(pypto/simpler/ptoas/Track-B)
+# 每次构建的 pins+tag 在一个 spec 文件里(builds/<tag>.env),配方共用单一 Dockerfile。
+GH=/data/chensiyu/secrets/github.env GL=/data/chensiyu/secrets/gitlab.env \
+  bash build.sh builds/stepfun-develop-20260723.env
+docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260723
 ```
+
+- `build.sh <spec>` 读 spec 里的 pins,以 `--build-arg` 传进 Dockerfile,`-t` 用 `IMAGE_TAG`。
+  不带参数默认用最新 spec。**加新 build 见 [§9 组织方式](#9-组织方式--加新-build)**。
 
 - `GH`/`GL` 是含 PAT 的文件,以 BuildKit `--secret` 传入,**不落镜像层**。
 - build.sh 做了三件网络相关的事(devbox 内网特性):
@@ -203,6 +205,37 @@ sudo $NC run -d --name vllm-pypto-serve --net host --ipc host --privileged \
 镜像已把仓库 bake 在 `/workspace`(可独立运行)。做统一管理时可把宿主仓库挂载覆盖
 `-v <宿主>/workspace:/workspace`,但宿主仓库需已用**同 python3.11.14 + CANN beta.1** 编译
 (`pypto` 扩展 + runtime `.so`),ABI 一致;否则用镜像内 bake 的即可。
+
+## 9. 组织方式 / 加新 build
+
+配方(单一 `Dockerfile`)与「一次构建的版本规格」分离,后续新 commit 构建只加规格 + 一行登记:
+
+```text
+deployment/docker/
+├── Dockerfile          # 稳定构建配方(全 pins 走 ARG, 不写死具体值)
+├── build.sh            # bash build.sh builds/<spec>.env → 读 spec 传 --build-arg + tag
+├── pypto-smoke.sh      # bake 进镜像 /workspace/pypto-smoke.sh
+├── builds/             # 每次镜像构建一个 spec(pins + IMAGE_TAG)
+│   └── stepfun-develop-20260723.env
+├── README.md           # 本文档 + 下方「构建登记表」
+├── .dockerignore / .gitignore
+└── (ptoas-bin.tgz / build_*.log 由 build.sh 生成, gitignored)
+```
+
+**加一个新 build**(例:新 pypto commit):
+
+1. `cp builds/stepfun-develop-20260723.env builds/<新tag>.env`,改 `IMAGE_TAG` + 变动的 `*_COMMIT`。
+2. `bash build.sh builds/<新tag>.env && docker push hub.i.basemind.com/stepcast/vllm-pypto:<新tag>`。
+3. 在下方**构建登记表**加一行(tag / 日期 / pins 摘要 / 验证状态)。
+4. Dockerfile **不动**(除非配方本身要改,如新踩坑修复——那属于所有 build 共享的配方演进)。
+
+> 旧 spec 文件保留(可复现历史某次镜像);Dockerfile 单一、不随 build 复制,避免配方漂移。
+
+## 构建登记表
+
+| IMAGE_TAG | 日期 | pypto / pypto-lib / pto-isa / PTOAS / simpler / ptoas-bin | 验证(0162) |
+|-----------|------|----------------------------------------------------------|-------------|
+| `stepfun-develop-20260723` | 2026-07-23 | `8af501fc` / `4c48215b` / `ecb6c303` / `72ada0a1` / `36957c6b` / `v0.45` | 冒烟 PASS + 整网 decode `6127→303` / step2→`6127`(与 vanilla 逐 token 一致)✅ |
 
 ## Pin 依据
 
