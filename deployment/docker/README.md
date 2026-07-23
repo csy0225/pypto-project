@@ -214,6 +214,14 @@ sudo $NC run --rm --net host --ipc host --privileged --security-opt apparmor=unc
 (45 层 W8A8 MLP/MoE),非 attention/KV 受限。** 报告 `itl_report.json`。
 > 注:这是**未做性能调优**的整网 baseline(Phase 22 才做 tuning),数值仅作当前参考。
 
+> **与权威 benchmark 的口径差异**(见 [`../../benchmark/2026-07-23-step3p5-decode-64k-itl.md`](../../benchmark/2026-07-23-step3p5-decode-64k-itl.md),64k device-KV ≈ **590 ms/step**):
+> 二者都是 device-KV / TP=8 / 64k,但**被测程序与计时口径不同**,故本表偏高 ~60ms:
+> - **程序**:本表 = `..._hidden_only`(45 层→hidden,**无 lm_head**);benchmark = `..._single_chip`(**含 lm_head→logits**)。
+> - **计时**:本表用 `_stage_main_hidden_only` 的 `holder.run()`(含每步 host↔device glue:`[8,16,4096]` hidden 的 D2H + metadata/python 开销);benchmark 的 `dt` **只包 raw `rt.run()`**(纯 device 前向)。
+> - **步数**:本表 20 步(3 warmup);benchmark 255 步。floor 差(本 min 632 vs bench min 500)证实是系统性口径差,非噪声。
+> **绝对基线以 benchmark 的 590 ms(raw `rt.run`)为准**;本表的价值是**相对 context 缩放**(近平坦→计算受限),
+> 以及贴近集成层的 `holder.run()` 口径(vLLM 走 holder/sidecar 时会付这部分 host glue)。
+
 ## 7. 已知坑(都已修进本镜像 / Dockerfile)
 
 - **删 CANN 8.5.1 的悬空引用**:base 镜像把 8.5.1 设成默认——**ENTRYPOINT** 的 `&&` 链、
