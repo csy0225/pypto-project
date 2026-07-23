@@ -1,4 +1,5 @@
 build_*.log
 push_*.log
 .last_build_log
+.last_push_log
 ptoas-bin.tgz
