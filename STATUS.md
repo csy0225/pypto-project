@@ -21,11 +21,20 @@
 | **21** | 与 vLLM 原生精度对比 harness（L1/L2/L3） | ✅ dump-based 闭环；在线 gate 待 Phase 20 | [`archive/completed-phases/21-precision-validation.md`](archive/completed-phases/21-precision-validation.md) |
 | **22/26** | Perf baseline + 优化；TP=8 多卡 | 📐 设计已落；gate 见 roadmap | [`archive/completed-phases/22-perf-baseline.md`](archive/completed-phases/22-perf-baseline.md) |
 | **27** | N=1 单 `@pl.program` whole-net standalone | ✅ canonical P42 20/20 `argmax=303`（2026-07-18 single-submit 合入三仓 `stepfun/develop`） | [`planning/phases/27-n1-whole-net-fusion.md`](planning/phases/27-n1-whole-net-fusion.md) |
-| **28** | N=1 whole-net → vLLM live single-handoff | 🟡 standalone gate 已清；per-layer KV、3-way HBM、live token-exact A/B 待完成 | [`planning/phases/28-n1-live-integration.md`](planning/phases/28-n1-live-integration.md) |
+| **28** | N=1 whole-net → vLLM live single-handoff | 🟡 hidden-only 集成 `a632c42e`；**主网 multi-decode 精度已验证**（见下）；live-8001 端到端 serving + MTP + 3-way HBM 待完成 | [`planning/phases/28-n1-live-integration.md`](planning/phases/28-n1-live-integration.md) |
 
 > 交付分级 / 到 v1.0 的规划见 [`planning/roadmap.md`](planning/roadmap.md)。
 > **口径提醒**：dump-based 精度闭环 ≠ 真实 vLLM 请求已走 PyPTO NPU runner；
 > production backend（Phase 20）仍未完成。
+>
+> **2026-07-23 主网 multi-decode 精度验证（device 0162, `stepfun/develop a632c42e`+CI `e66bda25`）**：
+> 用 **live vanilla vLLM W8A8 oracle** 逐 token teacher-forced 对比，seed=6127 / N=128 →
+> **ALIGNED=124/128=96.9%（≥95% L3 PASS）**；4 个 miss 全是 vanilla 自身 near/dead-tie
+> （pypto 的选择 = vanilla fresh 查询 #1）。**即 pypto 整网 decode 与 vanilla 逐 token 对齐、
+> 精度正常**。CI: `tests/step3p5/ci/LIVE_PRECISION_AB.md`。
+> ⚠ **历史口径更正**：此前 session 里"multi-decode step-3 发散 / near-tie 未解决"的结论
+> **作废**——根因是 harness 硬编码 `DEFAULT_ORACLE_TOKENS[2]=19384` 是过时/串位常量
+> （one-shot `encode(text)` 边界串位），对相同 no-BOS 上下文 vanilla 自己也出 6127，pypto 无误。
 
 ## 组件 Pin Snapshot（最新）
 
