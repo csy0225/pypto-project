@@ -16,14 +16,17 @@ FROM ${BASE}
 SHELL ["/bin/bash", "-lc"]
 
 # ---- stepfun/develop pins (2026-07-23 验证) --------------------------------
-ARG PYPTO_COMMIT=9ec303f6f984b96a70d467cd46185b7b9157d3ec
+# pypto develop 8af501fc = 9ec303f6 + runtime submodule gitlink 回退到可编译的 36957c6b
+# (原 9ec303f6 gitlink 指向 c7fdc574, 其 Phase-24 import_ipc 半成品编译不过)。
+ARG PYPTO_COMMIT=8af501fc01c91d6f02da8e6a29ef7d73c8049082
 ARG PYPTO_LIB_COMMIT=4c48215b
 ARG PTO_ISA_COMMIT=ecb6c303
 ARG PTOAS_COMMIT=72ada0a1
-# simpler: 用 36957c6b (proven-buildable, 0162 验证过的 .so 就是它; 也在 fork 分支 n1fusion-base)。
-# 注: pypto 9ec303f6 的 submodule 指针是 c7fdc574 = 36957c6b + 9 个 WIP commit, 那 9 个 C++ 改动
-#     (control_import_ipc / get_worker) 编译不过 (declaration mismatch); 且其 IPC facade 实际走
-#     纯 Python (G5b), canonical decode 路径不需要 → 回落到可编译的 ancestor 36957c6b。
+# simpler stepfun/develop 已回退到 36957c6b (proven-buildable, 0162 验证过的 .so 就是它)。
+# 原 c7fdc574 = 36957c6b + 9 WIP commit, 其中 Phase-24 import_ipc 半成品编译不过
+# (get_worker 笔误 + control_import_ipc 缺头声明; 该 facade 已被 Python 路径取代)。
+# 原 c7fdc574 保留在 simpler tag backup/stepfun-develop-c7fdc574-20260723。
+# pypto develop 8af501fc 的 runtime gitlink 已指向 36957c6b, submodule update 直接落对。
 ARG SIMPLER_COMMIT=36957c6b56700ecba3aeb8dbbedd6240594e01de
 ARG PTOAS_BIN_VER=v0.45
 ARG VLLM_PATCH_BRANCH=csy/pypto-tail-mtp-integration
