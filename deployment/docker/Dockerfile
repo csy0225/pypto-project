@@ -52,7 +52,7 @@ RUN --mount=type=secret,id=gh_token \
     done && \
     cd ${WS}/pypto && git checkout ${PYPTO_COMMIT} && \
       git config submodule.runtime.url "https://${GH}@github.com/csy0225/simpler.git" && \
-      git submodule update --init runtime && \
+      git submodule update --init && \
       ( cd runtime && git checkout ${SIMPLER_COMMIT} ) && \
     cd ${WS}/pypto-lib && git fetch -q "https://${GH}@github.com/csy0225/pypto-lib.git" 'stepfun/develop:refs/heads/stepfun/develop' && git checkout stepfun/develop && \
     cd ${WS}/pto-isa && git checkout ${PTO_ISA_COMMIT} && \
