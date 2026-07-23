@@ -21,8 +21,8 @@ BASE=${BASE:-hub.i.basemind.com/stepcast/stepcast:0.19.0-081dd47dd175-fbfe288fe1
 PTOAS_BIN_SRC=${PTOAS_BIN_SRC:-/data/chensiyu/hw_project/pypto/workspace/ptoas-bin}
 if [ ! -f ptoas-bin.tgz ]; then
   [ -x "$PTOAS_BIN_SRC/bin/ptoas" ] || { echo "缺 ptoas 二进制: $PTOAS_BIN_SRC/bin/ptoas (设 PTOAS_BIN_SRC)"; exit 1; }
-  echo "[build] 打包 ptoas-bin (bin+lib) 从 $PTOAS_BIN_SRC ..."
-  tar czf ptoas-bin.tgz -C "$PTOAS_BIN_SRC" bin lib
+  echo "[build] 打包 ptoas-bin (bin+lib+顶层 ptoas 符号链接) 从 $PTOAS_BIN_SRC ..."
+  tar czf ptoas-bin.tgz -C "$PTOAS_BIN_SRC" bin lib $([ -e "$PTOAS_BIN_SRC/ptoas" ] && echo ptoas)
   echo "[build] ptoas-bin.tgz = $(du -h ptoas-bin.tgz | cut -f1)"
 fi
 

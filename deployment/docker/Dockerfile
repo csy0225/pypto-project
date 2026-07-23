@@ -119,7 +119,8 @@ ENV PYPTO_PROG_BUILD_DIR=/tmp/pypto_build_output
 ENV PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072
 # /etc/profile:29 hardcode 的 cann-8.5.1 set_env.sh -> beta.1 (beta.1 有同名文件),
 # 让登录 shell 不再因缺文件 abort; 然后写 pypto 专属 env (login shell 生效)。
-RUN sed -i 's#/usr/local/Ascend/cann-8.5.1#/usr/local/Ascend/cann-9.0.0-beta.1#g' /etc/profile 2>/dev/null || true; \
+RUN ln -sfn bin/ptoas ${WS}/ptoas-bin/ptoas && \
+    sed -i 's#/usr/local/Ascend/cann-8.5.1#/usr/local/Ascend/cann-9.0.0-beta.1#g' /etc/profile 2>/dev/null || true; \
     printf '%s\n' \
   'source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh' \
   'export WS=/workspace' \
