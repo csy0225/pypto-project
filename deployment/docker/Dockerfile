@@ -93,7 +93,7 @@ RUN source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
     git config --global --add safe.directory '*' && \
     export PTO_ISA_ROOT=${WS}/pto-isa && \
     ${PIP} install --no-cache-dir --no-build-isolation -e ${WS}/pypto/runtime && \
-    cd ${WS}/pypto && ${PYTHON} -m simpler_setup.build_runtimes --platforms a2a3 --clone-protocol https
+    cd ${WS}/pypto && ${PYTHON} -m simpler_setup.build_runtimes --platforms a2a3
 
 # ---- 5) vLLM Track-B 补丁 (tail-only 主网 + MTP-proposer + MTP3 boot fix) ---
 #     从 gitlab 分支取 step3p5.py + step3p5_mtp.py 覆盖 base 的 /vllm-workspace/vllm
