@@ -132,6 +132,8 @@ RUN ln -sfn bin/ptoas ${WS}/ptoas-bin/ptoas && \
   > /etc/profile.d/pypto-env.sh
 
 WORKDIR ${WS}
+# 冒烟脚本 bake 进镜像: nerdctl run ... bash -lc 'bash /workspace/pypto-smoke.sh'
+COPY pypto-smoke.sh /workspace/pypto-smoke.sh
 # base 镜像的 ENTRYPOINT 在 && 链里 hardcode source cann-8.5.1/.../ascendnpu-ir/set_env.sh,
 # 删了 8.5.1 后该 source 失败 -> && 链中断 -> exec "$@" 不执行 -> 容器 rc=1 起不来。
 # 覆盖为 beta.1 (有同名文件); 另两处 (ascend-toolkit/latest->cann->beta.1, nnal/atb) 本就 OK。
