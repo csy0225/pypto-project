@@ -75,11 +75,23 @@ ENV PATH=${WS}/ptoas-bin/bin:${PATH}
 # 限制编译并行度 (devbox dockerd 在 memcg 下, 17GB/5核; 模板重的 C++ 全并行会 OOM 打挂 dockerd)。
 ENV CMAKE_BUILD_PARALLEL_LEVEL=2
 ENV MAX_JOBS=2
+# 4a) 编译后端 + pypto (慢, ~14min; 单独一层, 改 runtime 步不重编 pypto)
 RUN source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
+    export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
+    git config --global http.version HTTP/1.1 && \
+    git config --global --add safe.directory '*' && \
     export PTO_ISA_ROOT=${WS}/pto-isa && \
     ${PIP} install --no-cache-dir "cmake==3.31.6" \
         "scikit-build-core>=0.10.0" "nanobind>=2.0.0" "ninja>=1.11.0" && \
-    ${PIP} install --no-cache-dir --no-build-isolation -e ${WS}/pypto && \
+    ${PIP} install --no-cache-dir --no-build-isolation -e ${WS}/pypto
+
+# 4b) simpler runtime + build_runtimes(a2a3); build_runtimes 内部会 clone
+#     hw-native-sys/pto-isa 到 runtime/build/pto-isa(managed), 故需代理 + HTTP/1.1。
+RUN source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
+    export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
+    git config --global http.version HTTP/1.1 && \
+    git config --global --add safe.directory '*' && \
+    export PTO_ISA_ROOT=${WS}/pto-isa && \
     ${PIP} install --no-cache-dir --no-build-isolation -e ${WS}/pypto/runtime && \
     cd ${WS}/pypto && ${PYTHON} -m simpler_setup.build_runtimes --platforms a2a3 --clone-protocol https
 
