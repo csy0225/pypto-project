@@ -17,14 +17,31 @@ BASE=${BASE:-hub.i.basemind.com/stepcast/stepcast:0.19.0-081dd47dd175-fbfe288fe1
 [ -f "$GH" ] || { echo "缺 GitHub token 文件: $GH"; exit 1; }
 [ -f "$GL" ] || { echo "缺 GitLab token 文件: $GL"; exit 1; }
 
+# ptoas-bin v0.45: fork 无 release asset,从 0162 验证过的二进制 bake 进 context。
+PTOAS_BIN_SRC=${PTOAS_BIN_SRC:-/data/chensiyu/hw_project/pypto/workspace/ptoas-bin}
+if [ ! -f ptoas-bin.tgz ]; then
+  [ -x "$PTOAS_BIN_SRC/bin/ptoas" ] || { echo "缺 ptoas 二进制: $PTOAS_BIN_SRC/bin/ptoas (设 PTOAS_BIN_SRC)"; exit 1; }
+  echo "[build] 打包 ptoas-bin (bin+lib) 从 $PTOAS_BIN_SRC ..."
+  tar czf ptoas-bin.tgz -C "$PTOAS_BIN_SRC" bin lib
+  echo "[build] ptoas-bin.tgz = $(du -h ptoas-bin.tgz | cut -f1)"
+fi
+
 echo "[build] BASE=$BASE"
 echo "[build] IMG=$IMG"
-# 用 --network=host: github clone 需经宿主可达的代理 (proxy.i.shaipower.com),
-# 默认 bridge 到不了 github/proxy。内网 (pip 镜像/gitlab) 直连,不走代理。
-# 用 DOCKER_BUILDKIT=1 docker build (而非 buildx): 同时支持 --secret + --network=host。
+# github clone 需经宿主可达的代理; 优先用官方入口 (deploy.i.shaipower.com/httpproxy),
+# 拿不到就回落 Dockerfile 内置默认 (proxy.i.shaipower.com:3128)。内网 (pip/gitlab/hub) 直连。
+PROXY_ARGS=()
+if eval "$(curl -fsS http://deploy.i.shaipower.com/httpproxy 2>/dev/null)" 2>/dev/null && [ -n "${http_proxy:-}" ]; then
+  echo "[build] 代理(官方入口): $http_proxy"
+  PROXY_ARGS=(--build-arg GH_PROXY="$http_proxy" --build-arg NO_PROXY_HOSTS="${no_proxy:-basemind.com,shaipower.com,127.0.0.1,localhost}")
+else
+  echo "[build] 官方代理入口不可达, 用 Dockerfile 内置默认"
+fi
+# 用 --network=host: 走宿主路由到代理; 用 DOCKER_BUILDKIT=1 docker build 同时支持 --secret + --network=host。
 DOCKER_BUILDKIT=1 docker build \
   --network=host \
   --build-arg BASE="$BASE" \
+  "${PROXY_ARGS[@]}" \
   --secret id=gh_token,src="$GH" \
   --secret id=gl_token,src="$GL" \
   --progress=plain \

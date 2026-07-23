@@ -20,7 +20,11 @@ ARG PYPTO_COMMIT=9ec303f6f984b96a70d467cd46185b7b9157d3ec
 ARG PYPTO_LIB_COMMIT=4c48215b
 ARG PTO_ISA_COMMIT=ecb6c303
 ARG PTOAS_COMMIT=72ada0a1
-ARG SIMPLER_COMMIT=c7fdc574fb0637fda581398e5064994734d913c5
+# simpler: 用 36957c6b (proven-buildable, 0162 验证过的 .so 就是它; 也在 fork 分支 n1fusion-base)。
+# 注: pypto 9ec303f6 的 submodule 指针是 c7fdc574 = 36957c6b + 9 个 WIP commit, 那 9 个 C++ 改动
+#     (control_import_ipc / get_worker) 编译不过 (declaration mismatch); 且其 IPC facade 实际走
+#     纯 Python (G5b), canonical decode 路径不需要 → 回落到可编译的 ancestor 36957c6b。
+ARG SIMPLER_COMMIT=36957c6b56700ecba3aeb8dbbedd6240594e01de
 ARG PTOAS_BIN_VER=v0.45
 ARG VLLM_PATCH_BRANCH=csy/pypto-tail-mtp-integration
 # github 不在内网直连,需经代理; 内网 (basemind.com: 镜像/pip/gitlab) 直连不走代理。
@@ -50,27 +54,28 @@ RUN --mount=type=secret,id=gh_token \
     cd ${WS}/pypto-lib && git fetch -q "https://${GH}@github.com/csy0225/pypto-lib.git" 'stepfun/develop:refs/heads/stepfun/develop' && git checkout stepfun/develop && \
     cd ${WS}/pto-isa && git checkout ${PTO_ISA_COMMIT} && \
     cd ${WS}/PTOAS && git checkout ${PTOAS_COMMIT} && \
-    ( cd ${WS}/pypto-lib && git worktree add ${WS}/vllm-pypto stepfun/develop )
+    ln -sfn ${WS}/pypto-lib ${WS}/vllm-pypto
 
-# ---- 3) ptoas-bin v0.45 (binary release) -----------------------------------
-RUN --mount=type=secret,id=gh_token \
-    export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
-    GH="$(cat /run/secrets/gh_token)" && \
-    mkdir -p ${WS}/ptoas-bin && cd ${WS}/ptoas-bin && \
-    ( curl -fsSL -H "Authorization: token ${GH}" \
-        "https://github.com/csy0225/PTOAS/releases/download/${PTOAS_BIN_VER}/ptoas-bin-x86_64.tar.gz" \
-        -o /tmp/ptoas-bin.tgz && \
-      tar xzf /tmp/ptoas-bin.tgz -C ${WS}/ptoas-bin --strip-components=1 && rm -f /tmp/ptoas-bin.tgz ) || \
-    echo "WARN: ptoas-bin 下载失败, 请在 build 前手动放置 ${WS}/ptoas-bin (bin/ lib/ share/)"
+# ---- 3) ptoas-bin v0.45 (从 0162 验证过的二进制 bake; fork 无 release asset) ---
+#     build.sh 从 $PTOAS_BIN_SRC ($WS/ptoas-bin/{bin,lib}) 打 ptoas-bin.tgz 进 context。
+COPY ptoas-bin.tgz /tmp/ptoas-bin.tgz
+RUN mkdir -p ${WS}/ptoas-bin && \
+    tar xzf /tmp/ptoas-bin.tgz -C ${WS}/ptoas-bin && rm -f /tmp/ptoas-bin.tgz && \
+    LD_LIBRARY_PATH=${WS}/ptoas-bin/lib ${WS}/ptoas-bin/bin/ptoas --version
 
 # ---- 4) 编译 pypto + runtime (CANN beta.1 env) -----------------------------
 ENV PTO_ISA_ROOT=${WS}/pto-isa
 ENV PTOAS_ROOT=${WS}/ptoas-bin
 ENV LD_LIBRARY_PATH=${WS}/ptoas-bin/lib:${LD_LIBRARY_PATH}
 ENV PATH=${WS}/ptoas-bin/bin:${PATH}
+# pypto/runtime 用 scikit-build-core 后端; --no-build-isolation 不装后端,须先备好。
+# 限制编译并行度 (devbox dockerd 在 memcg 下, 17GB/5核; 模板重的 C++ 全并行会 OOM 打挂 dockerd)。
+ENV CMAKE_BUILD_PARALLEL_LEVEL=2
+ENV MAX_JOBS=2
 RUN source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
     export PTO_ISA_ROOT=${WS}/pto-isa && \
-    ${PIP} install --no-cache-dir "cmake==3.31.6" && \
+    ${PIP} install --no-cache-dir "cmake==3.31.6" \
+        "scikit-build-core>=0.10.0" "nanobind>=2.0.0" "ninja>=1.11.0" && \
     ${PIP} install --no-cache-dir --no-build-isolation -e ${WS}/pypto && \
     ${PIP} install --no-cache-dir --no-build-isolation -e ${WS}/pypto/runtime && \
     cd ${WS}/pypto && ${PYTHON} -m simpler_setup.build_runtimes --platforms a2a3 --clone-protocol https
