@@ -4,7 +4,26 @@
 > 每日流水在 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)；
 > 整体规划在 [`planning/roadmap.md`](planning/roadmap.md)；接力面在
 > [`planning/handoff.md`](planning/handoff.md)。
-> **最后更新：2026-07-18。**
+> **最后更新：2026-07-23。**
+
+## 两条线（项目结构）
+
+本项目现聚焦**两条清晰的线**：
+
+1. **Track A — pypto 本身开发**（kernel / 整网 / 精度）：代码在
+   `workspace/{pypto, pypto-lib, pto-isa, PTOAS, pypto/runtime(simpler)}`，均已在 git 跟踪。
+2. **Track B — vllm + pypto 接线**（集成，命名 **`vllm-pypto`**，原 `pypto-lib-live` worktree）：
+   - pypto 侧集成 Python（hidden-only 程序 / holder / sidecar / backend / monkey-patch / CI）在
+     `workspace/vllm-pypto`（pypto-lib worktree，`stepfun-develop-live`）；
+   - vLLM 侧集成在 fork `vllm/`（`PYPTO_STEP3P5_TAIL_ONLY` 主网 tail-only +
+     `PyPtoMetadataOnlyStep3p5DecoderLayer` + MTP-proposer 挂点 + MTP3 `hf_overrides` boot fix，
+     commit `1b3e538c`）+ `vllm-ascend/` fork。
+
+> **2026-07-23 集成现状快照**：主网精度已确认正常（pypto vs live vanilla 逐 token 124/128=96.9%）；
+> vanilla vLLM+MTP3 已能起（`hf_overrides` fix）、接受率可从 vLLM `/metrics` 读；
+> pypto 作为 vLLM live backend（主网 tail-only + MTP proposer）**vLLM 侧挂点已入库、端到端在线路径尚未跑通**（KV bridge + 动态 batch 映射待接）。
+> **push 状态（2026-07-23）**：github `csy0225/pypto-lib:stepfun/develop` → `4c48215b`（CI live-precision-A/B + vllm-pypto rename）✅；
+> gitlab `sys/stepcast/vllm` 分支 `csy/pypto-tail-mtp-integration` → `1b3e538c`（vLLM 侧 tail-only + MTP-proposer + MTP3 boot fix）✅。
 
 ## 阶段跟踪
 
