@@ -6,6 +6,35 @@
 
 
 
+## 2026-07-24 —— 合并 origin/main 到 stepfun/develop + IPC provenance 修复 + 交付镜像 ✅
+
+在 0162 临时工作区 `/mnt/persist/chensiyu/rebase-ws-20260723`（validated 基线
+MERGE origin/main）解掉最后一个 runtime 卡点，并交付新镜像。
+
+- **根因**：上游 main 合入的 child-provenance dispatch guard
+  （`_child_prov_check_dispatch` + `_child_alloc_prov`，`git diff 36957c6b HEAD`
+  证实全是 `+` 新增）用精确 `(worker_id, ptr)` 匹配；fork 的 `import_ipc_all`
+  把整块 W8A8 权重/KV 池零拷贝导入后，kernel arg 是 `DeviceTensor(peer_base+offset)`
+  的 interior 指针，从不等于精确 base → `submit_next_level: child_memory ... not a
+  live allocation (interior pointer)`。validated 基线无此 guard 所以放行（之前
+  "byte-identical" 判断是错的）。
+- **修复**（4 个纯 Python 文件，无需重编）：`simpler/worker.py` 加 `_child_ipc_regions`
+  表 + 区间包含 helper，`import_ipc_all` 增 `region_bytes` 登记
+  `[peer_va, peer_va+pool_bytes)`，guard 精确匹配失败时回退区间包含；
+  `distributed_runner.import_ipc_all` 透传；`pypto_weight_ipc`/`pypto_kv_ipc`
+  传各 rank `pool_bytes`。保留 guard 对 malloc/domain 的精确保护不变。
+- **设备回归**（0162 卡 8-15）：整网 8 步 decode `6127→303→1207→6127`，与 live 8000
+  vanilla oracle 逐 token 一致（`[6127,303,1207]` greedy→"北京"=6127）。harness
+  step2 FAIL 是过时常量 `19384`，非精度问题。
+- **无损推 fork stepfun/develop**（全 FF；cherry-pick `7cb2a6b3` ITL harness +
+  `merge -s ours` 保留 fork 历史）：pypto `ca21ab5f` / simpler `216e7632` /
+  pypto-lib `fd26b1be` / PTOAS `fc8c6cae` / pto-isa `ecb6c303`；ptoas-bin **v0.50**。
+- **镜像**：`hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260724`
+  （config `d778c0a7`，digest `2b0dc461`，34.6GB），devbox 构建 → hub → 0162 pull，
+  镜像内冒烟 PASS（ptoas 0.50）。build spec + README 登记表已提交 `1fcd4c7`。
+- **附带**：0162 搭好 rootless BuildKit v0.31.2（192 核，`/mnt/persist/chensiyu/buildkit/`；
+  netboot 需 `--no-pivot` runc 包装；重启后重跑 `start-buildkitd.sh`），供以后快速构建。
+
 ## 2026-07-16 —— N=1 standalone canonical stall gate 关闭 ✅
 
 gpu-a910x-0162 上固定
