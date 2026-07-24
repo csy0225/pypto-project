@@ -3,7 +3,16 @@
 > 每个子任务一张卡片：问题（file:line 实证）/ **shape（step3p5 具体输入输出）** / **如何生效（用 shape 讲清搬了多少、算了多少、省了什么）** / 参考 / 改法 / 验证 / 落地边界。
 > HLD 见 [`01-system-design.md`](01-system-design.md)，状态见 [`task-tracking.md`](task-tracking.md)。
 >
-> 路径约定：`P/` = `pypto-lib/`（`feat/whole-net-n1-fusion`）；`REF/` = `origin/main:models/deepseek/v4-flash/`（`git show REF/<f>` 读取）。
+> 路径约定：`P/` = `pypto-lib/`（**最新 `stepfun/develop @ bc5eecb1`**，fork csy0225）；`REF/` = `origin/main:models/deepseek/v4-flash/`（`git show REF/<f>` 读取）。
+>
+> **⚠ 2026-07-24 base 校正（覆盖下方所有卡片的文件引用）**：LIVE 整网 = 手写维护的
+> **`P/models/step3p5/decode_layer_single_chip_hidden.py`**（hidden-only，45× unroll `whole_chip_orch`）。
+> commit `759c23e8` 已删 `decode_layer.py`、旧 generator（`_gen_faithful_real.py`/`_gen_single_chip_real.py`）、
+> `decode_fwd/mtp/step3p5_decode`、canonical §5 round-trip。**下方卡片里出现的 `decode_layer.py` /
+> `_gen_*` / `whole_decode_holder.py:183-228` / generator / round-trip / `3af13f4f` / `feat/whole-net-n1-fusion`
+> 一律改读 `decode_layer_single_chip_hidden.py` 对应结构**（file:line 见 [`task-tracking.md`](task-tracking.md) 各行「阻塞/备注」列）：
+> C1 窗口在 `whole_chip_orch` signature 4857-4914（16 MoE stack）+ per-layer slice 5066-5081…；
+> wait 在 701/737/798/1323/2316/2385/2486。对账：**A1/C2/B1/SwiGLU-per-layer 已交付**，B/C 剩 **C1 + B2**。
 
 ---
 

@@ -10,6 +10,15 @@
 > 本文定义测试准出标准；stable 文档冻结完整三仓、runtime binary、工具链、
 > checkpoint、设备和环境变量。
 
+> **⚠ 2026-07-24 base 校正（读本文前先看）**：go-forward base 已前进到最新
+> **`stepfun/develop @ bc5eecb1`**（fork csy0225；origin 无此分支）。下面 §1/§4/§5 记录的
+> `release commit = 3af13f4f`、`branch = feat/whole-net-n1-fusion`、`layer module = decode_layer_single_chip`、
+> generator `_gen_*` + §5 round-trip 均为**历史快照**：commit `759c23e8 "prune to single-chip vllm integration"`
+> 已删 `decode_layer.py` + 全部 generator + §5 round-trip 工作流。**当前 LIVE 被测对象 =
+> `models/step3p5/decode_layer_single_chip_hidden.py`（手写维护，无 generator）**，program 名沿用
+> `whole_decode_faithful_real_single_chip` 语义（hidden-only）。§2 多步 decode 精度准出标准与 §3 命令骨架
+> 仍有效（layer-module 换 `decode_layer_single_chip_hidden`）。§5 generator round-trip gate **已废除**（无 generator）。
+
 ## 1. 被测对象与固定组合
 
 ```text
