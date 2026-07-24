@@ -12,7 +12,7 @@
 ### Track A — 可观测性
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| A1 | whole-net baseline + DFX 采集 | P0 | ⬜ | — | — | — | 2026-07-24 |
+| A1 | whole-net baseline + DFX 采集 | P0 | ✅ | claude | — | 逐层 DFX 拿到：routed-expert 占 90.7%（PMU cube_int8 88.6%）；见 benchmark/2026-07-24 | 2026-07-24 |
 
 ### Track B — Mega-kernel 结构
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
@@ -57,9 +57,9 @@
 
 | 状态 | 数量 |
 |------|------|
-| ⬜ TODO | 13 |
+| ⬜ TODO | 12 |
 | 🟦 IN PROGRESS | 0 |
-| ✅ DONE | 0 |
+| ✅ DONE | 1 |
 | ⛔ BLOCKED | 0 |
 | **合计** | **13** |
 
@@ -85,3 +85,5 @@
 | 2026-07-24 | — | 专项建档，12 个子任务初始化为 TODO | 对照 v4-flash `decode_fwd.py` 拆分；HLD/LLD 见同目录 |
 | 2026-07-24 | — | 验证标准改为**单一多步 decode**（N=128 ≥95% vs vanilla）；删除单步/单 token 单列（多步已含首 token） | 采纳用户口径；stall 用探针独立判定 |
 | 2026-07-24 | G1 | 新增：调度轴 batch→experts/feature + dynamic active-token（对齐 DeepSeek） | 源自 batch/SPMD 分歧调研 |
+| 2026-07-24 | A1 | 🟦 代码接线：holder.run() 的 N1_DFX 扩到 swim/l2/pmu（+N1_PMU）+ perf-baseline.md 骨架 | b-csy-develop 无 NPU；device 采集待 0162/镜像 |
+| 2026-07-24 | A1 | ✅ 完成：镜像(stepfun-develop-20260724, cards 8-15)跑 DFX，逐层拆解 = routed-expert 90.7% / PMU cube_int8 88.6%；结果并进 benchmark/2026-07-24-step3p5-decode-perlayer-dfx.md；DFX 接线进 stepfun/develop | 基底改为镜像(feat 分支已废)；total-step 基线复用 benchmark 590ms |
