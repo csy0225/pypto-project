@@ -13,11 +13,36 @@ TP=8、W8A8、active batch=1、`--num-blocks 512`、`--steps 1`。
 
 ---
 
-## 1. 结论（一句话）
+## 1. 结论（两个都对、但答的是不同问题）
 
-**decode 时间几乎全在 routed-expert 的 INT8 矩阵乘上（swimlane busy 占比 90.7%，PMU `cube_int8_exec` 占 exec 单元 88.6%）；attention / KV / tp_all_reduce / dispatch / combine / shared / dense 合计 <10%。** 优化 ROI 全在 MoE routed expert，attention/通信在 N=1 是次要项。
+**必须区分"算力花在哪"和"墙上时间花在哪"——本次数据两者结论相反：**
 
-## 2. Swimlane 家族占比（rank0，busy-µs 按核求和）
+| 口径 | 谁占大头 | 含义 |
+|------|---------|------|
+| **算力 / FLOPs**（busy-µs 按核求和；PMU exec） | **routed-expert 90.8%**（`cube_int8_exec` 88.6%） | 计算量几乎全在 MoE routed expert 的 INT8 矩阵乘 |
+| **墙上时间 / 延迟**（union-of-intervals，时间轴占用） | **`tp_all_reduce` 74.1%**（expert 仅 14.8%，dispatch 13.6%） | 一个 decode step 的**耗时**主要花在 TP all-reduce 通信上 |
+
+**为什么相反**：expert 矩阵乘是**计算密集**（~25 核并行、墙上时间短，busy/wall 并行度=24.7）；`tp_all_reduce` 是**少核、长时延**（178 次调用、每次 ~9ms 级、在时间轴上跨 74%）= **通信/延迟-bound**。→ **对"降 decode 延迟"而言，通信（tp_all_reduce + dispatch）才是主瓶颈，不是 expert 算力。** 我第一版只报了通信的 busy 份额（6%），**低估了它的 wall 份额（74%）——已更正。**
+
+> ⚠⚠ **强 caveat（未定论，需 clean-run 确认）**：本数据来自 **DFX 插桩的 swim run**，makespan≈1120ms ≫ clean 590ms（benchmark 2026-07-23）。绝对 ms 不可信；**份额**是信号，但通信/等待类算子恰是插桩最易放大的。union-of-intervals 家族份额相加 >100%（家族间时间轴重叠）。**下结论/动手前必须用未插桩的 clean run 复核通信 wall 份额**（falsify-before-assert）。
+
+## 1b. 墙上时间 vs 算力（rank0，数据见 [`data/2026-07-24_step3p5_perlayer_dfx/wall_vs_busy_rank0.csv`](data/2026-07-24_step3p5_perlayer_dfx/wall_vs_busy_rank0.csv)）
+
+| 家族 | wall 份额 | ~ms of 590ms* | busy 份额 |
+|------|----------|---------------|-----------|
+| comm.tp_all_reduce | **74.1%** | ~437 | 6.0% |
+| moe.expert_routed | 14.8% | ~87 | **90.8%** |
+| moe.dispatch | 13.6% | ~80 | 1.0% |
+| (other/orch) | 7.6% | ~45 | 0.6% |
+| moe.gate/topk | 0.8% | ~5 | 0.2% |
+| attn.o_proj/head_gate | 0.6% | ~3 | 1.1% |
+| 其余（shared/rope/qkv/rmsnorm/flash/combine/dense） | 各 <0.6% | 各 <4 | 各 <0.2% |
+
+\* ms 列 = wall 份额 × 590ms，仅**量级示意**（份额来自插桩 run，且份额相加>100%）。真实 ms 待 clean-run 复核。
+
+## 2. Swimlane 家族占比 —— 算力/FLOPs 视角（rank0，busy-µs 按核求和）
+
+> 这是"算力花在哪"（≠ 墙上时间；wall 视角见 §1b）。全表 CSV：[`data/2026-07-24_step3p5_perlayer_dfx/family_rollup_rank0.csv`](data/2026-07-24_step3p5_perlayer_dfx/family_rollup_rank0.csv)。
 
 | 家族 | busy 占比 |
 |------|----------|
@@ -64,14 +89,18 @@ total_cycles 按 core_type：cube 核 67.4% / 向量核 32.6%。
 
 ## 6. 对优化专项的指向（ties to design/performance）
 
-| 观察 | 指向的优化项 | 预期 |
-|------|-------------|------|
-| routed-expert 占 ~90% | **PERF-D2**（INT8-native expert，已是 INT8 → 重点在 dequant/requant 链效率）+ **F 系**（融合 expert 的向量 dequant/SwiGLU，削 stall-bound 的 aiv 半） | 直接砍最大头 |
-| expert 向量半 stall-bound（busy 高、exec 低） | **F2**（pipeline stage / MTE 512B）+ 融合 dequant 到 matmul 出口 | 提 aiv 利用率 |
-| active batch=1 但 expert 在跑 padded 容量（**待证伪确认**：single_chip expert 是否按 padded `RECV_MAX` 迭代而非动态 nt） | **PERF-G1**（dynamic active-token）——若确为 padded，砍到真实路由数收益可能最大 | 需先在 IR 里确认 expert token 循环边界 |
-| attention/KV/comm/dispatch/combine 各 <7% | 这些项在 N=1 decode 是**低 ROI**；attention 微调（F1）先不做 | 别过早优化 |
+> 按 **wall（延迟）** 优先，不是 busy。前提：先用 clean run 复核 §1 caveat 里的通信 wall 份额。
 
-> ⚠ G1 那条是**假设**，动手前要在 `expert_routed` / `moe` 的 IR 里确认 expert 的 token 循环是 padded 容量还是动态 nt（falsify-before-assert）。
+| 观察（wall 视角） | 指向的优化项 | 预期 |
+|------|-------------|------|
+| **`tp_all_reduce` 占 wall 74%** — 少核长时延，通信-bound | **C 系最高优先**：**C1**（单 window set + epoch，减同步/等待）、**C3**（peer loop→spmd 并发）、**C2**（push→pull 减跨 die 写等待） | 直接砍 decode 延迟主项 |
+| **dispatch 占 wall 13.6%** | **C2/C3**（dispatch 通信并发化 / pull） | 次大延迟项 |
+| routed-expert 占 **busy 90.8%** 但 wall 仅 15% | **D2/F 系**（INT8 expert dequant/SwiGLU 融合）——影响**吞吐/算力**、对单 token **延迟**收益有限 | 提吞吐，非降延迟首选 |
+| expert 向量半 stall-bound（busy 高 exec 低） | F2（pipeline stage / MTE 512B）、融合 dequant | 提 aiv 利用率（吞吐） |
+| active batch=1 但 expert 跑 padded 容量（**待证伪**） | PERF-G1（dynamic active-token） | 主要利好吞吐；wall 上 expert 本就只 15% |
+| attention（qkv/flash/rope/rmsnorm）wall+busy 均 <1% | N=1 低 ROI，暂不动（F1 缓做） | — |
+
+**一句话修正**：之前"优化 ROI 全在 expert"是**算力视角**；就**单 token decode 延迟**而言，**通信（C 系）才是首要**，expert 优化（D/F）主要提吞吐。两者都要做，但降延迟先攻 C。
 
 ## 7. 复现
 
@@ -88,4 +117,15 @@ python -m tests.step3p5.harnesses._stage_main_hidden_only \
 - `tools/step3p5/whole_decode_holder.py::run()`：`N1_DFX` 扩到 `swim`/`l2`（`enable_l2_swimlane`）+ `pmu`（`enable_pmu=int(N1_PMU)`）。
 - `tests/step3p5/harnesses/_stage_main_hidden_only.py`：新增 `--dfx` / `--pmu`，设 `N1_DFX`/`N1_PMU` 环境变量。
 
-本次 artifact 留存：`gpu-a910x-0162:/data/chensiyu/perf_a1/build_output/`。
+## 8. 原始数据 / artifacts
+
+- **committed 派生数据**（本仓，机器可读，backing 上面表格）：[`data/2026-07-24_step3p5_perlayer_dfx/`](data/2026-07-24_step3p5_perlayer_dfx/)
+  - `kernel_busy_us_rank0.csv`（190 个 kernel 全量 busy-µs）
+  - `family_rollup_rank0.csv`（家族 busy 份额）
+  - `wall_vs_busy_rank0.csv`（**wall vs busy 对照**，§1b/§6 依据）
+  - `pmu_rollup_rank0.txt`（cube/vec exec + core_type cycles）
+- **原始 trace（未入仓，太大）**：rank0 `merged_swimlane` 366MB / 全 8 rank 1.3GB。
+  归档：`gpu-a910x-0162:/data/chensiyu/perf_a1/raw_dfx_traces_20260724.tar.gz`（68MB gz）；
+  在线目录 `gpu-a910x-0162:/data/chensiyu/perf_a1/build_output/`。
+  可视化：把 `merged_swimlane_*.json` 拖进 https://ui.perfetto.dev/ 。
+  > 未入 git：单文件 366MB 会撑爆仓库（本 `benchmark/data/` 约定是 KB 级摘要）。需要原始 JSON 时从 0162 归档取。

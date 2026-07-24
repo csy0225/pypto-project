@@ -1,0 +1,12 @@
+# pmu rollup rank0 (rows=147351)
+[total_cycles by core_type]
+     10518285992  67.4%  aic_cube
+      5087377277  32.6%  aiv_vec
+[exec-unit busy]
+       314793600  88.6%  cube_int8_exec
+        27252021   7.7%  vec_fp32_exec
+         7503818   2.1%  cube_fp16_exec
+         4518024   1.3%  vec_misc_exec
+          564000   0.2%  vec_int32_exec
+          563328   0.2%  vec_fp16_128lane_exec
+               0   0.0%  vec_fp16_64lane_exec

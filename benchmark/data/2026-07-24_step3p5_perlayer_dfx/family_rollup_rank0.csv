@@ -1,0 +1,14 @@
+family,busy_us,pct
+moe.expert_routed,25125470.1,90.816
+comm.tp_ar,1660388.4,6.001
+attn.o_proj/head_gate,294993.1,1.066
+moe.dispatch,269956.1,0.976
+moe.gate/topk,47956.7,0.173
+moe.shared,41496.3,0.15
+attn.qkv_proj,22788.7,0.082
+attn.flash,19676.7,0.071
+attn.rope,11630.6,0.042
+dense_mlp,5203.0,0.019
+attn.rmsnorm,3395.2,0.012
+moe.combine,2727.3,0.01
+(unclassified),160796.1,0.581
