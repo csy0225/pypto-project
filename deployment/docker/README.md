@@ -277,6 +277,7 @@ deployment/docker/
 | IMAGE_TAG | 日期 | pypto / pypto-lib / pto-isa / PTOAS / simpler / ptoas-bin | 验证(0162) |
 |-----------|------|----------------------------------------------------------|-------------|
 | `stepfun-develop-20260723` | 2026-07-23 | `8af501fc` / `4c48215b` / `ecb6c303` / `72ada0a1` / `36957c6b` / `v0.45` | 冒烟 PASS + 整网 decode `6127→303` / step2→`6127`(与 vanilla 逐 token 一致)✅ |
+| `stepfun-develop-20260724` | 2026-07-24 | `ca21ab5f` / `fd26b1be` / `ecb6c303` / `fc8c6cae` / `216e7632` / `v0.50` | 合并 origin/main + IPC 权重 interior 指针 provenance 修复（解 `submit_next_level child_memory` 卡点）。冒烟 PASS(ptoas 0.50) + 整网 8 步 decode `6127→303→1207→6127`(与 live vanilla 逐 token 一致)✅ |
 
 ## Pin 依据
 
