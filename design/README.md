@@ -11,6 +11,7 @@
 | [`step3p5-model-architecture.md`](step3p5-model-architecture.md) | — | **step3p5 模型本身**：config 参数 + 完整 48 层流程图（模型视角，与实现解耦）。 |
 | [`whole-net/`](whole-net/README.md) | HLD+LLD | 整网集成：单 `@pl.program` 全 45 层、per-layer/block/整网三轴、N≥6 墙、DeepSeek 对照。 |
 | [`vllm-pypto/`](vllm-pypto/README.md) | HLD+LLD | vLLM 与 pypto 同卡共驻：monkey-patch / sidecar / KV·weight IPC / co-tenancy。 |
+| [`performance/`](performance/README.md) | HLD+LLD+跟踪 | step3p5 decode 性能优化专项：对照 v4-flash mega-kernel，12 个独立可并行子任务 + 跟踪表。 |
 
 ## HLD vs LLD 约定
 

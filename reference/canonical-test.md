@@ -1,8 +1,9 @@
 # N=1 Whole-Net Canonical Test（唯一准出标准）
 
-> **HARD RULE**：N=1 step3p5 whole-net 的“精度正确 / 无 stall / 可发布”结论，
-> 只能由本文定义的真实权重、真实 token、完整 P42 测试给出。禁止用随机输入、
-> `RUN_CLEAN`、P1/P20、中间态、compile-only 或自造 harness 替代。
+> **HARD RULE**：N=1 step3p5 whole-net 的"精度正确 / 无 stall / 可发布"结论，
+> 只能由本文定义的真实权重、真实 token 测试给出。**精度准出 = 多步 decode 逐 token
+> 对比 vanilla（§2，≥95%）**；单 token `argmax==303` 仅为首 token 冒烟/liveness。
+> 禁止用随机输入、`RUN_CLEAN`、P1/P20、中间态、compile-only、只验第一个 token 或自造 harness 替代。
 
 > **Stable environment SSOT（0162）**：
 > [`develop/N1/N1-STABLE-ENV-0162-20260717.md`](../develop/N1/N1-STABLE-ENV-0162-20260717.md)。
@@ -35,26 +36,27 @@ submission；这不是 8 卡全局只提交一次，也不是合并 CHIP 内部 
 kernel。PUSH 探针、历史 push 版本、以及旧 46 layer-level submission 版本都不是
 当前准出对象。
 
-## 2. 输入、batch 与精度标准
+## 2. 精度标准（2026-07-24 更新为多步 decode）
 
-- `--hidden-token 6127`：读取真实 `embed_tokens.weight[6127]`。
-- `ctx=1`、rope position-0 identity。
-- `BATCH=16`，但只有 row0 是有效 token；row1..15 是 padding。
-- 只拼接并检查 `logits_shard_out[r, 0]`。
-- 唯一精度 PASS：
+> **标准更新**：精度准出从"单 token `argmax==303`"升级为**多步 decode 逐 token**对比 vanilla
+> vLLM。多步已覆盖第一个 token，**单步/单 token 测试不再单列**；单 token `argmax==303` 降级为
+> **首 token 快速冒烟 / liveness** 指标，不再是唯一精度 PASS。
 
-```text
-argmax(full_logits) == 303
-```
-
-以下均不构成 PASS：
-
-- 只有 `RESULT=REAL_WEIGHT_IPC_RUN_CLEAN`；
-- P1/P20 或 `P_FAITHFUL_MOE_LAYERS=0`；
-- 随机 hidden；
-- BF16 dequant 权重回退；
-- 只编译、不执行；
-- 非 303 的任意 argmax。
+- **精度准出（唯一）**：**多步 decode 逐 token** teacher-forced 对比 live vanilla vLLM W8A8
+  oracle，seed=6127 / N=128 → **ALIGNED ≥ 95%**（当前 baseline 124/128=96.9%，miss 均为
+  vanilla 自身 near-tie）。驱动：`pypto-lib/tests/step3p5/ci/{LIVE_PRECISION_AB.md,
+  run_live_precision_ab.sh}`（`stepfun/develop`）。
+- **首 token 冒烟 / liveness（快速回归，非精度准出）**：`--hidden-token 6127`、`ctx=1`、
+  rope position-0 identity、`BATCH=16`（仅 row0 有效，row1..15 padding）、检查
+  `logits_shard_out[r, 0]` 的 `argmax == 303`。用于快速确认 whole-net 能跑通 + 首 token 对；
+  配 `RUN_CLEAN` + 隔离探针 `_probe_barrier_scale.py` 判 stall。
+- 以下均不构成精度 PASS：
+  - 只有 `RESULT=REAL_WEIGHT_IPC_RUN_CLEAN`；
+  - P1/P20 或 `P_FAITHFUL_MOE_LAYERS=0`；
+  - 随机 hidden；
+  - BF16 dequant 权重回退；
+  - 只编译、不执行；
+  - 多步 ALIGNED < 95%（或只验第一个 token 就下"精度对"结论）。
 
 ## 3. 0162 标准命令
 

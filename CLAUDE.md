@@ -75,5 +75,5 @@ unset PAT
 4. **三件套激活**：每个新 shell `source CANN/set_env.sh` + `source activate.sh` + `export PTO_ISA_ROOT=...`。
 5. **git push 用 HTTP/1.1**（默认 HTTP/2 在 130s 静默超时）。
 6. **生产整网只允许单个 `@pl.program`**（多 program 有 co-prepare 死锁墙，见 [`postmortems/08-multiprogram-coprepare-deadlock.md`](postmortems/08-multiprogram-coprepare-deadlock.md)）；**native W8A8 不回退 BF16-dequant**。
-7. **验收以 canonical 为准**：[`reference/canonical-test.md`](reference/canonical-test.md)（P42 → token 6127 → argmax 303）。
+7. **验收以 canonical 为准**：[`reference/canonical-test.md`](reference/canonical-test.md)。**精度准出 = 多步 decode 逐 token vs vanilla（N=128 ≥95%）**；单 token `argmax==303` 仅为首 token 冒烟/liveness。性能优化回归走 `.claude/skills/pypto-perf-regression/`。
 8. **强开发约束先读 skill**：`.claude/skills/pypto-dev-constraints/`；整网 hang 排查：`.claude/skills/pypto-whole-net-hang-debug/`。
