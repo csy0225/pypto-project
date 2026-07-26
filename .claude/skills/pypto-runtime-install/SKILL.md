@@ -133,7 +133,7 @@ git -C pypto submodule update --init runtime
 git -C pypto/runtime checkout 216e7632267ae815c484cdeba7991c87fabf3086
 
 git clone https://github.com/csy0225/pypto-lib.git
-git -C pypto-lib checkout 29547af6c3c5b7db2a75c1fd5e0110959d2a7624
+git -C pypto-lib checkout 53eb7212c29c9bd015ee060cd9924a13ea781ae0
 
 git clone https://github.com/csy0225/pto-isa.git
 git -C pto-isa checkout ecb6c303f797749f811a494742c3c08156aacabb
@@ -148,7 +148,7 @@ B2 release）：
 | 仓库 | 参考 commit |
 |------|-------------|
 | pypto | `ca21ab5f` |
-| pypto-lib | `29547af6`（`stepfun/develop`；canonical Main=`models.step3p5.decode_fwd:whole_decode_step3p5`） |
+| pypto-lib | `53eb7212`（`stepfun/develop`；唯一 Main=`models.step3p5.decode_fwd:whole_decode_step3p5`） |
 | simpler (pypto/runtime submodule) | `216e7632` |
 | pto-isa | `ecb6c303` |
 | PTOAS (src) | `fc8c6cae` |
@@ -269,11 +269,11 @@ python examples/workers/l3/allreduce_distributed/main.py -p a2a3 -d 0-1
 
 **② 权威 CI smoke（需 checkpoint + cards 8–15）—— 通过即"环境可用"**
 
-在 **pinned pypto-lib `29547af6`** 上跑权威 CI runner（preflight ckpt/PTO-ISA/cards →
+在 **pinned pypto-lib `53eb7212`** 上跑 CI runner（preflight ckpt/PTO-ISA/cards →
 whole-net 8-step → MTP → 清理 exporter；详见 `pypto-lib/tests/step3p5/ci/WHOLE_NETWORK_CI.md`）：
 
 ```bash
-cd "$WS/pypto-lib"          # 确认 HEAD=29547af6
+cd "$WS/pypto-lib"          # 确认 HEAD=53eb7212
 python -m tests.step3p5.ci.run_whole_network_ci \
   --ckpt /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp \
   --devices 8,9,10,11,12,13,14,15 \
@@ -285,9 +285,15 @@ python -m tests.step3p5.ci.run_whole_network_ci \
 - canonical 金标准：`argmax=303` / token `6127`（见 [`reference/canonical-test.md`](../../reference/canonical-test.md)）。
 - 默认 Main 应为 `models.step3p5.decode_fwd:whole_decode_step3p5`；只有显式
   `--baseline-main` 才回退到 0724 baseline。
+- `models/step3p5_opt`、`whole_decode_opt`、`WholeDecodeOpt` 必须不存在。
 - raw vanilla gate 与 replacement gate 分开：当前 N=256 raw `240/256=93.75%`
-  未达到历史 95%；opt↔baseline token/hidden `256/256` exact，replacement PASS。
+  未达到历史 95%；canonical-only 清理前后 token/hidden `256/256` exact，
+  compatibility removal regression PASS。
 - **无 stall / 无残余 exporter PID**。
+
+> 这条 skill 是裸机安装/开发环境验证；正式镜像发布结论必须另按
+> `pypto-image-verify` 在 0162 的目标镜像内复验，不能把本节裸机结果直接
+> 当作镜像 PASS。
 
 > 数值正确与无 stall 是两个独立 gate。step1 对、step2 错 → 先查 token/embedding、
 > metadata、KV 地址、repeated-run state，再查 weights/算子。

@@ -4,10 +4,10 @@
 > HLD 见 [`01-system-design.md`](01-system-design.md)，状态见 [`task-tracking.md`](task-tracking.md)。
 >
 > **2026-07-26 active release override**：`P/` 当前必须读
-> `pypto-lib stepfun/develop@29547af6`。默认 Main 是
+> `pypto-lib stepfun/develop@53eb7212`。唯一 Main 是
 > `P/models/step3p5/decode_fwd.py:whole_decode_step3p5`，0724 unroll
 > baseline 只通过 `--baseline-main` 显式回退。B2 已完成 N=256
-> canonical↔baseline token/hidden `256/256` exact；下方基于 `bc5eecb1`、
+> canonical-only 清理前后 token/hidden `256/256` exact；下方基于 `bc5eecb1`、
 > unroll/generator 的内容是设计起点和历史卡片，不是当前 base。
 >
 > 路径约定：`P/` = active `pypto-lib/`；`REF/` =
@@ -102,20 +102,20 @@
 - **改造前 → 当前实现**：
   - 前：历史 `3af13f4f` faithful whole-net `models/step3p5/decode_layer.py`
     为 `31,686` 行，45 层结构按 layer site 展开，MoE 主体重复 40 份。
-  - 后：canonical `models/step3p5/decode_fwd.py` 为 `4,775` 行；L0 显式，L1/L2
+  - 后：canonical `models/step3p5/decode_fwd.py` 为 `4,772` 行；L0 显式，L1/L2
     进入 `pl.range(2)`，L3-L42 进入 `pl.range(40)`，L43/L44 保留为必要的
     activation specialization；动态 scalar 通过 `pl.slice` 选择当前层权重。
-- **收益**：主体源码体量约 **84.97% 减少**（`31,686→4,775`）；
+- **收益**：主体源码体量约 **84.94% 减少**（`31,686→4,772`）；
   MoE 主体 specialization 从 `40→1` 个 runtime loop body，减少重复 IR/
   调度描述，并让编译器跨层复用 loop body。当前没有旧 31k implementation
-  与 opt 在同一环境重新编译的 wall-clock 对比，不能写成“编译耗时下降 X%”。
-- **精度/稳定性验证**：固定 0724 环境 N=256，canonical↔baseline
-  token/hidden `256/256` exact，rename 前后也为 `256/256` bit-exact，
+  与 loop-form implementation 在同一环境重新编译的 wall-clock 对比，不能写成“编译耗时下降 X%”。
+- **精度/稳定性验证**：0162 发布镜像内 N=256，canonical-only 清理前后
+  token/hidden `256/256` exact，删除 package/alias 前后也为 `256/256` bit-exact，
   `max_abs_diff=0`，TP spread `0.0`；canonical
   step127/128/255 通过，0162 无 8-15 device residual process。
-- **raw 边界**：opt 和 baseline 对同一 vanilla oracle 都是
-  `240/256=93.75%`，低于历史 raw `>=95%` gate；baseline 完全复现，
-  所以 raw 差异不是 B2 引入，但不能写成 vanilla raw PASS。
+- **raw 边界**：canonical-only 发布镜像对同一 vanilla oracle 为
+  `240/256=93.75%`，低于历史 raw `>=95%` gate；清理前 canonical 镜像完全复现，
+  所以 raw 差异不是 B2 或兼容入口清理引入，但不能写成 vanilla raw PASS。
 - **边界**：当前 B2 采用 per-layer window stack，**不包含 C1 单 window/
   `moe_epoch`**；C1 仍是独立后续优化。
 
@@ -144,7 +144,7 @@
   优化，不能因其未完成而回退 B2 的完成状态。
 
 > **当前状态澄清**：上述 `766MB→十几 MB` 是 C1 设计目标，不是当前
-> `29547af6` release 的收益。当前 B2 仍使用 `NUM_MOE_LAYERS_TOTAL` leading
+> `53eb7212` release 的收益。当前 B2 仍使用 `NUM_MOE_LAYERS_TOTAL` leading
 > offset 的 per-layer communication stacks。
 
 ### PERF-C2 · dispatch push → pull（fixed-slot）✅ 已交付

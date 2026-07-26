@@ -8,9 +8,9 @@
 ---
 
 > **⚠ 2026-07-26 release override**：active base =
-> **`stepfun/develop @ 29547af6`**。默认 release Main 为
-> `models.step3p5.decode_fwd:whole_decode_step3p5`；`step3p5_opt`
-> 仅为 compatibility shim；0724
+> **`stepfun/develop @ 53eb7212`**。唯一 release Main 为
+> `models.step3p5.decode_fwd:whole_decode_step3p5`；`step3p5_opt` package/aliases
+> 已删除；0724
 > `stepfun/develop @ bc5eecb1` 仅是历史设计/对照 base。
 >
 > **2026-07-24 历史 base 校正**：当时的正确 base 是 `bc5eecb1`（fork csy0225；origin 无此分支）。
@@ -31,13 +31,13 @@
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
 | B1 | resident 权重池 + loop-form zero-copy view ABI | P0 | ✅ | — | — | 前：0724 已一次 IPC import/resident，但 loop-form Main 无 10 FULL + 30 SWA 连续 bucket ABI；后：`Wsub()` 从 baseline pool 取 FULL `1:11` / SWA `2:32` zero-copy view，再跨 rank stacking。相对复制专用 bucket，按 shape 避免约 `0.94 GiB/rank` 额外设备副本；不再误写成 24 GiB/rank/step H2D。dynamic-offset probe PASS，N=256 replacement exact | 2026-07-26 |
-| B2 | 45 层 unroll → `pl.range` 循环 | P1 | ✅ | b1-weights | — | 前：historical `decode_layer.py` 31,686 lines / 40 MoE layer sites；后：canonical `decode_fwd.py` 4,775 lines、MoE `pl.range(40)` 单 loop body + L43/L44 specialization，源码约 -84.97%。N=256 canonical↔baseline、rename 前后 token/hidden 均 256/256 exact；raw 同为 240/256，低于历史 raw gate | 2026-07-26 |
+| B2 | 45 层 unroll → `pl.range` 循环 | P1 | ✅ | b1-weights | — | 前：historical `decode_layer.py` 31,686 lines / 40 MoE layer sites；后：canonical `decode_fwd.py` 4,772 lines、MoE `pl.range(40)` 单 loop body + L43/L44 specialization，源码约 -84.94%。N=256 canonical-only 清理前后 token/hidden 均 256/256 exact；raw 同为 240/256，低于历史 raw gate | 2026-07-26 |
 | B3 | KV pool `resident` + in-place | P2 | ⬜ | — | B1 | 旁证已大部分交付（KV IPC resident + `add_inout`，whole_decode_holder.py `build_stacked_kv_pool`）。待核验每 step 只写 1 行。C1/B2 后核验 | 2026-07-24 |
 
 ### Track C — MoE 通信协议
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| C1 | 单 window set + `moe_epoch` + `WaitCmp.Ge` | P0 | ⬜ | — | — | 当前 release 未交付；`29547af6` 仍使用 per-layer communication stack。`~766MB→十几MB` 仅为 C1 设计目标，不能计入当前收益 | 2026-07-26 |
+| C1 | 单 window set + `moe_epoch` + `WaitCmp.Ge` | P0 | ⬜ | — | — | 当前 release 未交付；`53eb7212` 仍使用 per-layer communication stack。`~766MB→十几MB` 仅为 C1 设计目标，不能计入当前收益 | 2026-07-26 |
 | C2 | dispatch push → pull（fixed-slot） | P1 | ✅ | — | — | 前：source push/remote-store，跨 die completion 竞争；后：fixed-slot peer-major `remote_load` pull + combine pull-back。收益是消除随机 stall 路径、提高 liveness 可重复性；数据量不变。commit `42ac1ffd`，N=256 无 stall | 2026-07-26 |
 | C3 | peer loop → `pl.spmd`/`pl.parallel` | P2 | ⬜ | — | C1 | 等 C1。dispatch/combine peer 循环 fan-out | 2026-07-24 |
 
@@ -106,6 +106,6 @@
 | 2026-07-24 | B1 | ✅ 对账确认：StackedDeviceTensor+IPC+child_memory+dynamic-offset slice(8b4bf3fa) 已交付；resident= IR 属性纯文档不加 | 剩 dynamic-offset 归 B2 |
 | 2026-07-24 | C1 | ⬜ 设计/实验记录保留，但未进入 current release；单 window/epoch 仍待独立设备回归 | 不能把 730MB→~17MB 写成当前收益 |
 | 2026-07-24 | B2 | 🟦 用户批准。现状 45× unroll，body 已参数化；真难点=6 个 *_chip_orch enum 统一。C1 后折循环 | 收益=编译期 IR/调度边（间接） |
-| 2026-07-26 | B2 | ✅ current loop-form Main replacement 发布收口：opt↔baseline 256-step token/hidden `256/256` exact，max hidden diff `0.0`，TP spread `0.0` | vanilla raw `240/256=93.75%` 由 baseline 完全复现；raw 95% gate 与 replacement gate 分开记录 |
-| 2026-07-26 | — | active release base 前进到 `stepfun/develop@29547af6`；loop-form Main 正式迁入 `models/step3p5/decode_fwd.py`；`bc5eecb1` 降为历史设计 base | 默认 `whole_decode_step3p5`，`step3p5_opt` 仅兼容 shim，显式 `--baseline-main` rollback |
-| 2026-07-26 | — | 补充优化收益前后对比并校正 B1 口径 | B1：zero-copy opt bucket view，避免约 0.94 GiB/rank 额外副本（0724 已 resident，不虚报 per-step H2D）；B2：源码 31,686→4,775、MoE body 40→1；C2：push→pull 消除随机 stall 路径；未测 latency 不写成加速 |
+| 2026-07-26 | B2 | ✅ current loop-form Main replacement 发布收口：canonical-only 清理前后 256-step token/hidden `256/256` exact，max hidden diff `0.0`，TP spread `0.0` | vanilla raw `240/256=93.75%` 由清理前 canonical 完全复现；raw 95% gate 与 replacement gate 分开记录 |
+| 2026-07-26 | — | active release base 前进到 `stepfun/develop@53eb7212`；loop-form Main 正式迁入 `models/step3p5/decode_fwd.py`；`bc5eecb1` 降为历史设计 base | 默认 `whole_decode_step3p5`，`step3p5_opt` package/aliases 已删除，显式 `--baseline-main` rollback |
+| 2026-07-26 | — | 补充优化收益前后对比并校正 B1 口径 | B1：zero-copy opt bucket view，避免约 0.94 GiB/rank 额外副本（0724 已 resident，不虚报 per-step H2D）；B2：源码 31,686→4,772、MoE body 40→1；C2：push→pull 消除随机 stall 路径；未测 latency 不写成加速 |

@@ -62,9 +62,9 @@ ls -d /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp  # W8A8 ck
 ## Step 1 · 拉镜像
 
 ```bash
-IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5
+IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5-only
 # 发布 manifest digest:
-# sha256:f58708d2c6cc60474fa98da38aef23a128b850173e4bf5ab6336590b83e2afbc
+# sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81
 sudo $NC pull "$IMG"        # base blob 已在 content store, 只下增量
 sudo $NC images | grep vllm-pypto
 ```
@@ -116,16 +116,17 @@ sudo $NC run --rm --net host --ipc host --privileged --security-opt apparmor=unc
       --ckpt $CKPT --devices 8,9,10,11,12,13,14,15 --out /tmp/n1_ci"
 ```
 
-当前 release（`pypto-lib stepfun/develop@29547af6`）不传 Main 选择参数时默认使用：
+当前 release（`pypto-lib stepfun/develop@53eb7212`）只保留一个 Main：
 
 ```text
 models.step3p5.decode_fwd:whole_decode_step3p5
 ```
 
-只有显式给 hidden-only harness / sidecar 传 `--baseline-main` 时才回退到
-0724 unroll baseline。`models.step3p5_opt.decode_fwd:whole_decode_opt`
-仅为兼容 shim。`--layer-module` 和 `--layer-name` 只用于成对选择
-其他自定义 Main，不能与 `--baseline-main` 同时使用。
+`models/step3p5_opt` package、`whole_decode_opt` 和 `WholeDecodeOpt` 已删除；
+旧调用方必须 fail-fast，禁止重新引入兼容 alias。只有显式给 hidden-only
+harness / sidecar 传 `--baseline-main` 时才回退到 0724 unroll baseline。
+`--layer-module` 和 `--layer-name` 只用于成对选择其他自定义 Main，不能与
+`--baseline-main` 同时使用。
 
 **判读(关键)**——canonical 金标准 = token `6127` → argmax `303`:
 
@@ -135,17 +136,50 @@ models.step3p5.decode_fwd:whole_decode_step3p5
   独立确认:查在跑的 8000 vanilla oracle
   `curl -s http://127.0.0.1:8000/v1/completions -H 'Content-Type: application/json' -d '{"model":"step3.5-flash","prompt":[6127,303,1207],"max_tokens":1,"temperature":0}'`
   → 返回 **"北京"(token 6127)**,与 pypto 一致 → 判"可用"。
-- 权威 gate 走 live A/B:`tests/step3p5/ci/run_live_precision_ab.sh`（见
+- 权威 gate 走 `tests/step3p5/ci/run_live_precision_ab.sh`（见
   `LIVE_PRECISION_AB.md`），并且必须分开报告：
   1. **vanilla raw alignment**：历史门槛 `>=95%`；
-  2. **replacement equivalence**：current opt 与 current baseline 的 token/hidden
-     是否 exact。
+  2. **replacement equivalence**：若有显式 0724 baseline，报告 current
+     Main 与 baseline 的 token/hidden；canonical-only release 还必须报告
+     清理前 canonical 镜像与当前镜像的 token/hidden 是否 exact。
 
-  2026-07-26 的固定 0724 环境 `N=256` 结果为：raw opt/baseline 均
-  `240/256=93.75%`，所以 raw 95% gate **未通过**；opt↔baseline token/hidden
-  `256/256` exact、`max_abs_diff=0`、TP spread `0.0`，所以 B2 replacement
-  regression **通过**。不得把前者写成 vanilla precision PASS，也不得把该
-  raw 差异归因于 opt。
+  2026-07-26 的 0162 发布镜像内 `N=256` 结果为：canonical-only raw
+  `240/256=93.75%`，所以 raw 95% gate **未通过**；与清理前 canonical
+  镜像逐 step 比较，token/hidden `256/256` exact、`max_abs_diff=0`、TP spread
+  `0.0`，所以 compatibility removal regression **通过**。不得把前者写成
+  vanilla precision PASS，也不得把该 raw 差异归因于删除兼容入口。
+
+### Step 3.1 · 发布镜像内 canonical-only 审计（必做）
+
+发布结论必须来自目标镜像内，不得用裸机 editable checkout 代替：
+
+```bash
+sudo $NC run --rm --net host --security-opt apparmor=unconfined \
+  -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro \
+  "$IMG" bash -lc 'set -e
+    test "$(git -C /workspace/pypto-lib rev-parse HEAD)" = \
+      53eb7212c29c9bd015ee060cd9924a13ea781ae0
+    test ! -e /workspace/pypto-lib/models/step3p5_opt
+    ! grep -RqsE "whole_decode_opt|WholeDecodeOpt" \
+      /workspace/pypto-lib/models/step3p5
+    ldd /workspace/ptoas-bin/ptoas | grep -q "not found" && exit 1 || true
+    echo CANONICAL_ONLY_SYMBOL_AUDIT=PASS'
+```
+
+2026-07-26 已留存的镜像内权威证据：
+
+```text
+0162:/tmp/canonical_only_image_verify_20260726/smoke.log
+0162:/tmp/canonical_only_image_verify_20260726/all_unit.log
+0162:/tmp/canonical_only_image_verify_20260726/contracts.log
+0162:/tmp/canonical_only_image_verify_20260726/audit.log
+0162:/tmp/canonical_only_image_verify_20260726/n256_compare.log
+0162:/tmp/canonical_only_n256_20260726.launcher.log
+```
+
+结果：smoke PASS；unit `136 passed, 4 skipped`；canonical-only contract
+`15 passed`；credential/symbol/ldd audit PASS；N=256 raw `240/256`；
+清理前后 token/hidden `256/256` exact。
 
 > 失败时读留存的 exporter 日志:`/data/chensiyu/ci_out/../..` 或加
 > `-v <宿主>:/tmp/n1_ci_artifacts` 后看 `logs/main_hidden_8step.log`。
@@ -289,5 +323,8 @@ step0/step1 `token_exact=true` + step2 `output=6127`(= skill 金标准 `1207→6
 4. **runner step2 FAIL ≠ 精度问题**:是 harness stale oracle(`DEFAULT_ORACLE_TOKENS[2]=19384`),用 8000 vanilla、live A/B 或容器内 worker log 自证 step0/1 `token_exact=true` + step2 output=6127 佐证。
 5. **禁 `-9` 强杀 device 进程 / 禁 `npu-smi reset`**(netboot 机重启锁死 / card poison)。
 6. **raw gate 与 replacement gate 必须分开**：`93.75%` 不是 raw PASS；
-   `256/256` exact 只证明 current opt 没有相对 current baseline 引入回归。
+   `256/256` exact 只证明 canonical-only 清理没有相对清理前 canonical
+   镜像引入回归。
 7. **容器内场景先识别**:若 `ls /workspace/pypto-smoke.sh` 存在且无 nerdctl,**不要再装容器运行时**——直接走"容器环境内场景"小节,跳过 Step 1。
+8. **发布依据只能来自目标镜像内**：裸机 checkout 的 test 只能作开发诊断，
+   不得写成镜像发布 PASS。

@@ -38,13 +38,14 @@ runtime `.so` hash/mtime；③ CANN/PTOAS/checkpoint/device/ring env；④ 对�
 
 ## 🔴 ACTIVE — Phase 28 live serving：per-layer KV bridge + 3-way HBM / redundant weights
 
-**当前 release 边界（2026-07-26）**：`pypto-lib stepfun/develop@29547af6` 默认
-`models.step3p5.decode_fwd:whole_decode_step3p5`。固定 0724 环境 N=256
-canonical↔baseline token/hidden `256/256` exact、`max_abs_diff=0`、TP spread
-`0.0`，所以 Main replacement regression 已关闭。对同一 vanilla oracle
-两者均为 `240/256=93.75%`，低于历史 95% raw gate；不能写成 raw PASS，
-也不能外推成完整 Main+MTP serving 已平替。该结论不覆盖 N1-S-0234。
-历史 `step3p5_opt` 路径仅为 compatibility shim。
+**当前 release 边界（2026-07-26）**：`pypto-lib stepfun/develop@53eb7212`
+只保留 `models.step3p5.decode_fwd:whole_decode_step3p5`。`models/step3p5_opt`
+package、`whole_decode_opt` 和 `WholeDecodeOpt` 已删除。0162 发布镜像内
+canonical-only N=256 与清理前 canonical 镜像 token/hidden `256/256` exact、
+`max_abs_diff=0`、TP spread `0.0`，所以 compatibility removal regression 已关闭。
+对同一 vanilla oracle raw 为 `240/256=93.75%`，低于历史 95% raw gate；不能写成
+raw PASS，也不能外推成完整 Main+MTP serving 已平替。该结论不覆盖 N1-S-0234。
+显式 `--baseline-main` 仍可回退到 0724 unroll baseline，但不属于兼容入口。
 
 **当前 live serving blocker**：
 

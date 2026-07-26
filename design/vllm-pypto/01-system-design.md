@@ -2,9 +2,9 @@
 
 > **2026-07-26 current-release override**：当前 release pins 见
 > [`deployment/version-matrix.md`](../../deployment/version-matrix.md)。
-> `pypto-lib stepfun/develop@29547af6` 的默认 Main 是
+> `pypto-lib stepfun/develop@53eb7212` 的唯一默认 Main 是
 > `models.step3p5.decode_fwd:whole_decode_step3p5`，固定 0724
-> 环境 N=256 canonical↔baseline replacement `256/256` exact；这只关闭了
+> 环境 N=256 canonical-only 清理前后 replacement `256/256` exact；这只关闭了
 > standalone/Main replacement 子 gate。独立 live front 接管、真实 paged-KV
 > bridge、同代 MTP absolute gate 和 3-way HBM 仍是 active work，不得把本设计
 > 中的历史 plumbing 证据写成完整 production serving 平替。

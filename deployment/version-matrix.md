@@ -13,23 +13,23 @@
 | Firmware | `7.8.0.7.220` | 与 driver 成对 |
 | CANN | `9.0.0-beta.1` | NOT GA |
 | pypto | `ca21ab5fcfd8203165928428302d273c377db5c6` | 与 0724 镜像一致 |
-| pypto-lib / vllm-pypto | `29547af6c3c5b7db2a75c1fd5e0110959d2a7624` | `stepfun/develop`；默认 Main=`models.step3p5.decode_fwd:whole_decode_step3p5`；`step3p5_opt` 仅兼容 shim |
+| pypto-lib / vllm-pypto | `53eb7212c29c9bd015ee060cd9924a13ea781ae0` | `stepfun/develop`；唯一 Main=`models.step3p5.decode_fwd:whole_decode_step3p5`；`step3p5_opt` package/aliases 已删除 |
 | pto-isa | `ecb6c303f797749f811a494742c3c08156aacabb` | 与 0724 镜像一致 |
 | PTOAS | `fc8c6caee561914b4fb991dfc8427bb63194269e` | 与 0724 镜像一致 |
 | simpler | `216e7632267ae815c484cdeba7991c87fabf3086` | pypto `runtime` gitlink；与 0724 镜像一致 |
 | ptoas-bin | `v0.50` | binary sha256 `ba93fabeff6dc7fdcd2278a72fd1d4fd92cb2949faedbc83fa58e801bd5ff23b` |
 | vLLM overlay | `csy/pypto-tail-mtp-integration@1b3e538c35999e62b6d24e0651b3a85b7d16c826` | build 时按 commit checkout，不能只依赖可变 branch |
 | Python | `3.11.14` | 镜像内 `/usr/local/python3.11.14/bin/python3` |
-| 镜像 | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5@sha256:f58708d2c6cc60474fa98da38aef23a128b850173e4bf5ab6336590b83e2afbc` | config `sha256:a9d4c288b0aeb15d912724d6df717ffac37a27f6826ac33ec864ecf775104ca3`；0162 credential audit + smoke + canonical 8-step device smoke PASS |
+| 镜像 | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5-only@sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81` | config `sha256:d296461051559e6ea0e22d04a4cc44f749c82f19a50418fe6db75387f1f067e9`；0162 credential/symbol/ldd audit + smoke + unit/contract/device regression PASS |
 
 验证结论：
 
 - 0162 overlay 环境默认 `whole_decode_step3p5` 已完成 N=256；
-- N=256 canonical↔baseline token/hidden `256/256` exact，`max_abs_diff=0`，
-  TP spread `0.0`，B2 replacement regression PASS；
-- 与 rename 前 `opt-b2` 镜像产物 token/hidden `256/256` bit-exact，
+- N=256 canonical-only 与清理前镜像 token/hidden `256/256` exact，`max_abs_diff=0`，
+  TP spread `0.0`，compatibility removal regression PASS；
+- 与清理前 canonical 镜像产物 token/hidden `256/256` bit-exact，
   step127/128/255 PASS；
-- 对同一 vanilla oracle，canonical/baseline 均为 `240/256=93.75%`，低于历史
+- 对同一 vanilla oracle，canonical-only 为 `240/256=93.75%`，低于历史
   `>=95%` raw gate；不能写成 vanilla raw precision PASS；
 - `--baseline-main` rollback 编译成功并完成 3-step device smoke；step2
   退出是已知 stale hardcoded oracle，不是 rollback 失效；
@@ -39,11 +39,11 @@
 - 新镜像 N=256 raw `240/256=93.75%`；与既有 canonical N=256 artifact
   token/hidden `256/256` exact、`max_abs_diff=0`、TP spread `0.0`，
   step127/128/255 全通过；
-- 当前只证明 Main replacement，不等价于完整 production Main+MTP serving
+- 当前只证明 canonical-only Main replacement，不等价于完整 production Main+MTP serving
   已无条件平替。
 
 构建 spec：
-[`docker/builds/stepfun-develop-20260726-step3p5.env`](docker/builds/stepfun-develop-20260726-step3p5.env)。
+[`docker/builds/stepfun-develop-20260726-step3p5-only.env`](docker/builds/stepfun-develop-20260726-step3p5-only.env)。
 
 ### 历史生产目标（2026-06-22，禁止作为当前 pin）
 

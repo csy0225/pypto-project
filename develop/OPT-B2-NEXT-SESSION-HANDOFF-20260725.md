@@ -1,11 +1,11 @@
 # step3p5_opt B2 loop-form — 交接文档（2026-07-25，后续改造完成）
 
 > **CURRENT OVERRIDE（2026-07-26）**：本文前半部分保留的是定位过程和
-> rename 前历史命令，不再作为当前 source of truth。当前 canonical 实现是
-> `models.step3p5.decode_fwd:whole_decode_step3p5`，
-> `step3p5_opt` 仅保留 compatibility shim；fork
-> `stepfun/develop@29547af6`，发布镜像
-> `stepfun-develop-20260726-step3p5@sha256:f58708d2…`。当前操作入口、pin 和
+> rename 前历史命令，不再作为当前 source of truth。当前唯一 canonical 实现是
+> `models.step3p5.decode_fwd:whole_decode_step3p5`；`models/step3p5_opt`
+> package、`whole_decode_opt` 和 `WholeDecodeOpt` 已删除。当前 fork
+> `stepfun/develop@53eb7212`，发布镜像为
+> `stepfun-develop-20260726-step3p5-only@sha256:99b2b971…`。当前操作入口、pin 和
 > 未关闭边界以本文 §8.9、`STATUS.md`、`planning/handoff.md` 和
 > `deployment/version-matrix.md` 为准。
 
@@ -651,7 +651,7 @@ active workspace 已不再保留这些 variant checkout；工具链仓保持独�
 |------|--------|--------|------------|
 | **A1 可观测性** | whole-net 主要以“是否跑通”判断，缺少统一的多步 token/hidden、finite、TP spread 和边界 step 证据 | harness 生成 N=256 report、逐 step hidden，并检查 hidden finite、TP spread、step127/128/255 | 回归结果可审计；当前 TP spread `0.0`，且能把 vanilla raw gate 与 replacement gate 分开 |
 | **B1 resident 权重池的 opt zero-copy view ABI** | 0724 baseline 已经一次 IPC import、跨 step resident，但 opt 没有从 canonical FULL `[12,...]` / SWA `[33,...]` 栈取得 10/30 层 MoE-only 连续 bucket 的 ABI | `Wsub()` 对每 rank 做 FULL `1:11`、SWA `2:32` outermost contiguous slice，再以 `StackedDeviceTensor` 跨 rank 绑定；不 materialize 新权重 | B2 可以用 dynamic `pl.slice(layer_idx)`；相对复制 opt 专用 attention buckets，按当前 shape 避免约 `965 MiB≈0.94 GiB/rank` 额外设备副本。0724 原本已 resident，**不能**写成“消除 24 GiB/rank/step H2D” |
-| **B2 45 层 loop-form** | historical `decode_layer.py` 31,686 行，MoE 主体按 40 个 layer site 重复描述 | current `decode_fwd.py` 4,775 行；L1/L2=`pl.range(2)`、L3-L42=`pl.range(40)`，L43/L44 保留必要 specialization | 主体源码约减少 **84.97%**，MoE runtime loop body `40→1`；N=256 opt↔baseline token/hidden `256/256` exact、`max_abs_diff=0`。没有同环境 compiler wall-clock A/B，不宣称编译加速比例 |
+| **B2 45 层 loop-form** | historical `decode_layer.py` 31,686 行，MoE 主体按 40 个 layer site 重复描述 | current `decode_fwd.py` 4,772 行；L1/L2=`pl.range(2)`、L3-L42=`pl.range(40)`，L43/L44 保留必要 specialization | 主体源码约减少 **84.94%**，MoE runtime loop body `40→1`；N=256 canonical-only 清理前后 token/hidden `256/256` exact、`max_abs_diff=0`。没有同环境 compiler wall-clock A/B，不宣称编译加速比例 |
 | **C2 dispatch/combine pull** | source rank push/`remote_store`，跨 die 写完成存在竞争和随机 stall/507018 风险路径 | fixed-slot peer-major，consumer `remote_load` pull；combine 固定槽 pull-back，本地 bucket 与 peer pull 分开 | 当前 0162 N=256 无 stall、TP spread `0.0`，liveness 可重复性提高；通信字节数不变，不宣称带宽下降 |
 
 边界：
@@ -671,46 +671,45 @@ active workspace 已不再保留这些 variant checkout；工具链仓保持独�
 ```text
 pypto-lib / vllm-pypto:
   branch stepfun/develop
-  commit 29547af6c3c5b7db2a75c1fd5e0110959d2a7624
+  commit 53eb7212c29c9bd015ee060cd9924a13ea781ae0
 
 canonical Main:
   models.step3p5.decode_fwd:whole_decode_step3p5
 
-compatibility shim only:
-  models.step3p5_opt.decode_fwd:whole_decode_opt
+legacy compatibility package/aliases: deleted
 
 image:
-  hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5
-  digest sha256:f58708d2c6cc60474fa98da38aef23a128b850173e4bf5ab6336590b83e2afbc
-  config sha256:a9d4c288b0aeb15d912724d6df717ffac37a27f6826ac33ec864ecf775104ca3
+  hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5-only
+  digest sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81
+  config sha256:d296461051559e6ea0e22d04a4cc44f749c82f19a50418fe6db75387f1f067e9
 ```
 
-rename 后 canonical 文件保留唯一真实 PyPTO program；`step3p5_opt` 的
-26 行文件只 re-export canonical object，不再维护第二份程序。0162 已验证：
+canonical 文件保留唯一真实 PyPTO program；`step3p5_opt` package 和 opt aliases 已删除，
+不再维护第二套 module-selection 语义。0162 已验证：
 
-- 镜像内六个 pin、`ptoas 0.50`、credential audit、canonical/shim import
-  identity 和 `/workspace/pypto-smoke.sh` 全部 PASS；
+- 镜像内六个 pin、`ptoas 0.50`、credential audit、canonical-only symbol audit
+  和 `/workspace/pypto-smoke.sh` 全部 PASS；
 - 默认 8-step device smoke 实际打印
   `program=whole_decode_step3p5`，hidden 全 finite、TP spread `0.0`；
   仅旧硬编码 oracle 的 step2 预期 `19384` 与实际 `6127` 不同，其余
   `7/8` exact；
-- rename 前后 N=256 token/hidden `256/256` bit-exact，
+- 清理前后 N=256 token/hidden `256/256` bit-exact，
   `max_abs_diff=0`，step127/128/255 PASS；
 - vanilla raw 仍为 `240/256=93.75%`，低于历史 95% gate，不能写成
   vanilla precision PASS。
 - 新镜像完整 N=256 artifact：
-  `/tmp/newimage_step3p5_n256_20260726/`；与既有 canonical artifact
+  `/tmp/canonical_only_n256_20260726/`；与清理前 canonical artifact
   token/hidden `256/256` exact、`max_abs_diff=0`、TP spread `0.0`，
   step127/128/255 PASS，raw miss 与此前 16 个位置完全一致。
 
 active workspace：
 
 ```text
-local workspace/vllm-pypto: stepfun/develop@29547af6
-local workspace/pypto-lib:  detached@29547af6
-0162 workspace/vllm-pypto:  stepfun/develop@29547af6
-0162 workspace/pypto-lib:   detached@29547af6
-0162 workspace/pypto-lib-n1: detached@29547af6
+local workspace/vllm-pypto: stepfun/develop@53eb7212
+local workspace/pypto-lib:  detached@53eb7212
+0162 workspace/vllm-pypto:  stepfun/develop@53eb7212
+0162 workspace/pypto-lib:   detached@53eb7212
+0162 workspace/pypto-lib-n1: detached@53eb7212
 0162 workspace/pypto:       detached@ca21ab5f
 0162 workspace/pypto/runtime: detached@216e7632
 0162 workspace/pto-isa:     ecb6c303
@@ -719,5 +718,6 @@ local workspace/pypto-lib:  detached@29547af6
 
 0162 的根 `workspace/pypto-lib` 历史 dirty work 已保存到 git stash
 `archive pre-canonical root workspace 2026-07-26`，随后切到 detached
-`29547af6`；`/mnt/persist/chensiyu/perf-opt-ws` 未操作，仍只作历史实验
+`53eb7212`；0162 的 `workspace/pypto-lib-claude` 仍是其他 agent 的 dirty
+debug workspace，本次未覆盖；`/mnt/persist/chensiyu/perf-opt-ws` 未操作，仍只作历史实验
 worktree，不是 active release source。

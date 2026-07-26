@@ -1,7 +1,7 @@
 # =============================================================================
 # vllm-pypto 可复现环境 (Ascend 910B / step3p5)
 #
-# 0724 blessed image 的固定环境 + canonical Step3p5 loop-form Main。
+# 0724 blessed image 的固定环境 + canonical-only Step3p5 loop-form Main。
 # 构建规格由 builds/*.env 提供；所有仓 pin 都必须通过 build args 传入，
 # 禁止把可变的 stepfun/develop branch 当作 release source。
 # =============================================================================
@@ -12,7 +12,7 @@ SHELL ["/bin/bash", "-lc"]
 
 # Release pins are overridden by the selected build spec.
 ARG PYPTO_COMMIT=ca21ab5fcfd8203165928428302d273c377db5c6
-ARG PYPTO_LIB_COMMIT=29547af6c3c5b7db2a75c1fd5e0110959d2a7624
+ARG PYPTO_LIB_COMMIT=53eb7212c29c9bd015ee060cd9924a13ea781ae0
 ARG PTO_ISA_COMMIT=ecb6c303f797749f811a494742c3c08156aacabb
 ARG PTOAS_COMMIT=fc8c6caee561914b4fb991dfc8427bb63194269e
 ARG SIMPLER_COMMIT=216e7632267ae815c484cdeba7991c87fabf3086

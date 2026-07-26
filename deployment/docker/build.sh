@@ -3,12 +3,12 @@
 # builds/<spec>.env(见 README「组织方式」)。
 # 用法:
 #   bash build.sh [builds/<spec>.env]        # 默认最新 spec
-#   GH=.../github.env GL=.../gitlab.env bash build.sh builds/stepfun-develop-20260726-step3p5.env
+#   GH=.../github.env GL=.../gitlab.env bash build.sh builds/stepfun-develop-20260726-step3p5-only.env
 # 需要: docker (BuildKit --secret)。GH/GL 是含 PAT 的文件 (不落镜像层)。
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SPEC=${1:-${SPEC:-builds/stepfun-develop-20260726-step3p5.env}}
+SPEC=${1:-${SPEC:-builds/stepfun-develop-20260726-step3p5-only.env}}
 [ -f "$SPEC" ] || { echo "缺 build spec: $SPEC (见 builds/)"; exit 1; }
 # shellcheck disable=SC1090
 source "$SPEC"    # IMAGE_TAG + immutable source pins

@@ -15,7 +15,7 @@
 本专项的历史起点是 `whole_decode_faithful_real`
 （`pypto-lib/models/step3p5/decode_layer.py`，**31,686 行**）的 45 层展开实现；
 current release 已切到 `models/step3p5/decode_fwd.py:whole_decode_step3p5`
-（4,775 行）。下文 §2–§4 保留历史诊断和目标架构，current 实际交付及收益
+（4,772 行）。下文 §2–§4 保留历史诊断和目标架构，current 实际交付及收益
 以 §5 为准。
 
 - **模型规模**（`config.py`）：`HIDDEN=4096`、`NUM_HIDDEN_LAYERS=45`、`VOCAB=128896`、
@@ -118,20 +118,20 @@ l3_decode_fwd (@pl.jit.host)
 |------|--------|----------|----------------|
 | **A1 可观测性** | whole-net 缺统一的多步 token/hidden、TP spread、per-layer dump 证据，性能只能盲调 | holder/harness 支持 256-step report、per-layer hidden、hidden finite、TP spread 和边界 step 检查 | 回归从“跑通”变成可审计数据；当前 N=256 检查 step127/128/255，TP spread `0.0` |
 | **B1 resident 权重池 + opt zero-copy view ABI** | 0724 baseline 已经是每 rank 一次 IPC import、`prepare()` 内常驻并跨 step 复用；但 opt 缺少从 canonical FULL/SWA 桶构造 MoE 专用连续 view 的 ABI，若另建 opt 桶会产生额外设备副本 | 保留原 consolidated IPC pool；`Wsub()` 对 FULL `1:11`、SWA `2:32` 做 outermost contiguous slice，再以 `StackedDeviceTensor` 跨 rank 绑定，整个过程不 materialize 新权重 | **结构/容量收益**：B2 可直接消费 dynamic leading-dim view；相对复制 10 个 FULL + 30 个 SWA attention buckets，按当前 shape 估算避免约 `965 MiB≈0.94 GiB/rank` 额外设备副本。0724 baseline 本来就无 per-step 全量权重 H2D，因此不再虚写“24 GiB/rank/step H2D 消除” |
-| **B2 45 层 loop-form** | 历史 faithful whole-net `decode_layer.py` `31,686` 行，层结构展开，MoE 主体重复 40 份 | canonical `decode_fwd.py` 以一个 `whole_chip_orch` 承载 L0、L1/L2 `pl.range(2)`、L3-L42 MoE `pl.range(40)`，L43/L44 保留必要 specialization；当前文件 `4,775` 行 | 主体源码体量 `31,686→4,775`，约 **84.97% 减少**；MoE 主体 `40→1` 个 runtime loop body；N=256 canonical↔baseline、rename 前后 token/hidden 均 `256/256` exact，hidden `max_abs_diff=0`，TP spread `0.0`。未单独证明 latency 提升 |
+| **B2 45 层 loop-form** | 历史 faithful whole-net `decode_layer.py` `31,686` 行，层结构展开，MoE 主体重复 40 份 | canonical `decode_fwd.py` 以一个 `whole_chip_orch` 承载 L0、L1/L2 `pl.range(2)`、L3-L42 MoE `pl.range(40)`，L43/L44 保留必要 specialization；当前文件 `4,772` 行 | 主体源码体量 `31,686→4,772`，约 **84.94% 减少**；MoE 主体 `40→1` 个 runtime loop body；N=256 canonical-only 清理前后 token/hidden 均 `256/256` exact，hidden `max_abs_diff=0`，TP spread `0.0`。未单独证明 latency 提升 |
 | **C2 dispatch/combine pull** | dispatch 由 source rank push/remote-store 到 peer，存在跨 die 写完成竞争和随机 stall 风险 | fixed-slot 对齐 `moe.py`：目标 rank 按对称槽位 `remote_load` pull；combine 也按固定槽 pull back | 消除原 push dispatch 的随机 stall 路径；0162 当前 N=256 无 stall、TP spread `0.0`。数据量不变，收益是 liveness/可重复性，不宣称带宽减少 |
 
 ### 5.1 当前可量化的收益边界
 
 | 指标 | 改造前/历史基线 | 改造后/当前结果 | 口径 |
 |------|----------------|----------------|------|
-| 主体源码体量 | `31,686` lines (`3af13f4f` historical `models/step3p5/decode_layer.py`) | `4,775` lines (`29547af6` `models/step3p5/decode_fwd.py`) | 静态结构指标，约 `84.97%` 降低；不是编译时延直接测量 |
+| 主体源码体量 | `31,686` lines (`3af13f4f` historical `models/step3p5/decode_layer.py`) | `4,772` lines (`53eb7212` `models/step3p5/decode_fwd.py`) | 静态结构指标，约 `84.94%` 降低；不是编译时延直接测量 |
 | MoE loop 主体 | 40 个物理 MoE layer sites | 1 个 `pl.range(40)` loop body + 2 个尾部 specializations | 降低 IR/调度图重复；没有把“IR 行数”冒充 compiler wall-clock |
-| opt attention bucket 绑定 | 若为 opt 的 10 FULL + 30 SWA bucket 另做 materialization，会重复约 `965 MiB/rank` 权重 | 直接从 canonical resident pool 建 `Wsub()` zero-copy view | 约 `0.94 GiB/rank` 避免的额外设备副本是 shape 推导值；不是 wall-clock 或实际 H2D 采样 |
+| loop-form attention bucket 绑定 | 若为 loop-form 的 10 FULL + 30 SWA bucket 另做 materialization，会重复约 `965 MiB/rank` 权重 | 直接从 canonical resident pool 建 `Wsub()` zero-copy view | 约 `0.94 GiB/rank` 避免的额外设备副本是 shape 推导值；不是 wall-clock 或实际 H2D 采样 |
 | MoE communication window | 历史设计约 `766 MB` per-layer window domain | **当前 B2/C2 release 仍是 per-layer stack**；C1 尚未交付 | 不能把 C1 设计目标 `766 MB→十几 MB` 写成当前收益 |
-| vanilla raw alignment | current baseline/opt 各 `240/256=93.75%` | 两者相同 | raw `>=95%` 未通过；说明差异不是 B2 引入 |
-| replacement equivalence | — | canonical↔baseline、rename 前后 token `256/256` exact；hidden `256/256` exact；`max_abs_diff=0` | B2 replacement regression 与 canonical rename regression 均 PASS |
-| 256-step warm runtime | 当前 artifact opt warm mean `0.8057s/step`；baseline `0.7363s/step` | 最终镜像 canonical warm mean `0.8088s/step` | harness `run_sec`，不是完整 serving ITL；未与历史 31k-line implementation 做同环境 A/B，不能据此宣称 B2 加速 |
+| vanilla raw alignment | current canonical-only 与清理前 canonical 各 `240/256=93.75%` | 两者相同 | raw `>=95%` 未通过；说明差异不是 B2 或兼容入口清理引入 |
+| replacement equivalence | — | canonical-only 清理前后 token `256/256` exact；hidden `256/256` exact；`max_abs_diff=0` | B2 replacement 与 canonical-only cleanup regression 均 PASS |
+| 256-step warm runtime | 历史 loop-form artifact warm mean `0.8057s/step`；baseline `0.7363s/step` | 最终镜像 canonical warm mean `0.8088s/step` | harness `run_sec`，不是完整 serving ITL；未与历史 31k-line implementation 做同环境 A/B，不能据此宣称 B2 加速 |
 
 ### 5.2 未完成优化，不得提前计入收益
 
@@ -147,7 +147,7 @@ l3_decode_fwd (@pl.jit.host)
 
 | 维度 | 现状 | 优化后预期 | 主要贡献项 |
 |------|------|-----------|-----------|
-| 编译期 / IR 体量 | 历史 `31,686` 行主体 | 当前 canonical Main `4,775` 行；C1 窗口仍未收敛 | B2 已落地；C1 未完成 |
+| 编译期 / IR 体量 | 历史 `31,686` 行主体 | 当前 canonical Main `4,772` 行；C1 窗口仍未收敛 | B2 已落地；C1 未完成 |
 | 多卡稳定性 | push dispatch 有随机 stall 风险 | current pull path，0162 N=256 无 stall | C2 已落地；不把 C1 预期写入当前结果 |
 | HBM / rank | canonical resident pool 已存在；若为 opt 复制 attention buckets 会再占约 `0.94 GiB/rank` | B1 用 zero-copy view 避免该增量；C1/D2 的大项仍未交付 | B1 已落地；C1、D1/D2 未完成 |
 | 单步延迟 | 历史数据不足 | 最终镜像 canonical harness warm mean `0.8088s/step`，未有同环境旧 31k-line A/B | 仅记录，不宣称加速 |

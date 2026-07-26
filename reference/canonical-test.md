@@ -11,19 +11,20 @@
 > checkpoint、设备和环境变量。
 
 > **⚠ 2026-07-26 current release 覆盖说明**：当前 active checkout 为
-> `workspace/{pypto-lib,vllm-pypto} @ 29547af6`，默认 Main 已切换为
+> `workspace/{pypto-lib,vllm-pypto} @ 53eb7212`，只保留
 > `models.step3p5.decode_fwd:whole_decode_step3p5`；显式 `--baseline-main`
-> 才回退到 0724 canonical baseline。当前 runtime/toolchain 继续固定为
+> 才回退到 0724 unroll baseline。`models/step3p5_opt`、`whole_decode_opt` 和
+> `WholeDecodeOpt` 不得存在。当前 runtime/toolchain 继续固定为
 > 0724 provenance：pypto `ca21ab5f`、simpler `216e7632`、pto-isa
 > `ecb6c303`、PTOAS `fc8c6cae`、ptoas `0.50`。本文件后面的
 > pre-prune program、generator 和 2026-07-17/18 pin 均为历史证据，不是
 > 当前 workspace 或新镜像的 active pin；当前镜像操作入口见
 > [pypto-image-verify skill](../.claude/skills/pypto-image-verify/SKILL.md)。
 >
-> 当前 `N=256` 必须按两个 gate 报告：vanilla raw canonical/baseline 均为
+> 当前 `N=256` 必须按两个 gate 报告：vanilla raw canonical-only 为
 > `240/256=93.75%`，低于历史 `>=95%` raw gate，**raw precision 未通过**；
-> canonical↔baseline token/hidden `256/256` exact、`max_abs_diff=0`、TP spread
-> `0.0`，因此 **B2 replacement regression 通过**。replacement PASS
+> canonical-only 清理前后 token/hidden `256/256` exact、`max_abs_diff=0`、TP spread
+> `0.0`，因此 **compatibility removal regression 通过**。replacement PASS
 > 不能改写成完整 vanilla precision PASS，也不能改写成 production
 > Main+MTP serving 已完全平替。
 
@@ -71,11 +72,12 @@ kernel。PUSH 探针、历史 push 版本、以及旧 46 layer-level submission 
 
 - **vanilla raw 精度准出**：**多步 decode 逐 token** teacher-forced 对比 live vanilla
   vLLM W8A8 oracle，seed=6127，要求 **ALIGNED ≥ 95%**。2026-07-23 的历史
-  N=128 baseline 为 `124/128=96.9%`；2026-07-26 当前 N=256 opt/baseline
-  均为 `240/256=93.75%`，所以当前 raw gate 未通过。
-- **replacement regression**：current opt 必须与 current canonical baseline
-  逐 token、逐 hidden exact。2026-07-26 N=256 为 `256/256` exact，
-  `max_abs_diff=0`、TP spread `0.0`，该 gate 通过。
+  N=128 baseline 为 `124/128=96.9%`；2026-07-26 canonical-only 发布镜像
+  N=256 为 `240/256=93.75%`，所以当前 raw gate 未通过。
+- **replacement regression**：canonical-only release 必须与清理前 canonical
+  镜像逐 token、逐 hidden exact。2026-07-26 N=256 为 `256/256` exact，
+  `max_abs_diff=0`、TP spread `0.0`，该 gate 通过。显式 0724 baseline
+  rollback 的历史 replacement A/B 仍作为附加证据，不是第二个默认入口。
 - 驱动：`pypto-lib/tests/step3p5/ci/{LIVE_PRECISION_AB.md,
   run_live_precision_ab.sh}`。两个 gate 必须分开记录。
 - **首 token 冒烟 / liveness（快速回归，非精度准出）**：`--hidden-token 6127`、`ctx=1`、

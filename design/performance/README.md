@@ -33,7 +33,7 @@
 |----|--------|-------|--------|------|------|--------|
 | **PERF-A1** | whole-net decode baseline + DFX 采集（l2_swimlane/PMU/perf_hints/mem-occupancy） | A 可观测性 | **P0** | 把盲调变有数，回归基线 | 无 | S (~1d) |
 | **PERF-B1** | resident 权重池 + opt zero-copy view ABI | B Mega-kernel | **P0** | ✅ 复用 canonical resident pool，为 B2 提供 dynamic slice；相对复制 opt attention buckets，避免约 `0.94 GiB/rank` 额外设备副本 | 无 | M (~3d) |
-| **PERF-B2** | 45 层 unroll → 单 `pl.range` 循环 + per-layer `pl.slice` | B Mega-kernel | **P1** | ✅ 主体源码 `31,686→4,775`（约 -84.97%）；MoE loop body `40→1`；N=256 replacement exact | B1 | XL (多周) |
+| **PERF-B2** | 45 层 unroll → 单 `pl.range` 循环 + per-layer `pl.slice` | B Mega-kernel | **P1** | ✅ 主体源码 `31,686→4,772`（约 -84.94%）；MoE loop body `40→1`；N=256 replacement exact | B1 | XL (多周) |
 | **PERF-B3** | KV pool `resident` + in-place 更新 | B Mega-kernel | P2 | 省 KV 每步 D2H 往返 | B1 | S (~2d) |
 | **PERF-C1** | 单 window set + `moe_epoch` 单调计数 + `WaitCmp.Ge` | C MoE 通信 | **P0** | ⬜ 目标收益：`~766MB→十几MB`；当前 release 未计入 | 无 | M (~1w) |
 | **PERF-C2** | dispatch push→pull（fixed-slot，对齐 moe.py） | C MoE 通信 | **P1** | ✅ 消除 push dispatch 的随机 stall 路径；字节数不变 | C1 | L (~1-2w) |
@@ -84,10 +84,10 @@ per-layer communication stack，先完成了 **A1 → B1 → B2**，C1 留作独
 
 **当前 release 的两个 gate 必须分开**：
 
-1. vanilla raw alignment：固定 0724 环境 N=256，opt/baseline 均
+1. vanilla raw alignment：0162 canonical-only 发布镜像 N=256 为
    `240/256=93.75%`，低于历史 `>=95%` raw gate，**未通过**；
-2. replacement equivalence：opt↔baseline token/hidden `256/256` exact，
-   hidden `max_abs_diff=0`、TP spread `0.0`，**通过**。
+2. replacement equivalence：canonical-only 清理前后 token/hidden
+   `256/256` exact，hidden `max_abs_diff=0`、TP spread `0.0`，**通过**。
 
 驱动：`pypto-lib/tests/step3p5/ci/{LIVE_PRECISION_AB.md, run_live_precision_ab.sh}`；
 两个 gate 不得混写。

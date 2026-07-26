@@ -5,7 +5,7 @@
 > 当前 active release 为：
 >
 > ```text
-> pypto-lib / vllm-pypto 29547af6 (stepfun/develop)
+> pypto-lib / vllm-pypto 53eb7212 (stepfun/develop)
 > pypto                    ca21ab5f
 > simpler/runtime          216e7632
 > pto-isa                  ecb6c303
@@ -14,11 +14,11 @@
 > default Main             models.step3p5.decode_fwd:whole_decode_step3p5
 > ```
 >
-> 当前已完成的是 **Main replacement release**：固定 0724 环境 N=256，
-> canonical↔baseline token/hidden `256/256` exact、`max_abs_diff=0`、TP spread
-> `0.0`；同一 vanilla oracle 对两者均为 `240/256=93.75%`，低于历史
-> raw `>=95%` gate。因此 replacement regression PASS，但 vanilla raw gate
-> 未通过。
+> 当前已完成的是 **canonical-only Main replacement release**：0162 发布镜像内，
+> 清理兼容 package/alias 前后 N=256 token/hidden `256/256` exact、
+> `max_abs_diff=0`、TP spread `0.0`；同一 vanilla oracle raw 为
+> `240/256=93.75%`，低于历史 raw `>=95%` gate。因此 compatibility removal
+> regression PASS，但 vanilla raw gate 未通过。
 >
 > 本 phase 尚未关闭：独立 live vLLM front 接管、live paged-KV bridge /
 > dynamic batch、同代 Main→MTP absolute oracle、3-way HBM/redundant weights

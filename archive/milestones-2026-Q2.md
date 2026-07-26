@@ -6,6 +6,34 @@
 
 
 
+## 2026-07-26 —— canonical-only Step3p5 release + 0162 镜像内 N=256 回归 ✅
+
+- `pypto-lib stepfun/develop` 前进到
+  `53eb7212c29c9bd015ee060cd9924a13ea781ae0`：删除
+  `models/step3p5_opt` package、`whole_decode_opt` 和 `WholeDecodeOpt`，唯一
+  Main 为 `models.step3p5.decode_fwd:whole_decode_step3p5`；显式
+  `--baseline-main` 仅保留为 0724 rollback。
+- 当前 commit 是 0724 `fd26b1be` 的后代，merge-base 正是 `fd26b1be`；
+  pypto `ca21ab5f`、simpler `216e7632`、pto-isa `ecb6c303`、PTOAS
+  `fc8c6cae`、ptoas-bin `v0.50` 和 vLLM overlay `1b3e538c` 均未漂移。
+- 发布镜像：
+  `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5-only`
+  （manifest `sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81`，
+  config `sha256:d296461051559e6ea0e22d04a4cc44f749c82f19a50418fe6db75387f1f067e9`）。
+- 所有发布证据均在 0162 目标镜像内完成：smoke PASS；Step3p5 unit
+  `136 passed, 4 skipped`；canonical-only contract `15 passed`；
+  credential/symbol/ldd audit PASS；N=256 raw `240/256=93.75%`。
+- canonical-only 与清理前 canonical 镜像逐 step token/hidden
+  `256/256` exact，`max_abs_diff=0`、TP spread `0.0`，
+  step127/128/255 PASS；说明删除兼容入口不改变数学执行。raw 仍低于历史
+  95% gate，因此不能写成 vanilla raw precision PASS。
+- B2 静态结构收益校正为 `decode_layer.py 31,686` 行 →
+  `decode_fwd.py 4,772` 行，约减少 `84.94%`；MoE loop body `40→1`。
+  未做同环境旧实现 compiler wall-clock A/B，不宣称编译加速比例。
+- 本地 active `workspace/{vllm-pypto,pypto-lib}` 与 0162 active
+  `workspace/{vllm-pypto,pypto-lib,pypto-lib-n1}` 已同步到 `53eb7212`，
+  旧入口路径无残留；0162 dirty `workspace/pypto-lib-claude` 未覆盖。
+
 ## 2026-07-24 —— 合并 origin/main 到 stepfun/develop + IPC provenance 修复 + 交付镜像 ✅
 
 在 0162 临时工作区 `/mnt/persist/chensiyu/rebase-ws-20260723`（validated 基线

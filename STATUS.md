@@ -20,28 +20,25 @@
      commit `1b3e538c`）+ `vllm-ascend/` fork。
 
 > **2026-07-26 集成现状快照**：B2 loop-form Main 已正式迁入
-> `models/step3p5/decode_fwd.py`，并完成 256-step replacement regression
-> （canonical↔0724 baseline token/hidden 256/256 exact）；同一 vanilla oracle 的 raw 对齐为
+> `models/step3p5/decode_fwd.py`，并完成 0162 发布镜像内 canonical-only
+> regression。删除 `models/step3p5_opt` package、`whole_decode_opt` 和
+> `WholeDecodeOpt` 后，与清理前 canonical 镜像逐 step token/hidden
+> `256/256` exact，`max_abs_diff=0`、TP spread `0.0`，step127/128/255 全通过；
+> 删除兼容入口没有改变数学执行。同一 vanilla oracle 的 raw 对齐为
 > 240/256=93.75%，低于历史 95% raw gate，不能写成无条件 vanilla PASS。
-> `pypto-lib 29547af6` 已把
-> `models.step3p5.decode_fwd:whole_decode_step3p5` 设为 hidden-only harness 和
-> production sidecar 默认 Main；显式 `--baseline-main` 才回退到 0724
-> baseline。`models.step3p5_opt.decode_fwd:whole_decode_opt` 只保留为兼容
-> shim，不再是 source of truth。canonical rename 在 0162 与改名前镜像产物
-> token/hidden `256/256` bit-exact、`max_abs_diff=0`、TP spread `0`，
-> step127/128/255 全通过；artifact：
-> `/tmp/canonical_step3p5_n256_20260726_1900/`。
-> 新镜像 `stepfun-develop-20260726-step3p5`
-> （registry digest `sha256:f58708d2c6cc60474fa98da38aef23a128b850173e4bf5ab6336590b83e2afbc`，
-> config `sha256:a9d4c288…`）已按 immutable `29547af6` 构建并推送；
-> 0162 的 pin、credential audit、canonical import identity、smoke 和
-> 默认 canonical 8-step device smoke 均通过。历史
-> `stepfun-develop-20260726-opt-b2@sha256:0b22fcef…` 只作为 rename 前对照。
+> `pypto-lib stepfun/develop@53eb7212` 现在只保留
+> `models.step3p5.decode_fwd:whole_decode_step3p5` 这一默认 Main；显式
+> `--baseline-main` 仍可回退到 0724 unroll baseline，但不属于兼容 alias。
+> 新镜像 `stepfun-develop-20260726-step3p5-only`
+> （registry digest `sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81`，
+> config `sha256:d296461051559e6ea0e22d04a4cc44f749c82f19a50418fe6db75387f1f067e9`）
+> 已按 immutable `53eb7212` 构建并推送；0162 镜像内 smoke、unit、
+> canonical-only contract、credential/symbol/ldd audit 和 N=256 regression
+> 均有留存证据。历史镜像仅作为可复现对照。
 > vanilla vLLM+MTP3 已能起（`hf_overrides` fix）、接受率可从 vLLM `/metrics` 读；
 > pypto 作为 vLLM live backend（主网 tail-only + MTP proposer）**vLLM 侧挂点已入库、端到端在线路径尚未跑通**（KV bridge + 动态 batch 映射待接）。
 > **push 状态（2026-07-26）**：github `csy0225/pypto-lib:stepfun/develop`
-> → `29547af6`（canonical loop-form Main + compatibility shim + regression
-> contract）✅；
+> → `53eb7212`（canonical-only Main + compatibility removal contract）✅；
 > gitlab `sys/stepcast/vllm` 分支 `csy/pypto-tail-mtp-integration` → `1b3e538c`（vLLM 侧 tail-only + MTP-proposer + MTP3 boot fix）✅。
 
 ## 阶段跟踪
@@ -80,7 +77,7 @@
 |------|------|-------|-----------|---------|-----------|---------|-----------|
 | 2026-07-24 | PERF-A1 逐层 DFX 接线（holder N1_DFX→swim/pmu + harness `--dfx`）；在镜像 20260724(cards 8-15) 采集 → routed-expert 占 90.7% / PMU cube_int8 88.6%（benchmark/2026-07-24-perlayer-dfx） | `ca21ab5f` | `bc5eecb1`(+DFX over `fd26b1be`) | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |
 | 2026-07-24 | 合并 origin/main 到 stepfun/develop（全 FF，保留 fork ITL harness `7cb2a6b3`）+ IPC 权重 interior 指针 provenance 修复（解 `submit_next_level child_memory` 卡点）；镜像 `vllm-pypto:stepfun-develop-20260724`(ptoas v0.50) 冒烟 PASS + 整网 8 步 `6127→303→1207→6127` 与 live vanilla 逐 token 一致 | `ca21ab5f` | `fd26b1be` | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |
-| 2026-07-26 | B2 loop-form Main 正式迁入 canonical `models/step3p5/decode_fwd.py`；`stepfun/develop@29547af6`；rename 前后 N=256 token/hidden `256/256` bit-exact | `ca21ab5f` | `29547af6` | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |
+| 2026-07-26 | B2 loop-form Main canonical-only 收口；`stepfun/develop@53eb7212`；删除兼容 package/alias 后与清理前镜像 N=256 token/hidden `256/256` exact | `ca21ab5f` | `53eb7212` | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |
 | 2026-07-23 | decode-ITL profiling harness(hidden-only via holder;64k ≈654ms/step,含 host glue;权威基线见 benchmark/ device-KV 590ms raw rt.run;均计算受限、近平坦)| `8af501fc` | `7cb2a6b3`(+ITL mode over `4c48215b`) | `ecb6c303` | `72ada0a1` | `36957c6b` | v0.45 |
 | 2026-07-23 | simpler develop 回退到可编译 36957c6b（c7fdc574 Phase-24 import_ipc 半成品编译不过, 存 tag backup/stepfun-develop-c7fdc574-20260723）+ pypto develop gitlink 同步 | `8af501fc`(9ec303f6+gitlink→36957c6b) | `4c48215b` | `ecb6c303` | `72ada0a1` | `36957c6b`(develop 回退; 0162 验证过的 .so 就是它) | v0.45 |
 | 2026-07-23 | 五仓 stepfun/develop 对齐验证过的 N=1 pin（pto-isa/PTOAS FF-push 到 fork stepfun/develop）+ 可复现 Docker 镜像 | `9ec303f6` | `4c48215b` | `ecb6c303`(FF `e25732f0`→,+111) | `72ada0a1`(FF `da011a3d`→,+307) | `c7fdc574` | v0.45 |
