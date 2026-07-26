@@ -230,3 +230,284 @@ NEW=/mnt/persist/chensiyu/perf-opt-ws   # 0162 device 用的 checkout（team-lea
   以及每一步 L0-L44 均 exact。两边对同一 oracle 都为 7/8，step 2 的
   `1207 -> 6127` 与 oracle `19384` 的差异在 baseline 中同样出现，不作为
   opt regression。
+
+---
+
+## 8. 2026-07-26 最终回归与 0724 provenance 核验（本节覆盖前述待办）
+
+### 8.1 最终代码状态
+
+- 设备回归使用的本地 checkout：`/data/chensiyu/hw_project/pypto/workspace/pypto-lib-perf2`
+- 分支：`perf/step3p5-bc-v2`
+- 最终 HEAD：`ad478abb`
+  - `d4491b32`：为 MTP KV IPC import 增加 `region_bytes`，修复 0724
+    runtime 的 child-pointer provenance dispatch failure；
+  - `0e85777c`：更新过时的 hidden-only contract 单测，使其接受正式的
+    `per_layer_hidden` accuracy dump；
+  - `667c949c`：清理 `decode_fwd.py` 的历史 trailing whitespace，AST 语义树
+    保持完全一致；
+  - `09897feb`：修正 whole-sidecar MTP protocol selftest 的 position/slot
+    夹具，生产 slot 公式未改变。
+  - `ad478abb`：为 production `whole_decode_sidecar.py` 增加显式 Main
+    `--layer-module/--layer-name` wiring；默认仍使用 0724 canonical
+    baseline，opt 只有在两个参数同时给出时才启用。
+- 当前工作树 clean；临时 `diagnostic-no-oracle` MTP wrapper 未进入代码仓。
+
+### 8.2 与 0724 镜像的严格边界
+
+固定镜像：
+
+```text
+hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260724
+digest: sha256:2b0dc4612796a34bea6720ccb4bf8fa3af4ea406cdd0f12add34586ca860d7e0
+```
+
+镜像内部 pin 已再次确认：
+
+```text
+pypto-lib: fd26b1be8683764befcb2f85423dd4d60f0bcaf5
+pypto:     ca21ab5fcfd8203165928428302d273c377db5c6
+pto-isa:   ecb6c303f797749f811a494742c3c08156aacabb
+ptoas:     0.50
+pypto:     0.1.0
+CANN:      9.0.0-beta.1
+driver:    25.5.2
+```
+
+当前分支与 0724 镜像 `pypto-lib` base 的 merge-base 正好是
+`fd26b1be8683764befcb2f85423dd4d60f0bcaf5`；相对该 base 的最终 tree
+差异收敛为以下 10 个文件：
+
+```text
+A models/step3p5/_compile_mtp_layer_hidden.py
+M models/step3p5/decode_layer_single_chip_hidden.py
+A models/step3p5_opt/__init__.py
+A models/step3p5_opt/decode_fwd.py
+M tests/step3p5/harnesses/_stage_main_hidden_only.py
+A tools/step3p5/compare_per_layer.py
+M tools/step3p5/pypto_mtp_kv_ipc.py
+M tools/step3p5/whole_decode_holder.py
+M tests/step3p5/unit/test_main_hidden_only_contract.py
+M tools/step3p5/whole_decode_sidecar.py
+```
+
+0724 镜像中的以下基线文件与当前分支逐字一致：
+
+```text
+tools/step3p5/pypto_weight_ipc.py
+tools/step3p5/pypto_kv_ipc.py
+tests/step3p5/ci/run_whole_network_ci.py
+```
+
+因此，结论不是“整个 checkout 与镜像逐字相同”：当前 opt loop、holder
+4-bucket split、per-layer instrumentation 和 MTP provenance fix 都是有意的
+overlay；但没有混入其他 runtime/toolchain，公共 base、未改 helper 和镜像
+内部组件均保持 0724 pin。
+
+### 8.3 pypto-image-verify 回归
+
+0162 使用设备 `8,9,10,11,12,13,14,15`，同一 checkpoint：
+
+```text
+/data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp
+```
+
+skill smoke 重新通过：
+
+```text
+[smoke] ptoas   : ptoas 0.50
+[smoke] pypto   : 0.1.0
+[smoke] simpler : OK
+[smoke] runtime : .../a2a3/dispatcher/libsimpler_aicpu_dispatcher.so
+[smoke] PASS
+```
+
+并确认 `ldd /workspace/ptoas-bin/ptoas` 的 `not found` 数为 0。
+
+重新运行了三份 Main：
+
+```text
+0724 image pristine:
+  /tmp/pypto_regress_20260726_d4491b32/image_pristine_main
+current baseline:
+  /tmp/pypto_regress_20260726_d4491b32/baseline
+current opt:
+  /tmp/pypto_regress_20260726_d4491b32/opt
+```
+
+结果：
+
+```text
+Main token chain（baseline/opt 共同）:
+step0  6127 -> 303
+step1   303 -> 1207
+step2  1207 -> 6127    # harness stale expected=19384
+step3 19384 -> 872
+step4   872 -> 428
+step5   428 -> 6127
+step6  6127 -> 4231
+step7  4231 -> 2636
+```
+
+- baseline 与 opt：8/8 个 `main_stepXX_hidden.pt` BF16 `torch.equal`；
+- baseline 与 opt：每一步 L0-L44 均 45/45 exact，共 360 个逐层输出，
+  `max_abs_diff=0`；
+- 0724 image pristine 与 current baseline：8/8 step hidden exact；
+- 0724 image pristine 与 current opt：8/8 step hidden exact；
+- 每一步 `hidden_finite=true`、`hidden_tp_spread=0.0`。
+
+因此，当前 Main opt 已证明与 **0724 镜像 pristine Main** 以及当前 baseline
+在本 canonical 8-step teacher-forced 输入链上逐字对齐。step2 的 7/8 报告
+是 stale oracle 问题：baseline、opt 和镜像 pristine 三者均实际得到
+`1207 -> 6127`，并非 opt regression。
+
+#### production sidecar opt wiring 设备验证
+
+已在 0162 使用同一固定镜像、同一 checkpoint、设备 `8..15`，对新独立
+快照
+`/mnt/persist/chensiyu/pypto_image_verify_20260726_ad478abb`
+做了 production sidecar 的最小真实设备验证：
+
+```text
+sidecar holder program: whole_decode_opt
+compile: OK
+AF_UNIX request: input token 6127 / valid_tokens=1
+response: next_hidden shape [1,4096]
+response program: whole_decode_opt
+hidden vs current opt Main step0: exact=True, max_abs_diff=0
+CPU tail token: 303
+dt_sec: 2.271489...
+```
+
+artifact：
+
+```text
+/tmp/pypto_sidecar_opt_ad478abb2/sidecar_opt_report.json
+```
+
+因此，`whole_decode_sidecar.py` 的 opt 选择已经不再只存在于 standalone
+`_stage_main_hidden_only` harness：`run_sidecar()` 和
+`run_combined_sidecar()` 都会转发显式的
+`--layer-module models.step3p5_opt.decode_fwd
+--layer-name whole_decode_opt`。未提供参数时仍构造 0724 canonical
+baseline；只提供其中一个参数会直接拒绝，避免静默回退或半配置。
+本次验证覆盖了 sidecar 的真实 compile、IPC attach、单次 dispatch 和
+socket 返回；没有把 0..7 上的 vLLM front 服务停掉，也没有宣称已完成
+独立的 live vLLM Main+MTP 全链路 A/B。
+
+### 8.4 MTP 回归与 oracle 代际边界
+
+使用 2026-07-18 的 pinned MTP oracle：
+
+```text
+/data/chensiyu/hw_project/pypto/workspace/logs_n1/
+live_mtp3_patch_ci4_inline_runtime_20260718_220645
+```
+
+当前 MTP 程序在 0724 runtime 下 active-batch=1 和 16 均通过：
+
+```text
+absolute layer 45/46/47:
+  hidden_pass_rate = 1.0
+  hidden_max_abs_diff = 0.0
+  hidden_tp_spread = 0.0
+  tokens = [6178, 410, 303]
+```
+
+对应 artifact：
+
+```text
+/tmp/pypto_regress_20260726_d4491b32/mtp_oracle_ab1
+/tmp/pypto_regress_20260726_d4491b32/mtp_oracle_ab16
+```
+
+这证明 `d4491b32` 的 MTP KV pool provenance 修复以及 MTP compile/dispatch
+路径有效。
+
+但旧 MTP oracle 的 previous hidden 来自旧 Main 代际，不能直接作为当前
+0724 image Main 的端到端 oracle。证据：
+
+```text
+old P42_nh_row0.pt row0 absmax = 612
+current 0724 Main step0 hidden absmax = 660
+max_abs_diff = 146
+mean_abs_diff = 11.060949325561523
+torch.equal = false
+```
+
+用当前 baseline step0 hidden 和当前 opt step0 hidden 分别喂入同一个临时
+diagnostic MTP wrapper（只跳过旧 hidden/token oracle 断言）时，三层 hidden
+仍然逐字相同，active-batch=1 的 token 也相同：
+
+```text
+baseline = opt:
+  MTP45 hidden exact, token 303
+  MTP46 hidden exact, token 303
+  MTP47 hidden exact, token 54107
+```
+
+仓内 CPU ctx=1 reference 也用当前 0724 Main step0 hidden 重新运行过：
+
+```text
+reference tokens: [303, 303, 42209]
+device baseline/opt tokens: [303, 303, 54107]
+
+MTP45: pass_rate=1.0, max_abs_diff=0.25
+MTP46: pass_rate=1.0, max_abs_diff=0.50
+MTP47: pass_rate=1.0, max_abs_diff=0.75
+```
+
+因此，当前 baseline/opt MTP 之间没有观察到差异，但 MTP 的**绝对精度/
+token 对齐仍未闭环**：旧 `[6178,410,303]` 是旧 Main 代际结果，CPU
+reference 与设备在第三层也存在 token 分歧。该 CPU reference 当前只能作
+诊断参考，不能替代同代 live vLLM A/B 或已验证的 device oracle。
+
+production sidecar wiring 已完成，但它是**显式 opt-in**，不是默认切换：
+生产启动时需要同时传：
+
+```bash
+python -m tools.step3p5.whole_decode_sidecar \
+  --serve-all \
+  ... \
+  --layer-module models.step3p5_opt.decode_fwd \
+  --layer-name whole_decode_opt
+```
+
+不传这两个参数时，sidecar 仍使用 0724 canonical baseline。这一设计保证
+当前版本可以在 production sidecar 中选择 opt，同时不改变已有
+`stepfun/develop` base 的默认启动语义。
+
+### 8.5 单测与最终判定
+
+相关合同/单测：
+
+```text
+23 passed, 1 skipped
+tests/step3p5/unit/test_mtp_layer_holder.py
+tests/step3p5/unit/test_main_hidden_only_contract.py
+tests/step3p5/unit/test_mtp_hidden_only_contract.py
+tests/step3p5/ci/test_whole_network_ci.py
+```
+
+最终判定：
+
+1. **当前 Main opt 可以在 0724 镜像中替代当前 baseline Main 的计算路径**：设备上
+   8-step 主 hidden 与逐层输出均 bit-exact，且直接与镜像 pristine Main
+   交叉核对通过。
+2. **当前版本不是“与 0724 镜像所有源码逐字一致”**：它是从
+   `fd26b1be` 演进出来的 opt overlay；runtime/toolchain 和公共 base
+   一致，差异文件仅限上述 10 个预期文件。
+3. **当前版本尚不能完全平替 `stepfun/develop` base 的 production
+   Main+MTP pipeline**：
+   - production sidecar 的 opt wiring 已完成并通过 0162 设备上的真实
+     compile/AF_UNIX 单请求验证，但默认仍是 baseline，尚未完成独立 live
+     vLLM front 接管验证；
+   - current Main→MTP 的绝对 token/hidden oracle 尚未同代闭环；
+   - 旧 MTP oracle 的 active-batch 1/16 通过，只能证明旧输入代际下的
+     MTP 程序和 IPC 路径可用。
+4. **可以确认的范围**：0724 runtime/toolchain provenance 正确；standalone
+   Main opt 与 0724 pristine Main、当前 baseline 均逐步/逐层 bit-exact；
+   current baseline/opt MTP A/B 也逐层 exact；production sidecar opt wiring
+   已完成。要达到“完全平替”，剩余关键工作是用同一 0724-derived Main
+   hidden 做同代 device oracle 或 live vLLM A/B，并闭环 MTP 第三层的
+   absolute token/hidden 判定。
