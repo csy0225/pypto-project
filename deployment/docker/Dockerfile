@@ -1,36 +1,24 @@
 # =============================================================================
 # vllm-pypto 可复现环境 (Ascend 910B / step3p5)
-# 基于 0162 验证过的环境 + stepfun/develop 分支 pins。
 #
-# base 镜像自带: CANN 8.5.1 + CANN 9.0.0-beta.1 + vLLM 0.19.0 + vllm-ascend
-#                + python3.11.14 (/usr/local/python3.11.14)。
-# 本 Dockerfile 在其上: 删 CANN 8.5.1 (只留 beta.1) -> clone pypto 栈 (pins)
-#                       -> ptoas-bin v0.45 -> 编译 pypto + runtime(a2a3)
-#                       -> 打 vLLM Track-B 补丁 -> 设 env。
-#
-# build: 见同目录 build.sh (用 docker buildx --secret 传 GH_TOKEN / GL_TOKEN)
+# 0724 blessed image 的固定环境 + canonical Step3p5 loop-form Main。
+# 构建规格由 builds/*.env 提供；所有仓 pin 都必须通过 build args 传入，
+# 禁止把可变的 stepfun/develop branch 当作 release source。
 # =============================================================================
 ARG BASE=hub.i.basemind.com/stepcast/stepcast:0.19.0-081dd47dd175-fbfe288fe1ee-2026.06.09-141938
 FROM ${BASE}
 
 SHELL ["/bin/bash", "-lc"]
 
-# ---- stepfun/develop pins (2026-07-23 验证) --------------------------------
-# pypto develop 8af501fc = 9ec303f6 + runtime submodule gitlink 回退到可编译的 36957c6b
-# (原 9ec303f6 gitlink 指向 c7fdc574, 其 Phase-24 import_ipc 半成品编译不过)。
-ARG PYPTO_COMMIT=8af501fc01c91d6f02da8e6a29ef7d73c8049082
-ARG PYPTO_LIB_COMMIT=4c48215b
-ARG PTO_ISA_COMMIT=ecb6c303
-ARG PTOAS_COMMIT=72ada0a1
-# simpler stepfun/develop 已回退到 36957c6b (proven-buildable, 0162 验证过的 .so 就是它)。
-# 原 c7fdc574 = 36957c6b + 9 WIP commit, 其中 Phase-24 import_ipc 半成品编译不过
-# (get_worker 笔误 + control_import_ipc 缺头声明; 该 facade 已被 Python 路径取代)。
-# 原 c7fdc574 保留在 simpler tag backup/stepfun-develop-c7fdc574-20260723。
-# pypto develop 8af501fc 的 runtime gitlink 已指向 36957c6b, submodule update 直接落对。
-ARG SIMPLER_COMMIT=36957c6b56700ecba3aeb8dbbedd6240594e01de
-ARG PTOAS_BIN_VER=v0.45
+# Release pins are overridden by the selected build spec.
+ARG PYPTO_COMMIT=ca21ab5fcfd8203165928428302d273c377db5c6
+ARG PYPTO_LIB_COMMIT=29547af6c3c5b7db2a75c1fd5e0110959d2a7624
+ARG PTO_ISA_COMMIT=ecb6c303f797749f811a494742c3c08156aacabb
+ARG PTOAS_COMMIT=fc8c6caee561914b4fb991dfc8427bb63194269e
+ARG SIMPLER_COMMIT=216e7632267ae815c484cdeba7991c87fabf3086
+ARG PTOAS_BIN_VER=v0.50
 ARG VLLM_PATCH_BRANCH=csy/pypto-tail-mtp-integration
-# github 不在内网直连,需经代理; 内网 (basemind.com: 镜像/pip/gitlab) 直连不走代理。
+ARG VLLM_PATCH_COMMIT=1b3e538c35999e62b6d24e0651b3a85b7d16c826
 ARG GH_PROXY=http://proxy.i.shaipower.com:3128
 ARG NO_PROXY_HOSTS=basemind.com,shaipower.com,shaipower,127.0.0.1,localhost,.svc
 
@@ -38,11 +26,13 @@ ENV WS=/workspace
 ENV PYTHON=/usr/local/python3.11.14/bin/python3
 ENV PIP="/usr/local/python3.11.14/bin/python3 -m pip"
 
-# ---- 1) 只保留 CANN 9.0.0-beta.1 (删 8.5.1, 避免干扰后续任务) --------------
+# Keep only the CANN release used by the 0724 image.
 RUN rm -rf /usr/local/Ascend/cann-8.5.1 && \
     ln -sfn /usr/local/Ascend/cann-9.0.0-beta.1 /usr/local/Ascend/cann
 
-# ---- 2) clone pypto 栈 @ stepfun/develop pins (github csy0225 forks) --------
+# Clone the complete stack and checkout immutable pins. pypto-lib and
+# vllm-pypto intentionally point at the same current replacement commit.
+# Scrub every credential-bearing clone URL before this layer is committed.
 WORKDIR ${WS}
 RUN --mount=type=secret,id=gh_token \
     export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
@@ -52,30 +42,34 @@ RUN --mount=type=secret,id=gh_token \
     done && \
     cd ${WS}/pypto && git checkout ${PYPTO_COMMIT} && \
       git config submodule.runtime.url "https://${GH}@github.com/csy0225/simpler.git" && \
-      git submodule update --init && \
-      ( cd runtime && git checkout ${SIMPLER_COMMIT} ) && \
-    cd ${WS}/pypto-lib && git fetch -q "https://${GH}@github.com/csy0225/pypto-lib.git" 'stepfun/develop:refs/heads/stepfun/develop' && git checkout stepfun/develop && \
-    cd ${WS}/pto-isa && git checkout ${PTO_ISA_COMMIT} && \
-    cd ${WS}/PTOAS && git checkout ${PTOAS_COMMIT} && \
-    ln -sfn ${WS}/pypto-lib ${WS}/vllm-pypto
+      git submodule update --init runtime && \
+      ( cd runtime && git fetch -q origin ${SIMPLER_COMMIT} && git checkout ${SIMPLER_COMMIT} ) && \
+    cd ${WS}/pypto-lib && git fetch -q "https://${GH}@github.com/csy0225/pypto-lib.git" ${PYPTO_LIB_COMMIT} && git checkout ${PYPTO_LIB_COMMIT} && \
+    cd ${WS}/pto-isa && git fetch -q "https://${GH}@github.com/csy0225/pto-isa.git" ${PTO_ISA_COMMIT} && git checkout ${PTO_ISA_COMMIT} && \
+    cd ${WS}/PTOAS && git fetch -q "https://${GH}@github.com/csy0225/PTOAS.git" ${PTOAS_COMMIT} && git checkout ${PTOAS_COMMIT} && \
+    ln -sfn ${WS}/pypto-lib ${WS}/vllm-pypto && \
+    git -C ${WS}/pypto config --local submodule.runtime.url "https://github.com/csy0225/simpler.git" && \
+    git -C ${WS}/pypto remote set-url origin "https://github.com/csy0225/pypto.git" && \
+    git -C ${WS}/pypto/runtime remote set-url origin "https://github.com/csy0225/simpler.git" && \
+    git -C ${WS}/pypto-lib remote set-url origin "https://github.com/csy0225/pypto-lib.git" && \
+    git -C ${WS}/pto-isa remote set-url origin "https://github.com/csy0225/pto-isa.git" && \
+    git -C ${WS}/PTOAS remote set-url origin "https://github.com/csy0225/PTOAS.git" && \
+    test "$(git -C ${WS}/pypto-lib rev-parse HEAD)" = "${PYPTO_LIB_COMMIT}" && \
+    test "$(git -C ${WS}/pypto/runtime rev-parse HEAD)" = "${SIMPLER_COMMIT}"
 
-# ---- 3) ptoas-bin v0.45 (从 0162 验证过的二进制 bake; fork 无 release asset) ---
-#     build.sh 从 $PTOAS_BIN_SRC ($WS/ptoas-bin/{bin,lib}) 打 ptoas-bin.tgz 进 context。
+# ptoas-bin is the v0.50 payload verified with the 0724 environment.
 COPY ptoas-bin.tgz /tmp/ptoas-bin.tgz
 RUN mkdir -p ${WS}/ptoas-bin && \
     tar xzf /tmp/ptoas-bin.tgz -C ${WS}/ptoas-bin && rm -f /tmp/ptoas-bin.tgz && \
     LD_LIBRARY_PATH=${WS}/ptoas-bin/lib ${WS}/ptoas-bin/bin/ptoas --version
 
-# ---- 4) 编译 pypto + runtime (CANN beta.1 env) -----------------------------
+# Build pypto and simpler runtime with the pinned CANN/toolchain.
 ENV PTO_ISA_ROOT=${WS}/pto-isa
 ENV PTOAS_ROOT=${WS}/ptoas-bin
 ENV LD_LIBRARY_PATH=${WS}/ptoas-bin/lib:${LD_LIBRARY_PATH}
 ENV PATH=${WS}/ptoas-bin/bin:${PATH}
-# pypto/runtime 用 scikit-build-core 后端; --no-build-isolation 不装后端,须先备好。
-# 限制编译并行度 (devbox dockerd 在 memcg 下, 17GB/5核; 模板重的 C++ 全并行会 OOM 打挂 dockerd)。
 ENV CMAKE_BUILD_PARALLEL_LEVEL=2
 ENV MAX_JOBS=2
-# 4a) 编译后端 + pypto (慢, ~14min; 单独一层, 改 runtime 步不重编 pypto)
 RUN source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
     export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
     git config --global http.version HTTP/1.1 && \
@@ -84,9 +78,6 @@ RUN source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
     ${PIP} install --no-cache-dir "cmake==3.31.6" \
         "scikit-build-core>=0.10.0" "nanobind>=2.0.0" "ninja>=1.11.0" && \
     ${PIP} install --no-cache-dir --no-build-isolation -e ${WS}/pypto
-
-# 4b) simpler runtime + build_runtimes(a2a3); build_runtimes 内部会 clone
-#     hw-native-sys/pto-isa 到 runtime/build/pto-isa(managed), 故需代理 + HTTP/1.1。
 RUN source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
     export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
     git config --global http.version HTTP/1.1 && \
@@ -95,21 +86,21 @@ RUN source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
     ${PIP} install --no-cache-dir --no-build-isolation -e ${WS}/pypto/runtime && \
     cd ${WS}/pypto && ${PYTHON} -m simpler_setup.build_runtimes --platforms a2a3
 
-# ---- 5) vLLM Track-B 补丁 (tail-only 主网 + MTP-proposer + MTP3 boot fix) ---
-#     从 gitlab 分支取 step3p5.py + step3p5_mtp.py 覆盖 base 的 /vllm-workspace/vllm
+# vLLM Track-B patch (tail-only Main + MTP proposer/boot fixes).
 RUN --mount=type=secret,id=gl_token \
     GL="$(cat /run/secrets/gl_token)" && \
     tmp=$(mktemp -d) && \
-    git -c http.version=HTTP/1.1 clone --depth 1 -b ${VLLM_PATCH_BRANCH} \
-      "https://oauth2:${GL}@gitlab.basemind.com/sys/stepcast/vllm.git" "$tmp/vllm" && \
+    git -c http.version=HTTP/1.1 init "$tmp/vllm" && \
+    git -C "$tmp/vllm" remote add origin \
+      "https://oauth2:${GL}@gitlab.basemind.com/sys/stepcast/vllm.git" && \
+    git -C "$tmp/vllm" -c http.version=HTTP/1.1 fetch --depth 1 origin ${VLLM_PATCH_COMMIT} && \
+    git -C "$tmp/vllm" checkout --detach ${VLLM_PATCH_COMMIT} && \
+    test "$(git -C "$tmp/vllm" rev-parse HEAD)" = "${VLLM_PATCH_COMMIT}" && \
     cp "$tmp/vllm/vllm/model_executor/models/step3p5.py"     /vllm-workspace/vllm/vllm/model_executor/models/step3p5.py && \
     cp "$tmp/vllm/vllm/model_executor/models/step3p5_mtp.py" /vllm-workspace/vllm/vllm/model_executor/models/step3p5_mtp.py && \
     rm -rf "$tmp"
 
-# ---- 6) 修 base 镜像 cann-8.5.1 残留 + runtime env --------------------------
-# base 镜像把 CANN 8.5.1 设为默认 (ENV + /etc/profile:29 都硬编码 cann-8.5.1)。
-# 删了 8.5.1 后这些悬空引用会让每个 bash 登录 shell 报错退出 (rc=1)。
-# 覆盖 baked 标量 ASCEND 环境 -> beta.1 (PATH/LD 里 8.5.1 死条目无害, 由 set_env 覆盖)。
+# Runtime environment and base-image CANN 8.5.1 cleanup.
 ENV ASCEND_TOOLKIT_HOME=/usr/local/Ascend/cann-9.0.0-beta.1 \
     ASCEND_HOME_PATH=/usr/local/Ascend/cann-9.0.0-beta.1 \
     ASCEND_AICPU_PATH=/usr/local/Ascend/cann-9.0.0-beta.1 \
@@ -117,8 +108,6 @@ ENV ASCEND_TOOLKIT_HOME=/usr/local/Ascend/cann-9.0.0-beta.1 \
     TOOLCHAIN_HOME=/usr/local/Ascend/cann-9.0.0-beta.1/toolkit
 ENV PYPTO_PROG_BUILD_DIR=/tmp/pypto_build_output
 ENV PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072
-# /etc/profile:29 hardcode 的 cann-8.5.1 set_env.sh -> beta.1 (beta.1 有同名文件),
-# 让登录 shell 不再因缺文件 abort; 然后写 pypto 专属 env (login shell 生效)。
 RUN ln -sfn bin/ptoas ${WS}/ptoas-bin/ptoas && \
     sed -i 's#/usr/local/Ascend/cann-8.5.1#/usr/local/Ascend/cann-9.0.0-beta.1#g' /etc/profile 2>/dev/null || true; \
     printf '%s\n' \
@@ -132,10 +121,6 @@ RUN ln -sfn bin/ptoas ${WS}/ptoas-bin/ptoas && \
   > /etc/profile.d/pypto-env.sh
 
 WORKDIR ${WS}
-# 冒烟脚本 bake 进镜像: nerdctl run ... bash -lc 'bash /workspace/pypto-smoke.sh'
 COPY pypto-smoke.sh /workspace/pypto-smoke.sh
-# base 镜像的 ENTRYPOINT 在 && 链里 hardcode source cann-8.5.1/.../ascendnpu-ir/set_env.sh,
-# 删了 8.5.1 后该 source 失败 -> && 链中断 -> exec "$@" 不执行 -> 容器 rc=1 起不来。
-# 覆盖为 beta.1 (有同名文件); 另两处 (ascend-toolkit/latest->cann->beta.1, nnal/atb) 本就 OK。
 ENTRYPOINT ["/bin/bash", "-c", "source /usr/local/Ascend/ascend-toolkit/set_env.sh && source /usr/local/Ascend/cann-9.0.0-beta.1/share/info/ascendnpu-ir/bin/set_env.sh && source /usr/local/Ascend/nnal/atb/set_env.sh && exec \"$@\"", "--"]
 CMD ["/bin/bash", "-l"]

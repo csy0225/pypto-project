@@ -238,7 +238,7 @@ swiglu 夹在 gate_up（up）与 down 之间：`x → gate_up → swiglu → h �
 
 ---
 
-## ⭐ 7. 2026-07-07（续接会话 team `vllm-pypto-e2e`）— stepfun/develop 全仓回归 PASS + 验证过的 commit + 仓库对齐确认 + monkey-patch 归属决策
+## ⭐ 7. 2026-07-07（历史记录）— stepfun/develop 全仓回归 PASS + 验证过的 commit + 仓库对齐确认 + monkey-patch 归属决策
 
 ### 7.1 验证过的 commit 组合（本次回归确认，全部已在 fork stepfun/develop）
 

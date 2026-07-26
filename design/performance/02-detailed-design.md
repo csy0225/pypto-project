@@ -3,7 +3,15 @@
 > 每个子任务一张卡片：问题（file:line 实证）/ **shape（step3p5 具体输入输出）** / **如何生效（用 shape 讲清搬了多少、算了多少、省了什么）** / 参考 / 改法 / 验证 / 落地边界。
 > HLD 见 [`01-system-design.md`](01-system-design.md)，状态见 [`task-tracking.md`](task-tracking.md)。
 >
-> 路径约定：`P/` = `pypto-lib/`（**最新 `stepfun/develop @ bc5eecb1`**，fork csy0225）；`REF/` = `origin/main:models/deepseek/v4-flash/`（`git show REF/<f>` 读取）。
+> **2026-07-26 active release override**：`P/` 当前必须读
+> `pypto-lib stepfun/develop@29547af6`。默认 Main 是
+> `P/models/step3p5/decode_fwd.py:whole_decode_step3p5`，0724 unroll
+> baseline 只通过 `--baseline-main` 显式回退。B2 已完成 N=256
+> canonical↔baseline token/hidden `256/256` exact；下方基于 `bc5eecb1`、
+> unroll/generator 的内容是设计起点和历史卡片，不是当前 base。
+>
+> 路径约定：`P/` = active `pypto-lib/`；`REF/` =
+> `origin/main:models/deepseek/v4-flash/`（`git show REF/<f>` 读取）。
 >
 > **⚠ 2026-07-24 base 校正（覆盖下方所有卡片的文件引用）**：LIVE 整网 = 手写维护的
 > **`P/models/step3p5/decode_layer_single_chip_hidden.py`**（hidden-only，45× unroll `whole_chip_orch`）。
@@ -11,8 +19,9 @@
 > `decode_fwd/mtp/step3p5_decode`、canonical §5 round-trip。**下方卡片里出现的 `decode_layer.py` /
 > `_gen_*` / `whole_decode_holder.py:183-228` / generator / round-trip / `3af13f4f` / `feat/whole-net-n1-fusion`
 > 一律改读 `decode_layer_single_chip_hidden.py` 对应结构**（file:line 见 [`task-tracking.md`](task-tracking.md) 各行「阻塞/备注」列）：
-> C1 窗口在 `whole_chip_orch` signature 4857-4914（16 MoE stack）+ per-layer slice 5066-5081…；
-> wait 在 701/737/798/1323/2316/2385/2486。对账：**A1/C2/B1/SwiGLU-per-layer 已交付**，B/C 剩 **C1 + B2**。
+> C1 窗口在历史 baseline 的 `whole_chip_orch` signature 4857-4914（16 MoE stack）+
+> per-layer slice 5066-5081…；wait 在 701/737/798/1323/2316/2385/2486。
+> 对账：**A1/C2/B1/SwiGLU-per-layer/B2 已交付**，B/C 剩余 P0 是 **C1**。
 
 ---
 
@@ -49,23 +58,66 @@
 
 ## Track B — Mega-kernel 结构
 
-### PERF-B1 · 权重 leading-dim stacking + `resident="stacked"`
-- **问题**：权重已 IPC 常驻（`P/tools/step3p5/whole_decode_holder.py:183-228`），但布局非 `[N_RANKS, L*dim, ...]`、未打 `resident="stacked"`，无法被 B2 的 `pl.slice` 层循环消费。
+### PERF-B1 · resident 权重池 + leading-dim zero-copy view ABI ✅ 已交付
+- **问题**：0724 baseline 的权重已经通过 consolidated IPC pool 常驻，并由
+  `build_stacked_weight()` 跨 rank 绑定；current B1 真正缺口不是“消除每步
+  全量 H2D”，而是 opt 需要从 canonical FULL/SWA 栈拿到连续的 MoE-only
+  bucket，且不能为此复制一套设备权重。
 - **shape**：MoE routed 权重 stacked 后 per-rank `moe_w_gate_r [8, 42, 36, 4096, 1280]`（`[N_RANKS, LAYER, N_LOCAL=36, HIDDEN, INTER]`）；attention `wq_full [8, 42, 4096, 1024]`；KV pool `k_cache [8, 45*KV_CACHE_ROWS, 128]`。层内取 `pl.slice(moe_w_gate_r[r], [36,4096,1280], [layer_idx*36, 0, 0])`。
-- **如何生效**：现状每次 forward 把 `≈47.6GB/rank` 权重从 host 端搬上卡（或经 IPC 但按非 stacked 布局逐张管理）。改成 `[N_RANKS, L*dim, ...]` + `resident="stacked"` 后，**每个 shard 上传一次**、跨所有 decode step 复用，省掉每 step 的 H2D；`pl.slice` 用 dynamic scalar `layer_idx` 在常驻大 buffer 内零拷贝取当前层。
+- **如何生效**：沿用原有“一次 import、跨 step resident”的 pool；
+  `Wsub()` 对每 rank 的 canonical `DeviceTensor` 做 outermost contiguous
+  slice（FULL slots `1:11`、SWA slots `2:32`），再构造成
+  `StackedDeviceTensor`。B2 的 dynamic `pl.slice(layer_idx)` 因而直接指向
+  原 pool 地址，不创建 opt 专用权重副本。
 - **参考**：`REF/decode_fwd.py:162-176`、`:1443-1450`、`REF/moe.py:928-945`。
 - **改法**：`P/models/step3p5/weight_loader.py` 按层型堆 `[N_RANKS, L*dim, tail]`；每权重 spec + KV pool 打 `resident="stacked"`；层内消费改 `pl.slice`。
-- **验证**：多步 L3（N=128 ≥95% vs vanilla）parity（布局改，数值不变）。
-- **边界**：可在现 unroll 结构下先落（B2 前独立价值）；`REF/decode_fwd.py:160-161` 警告 resident-stacked 目前 decode-world-only，需确认 runner 支持。
+- **改造前 → 当前实现**：
+  - 前：一次 IPC import、跨 step resident 已经存在；但只有 canonical
+    FULL `[12,...]` / SWA `[33,...]` 桶，opt 的 10/30 层 MoE attention bucket
+    没有可直接绑定的连续 ABI。
+  - 后：`Wsub()` 复用 canonical pool，FULL 取 `1:11`、SWA `2:32`；
+    每 rank 的子视图与跨 rank stacking 都是 zero-copy，dynamic `pl.slice`
+    再按 `layer_idx` 取当前层。
+- **收益**：为 B2 提供必要的 leading-dim ABI，同时避免单独 materialize
+  10 个 FULL + 30 个 SWA attention bucket。按当前 BF16 shape
+  （FULL 约 `18.125 MiB/layer`、SWA 约 `26.125 MiB/layer`）推导，
+  避免约 `965 MiB≈0.94 GiB/rank` 的额外设备副本。该数字是 shape 容量
+  对比，不是 H2D trace 或 latency A/B；0724 baseline 原本就没有
+  `24 GiB/rank/step` 的重复权重 H2D，不能把它写成本次收益。
+- **验证**：dynamic-offset `pl.slice` device probe 已通过；current N=256
+  replacement token/hidden `256/256` exact，证明 layout/offset 改造未引入数值回归。
+- **边界**：`resident=` IR 属性本身没有被当前 codegen 消费，收益来自 IPC
+  resident + stacked sub-view，不应把属性名当成独立优化。
 
-### PERF-B2 · 45 层 unroll → 单 `pl.range` 循环
-- **问题**：`P/tools/step3p5/_gen_faithful_real.py:1273-1326`（L0/L1/L2 直排）+ `:1337-1428`（42 MoE 逐层 emit）→ `decode_layer.py` 31,636 行、98 个 `*_chip_orch`。
+### PERF-B2 · 45 层 unroll → 单 `pl.range` 循环 ✅ 已交付
+- **问题**：`P/tools/step3p5/_gen_faithful_real.py:1273-1326`（L0/L1/L2 直排）+ `:1337-1428`（42 MoE 逐层 emit）→ historical `decode_layer.py` 约 31,686 行、98 个 `*_chip_orch`。
 - **shape**：循环体每层消费 hidden `[16,4096]` → 输出 hidden `[16,4096]`；层内从 stacked 权重（B1）`pl.slice` 出当层 shard（如 MoE `[36,4096,1280]`）；layer_idx 为 dynamic scalar。
-- **如何生效**：unroll 让编译器为 45 层各生成一份 kernel/依赖图 → IR 体量 ×45、AICPU 调度边 ×45。折成 `pl.range` 后**循环体只 codegen 一份**，layer_idx 动态切权重/窗口 → IR 崩塌到数百行、跨层复用 SSA buffer、调度边 ÷45。hidden `[16,4096]` 逐层串接不变，数值等价。
+- **如何生效**：unroll 在 Python/DSL 层重复描述各层的调用、切片和依赖；
+  折成 `pl.range` 后由一个 loop body 加 dynamic `layer_idx` 表达重复层，
+  hidden `[16,4096]` 的逐层串接和 per-layer communication stack 保持不变。
+  这直接减少源码/IR 描述重复，但在没有同环境 compiler trace 前，不把它
+  换算成“AICPU 调度边 ÷45”或编译耗时比例。
 - **参考**：`REF/decode_fwd.py:404-565`（`pl.range(HCA_NUM_LAYERS)` 循环体）。
 - **改法**：重写 `_gen_faithful_real.py::_host_orch`（`:1159`），按层型分桶（full-moe / swa-moe / dense）各一个 `pl.range`；首/尾特殊层保留显式。
-- **验证**：多步 L3（N=128 ≥95%）+ 逐层 detail compare（`ratio_allclose atol=0.04`）。
-- **边界**：**硬依赖 B1 + C1**；XL / 高风险；先 dense-only 循环验证再扩 MoE。
+- **改造前 → 当前实现**：
+  - 前：历史 `3af13f4f` faithful whole-net `models/step3p5/decode_layer.py`
+    为 `31,686` 行，45 层结构按 layer site 展开，MoE 主体重复 40 份。
+  - 后：canonical `models/step3p5/decode_fwd.py` 为 `4,775` 行；L0 显式，L1/L2
+    进入 `pl.range(2)`，L3-L42 进入 `pl.range(40)`，L43/L44 保留为必要的
+    activation specialization；动态 scalar 通过 `pl.slice` 选择当前层权重。
+- **收益**：主体源码体量约 **84.97% 减少**（`31,686→4,775`）；
+  MoE 主体 specialization 从 `40→1` 个 runtime loop body，减少重复 IR/
+  调度描述，并让编译器跨层复用 loop body。当前没有旧 31k implementation
+  与 opt 在同一环境重新编译的 wall-clock 对比，不能写成“编译耗时下降 X%”。
+- **精度/稳定性验证**：固定 0724 环境 N=256，canonical↔baseline
+  token/hidden `256/256` exact，rename 前后也为 `256/256` bit-exact，
+  `max_abs_diff=0`，TP spread `0.0`；canonical
+  step127/128/255 通过，0162 无 8-15 device residual process。
+- **raw 边界**：opt 和 baseline 对同一 vanilla oracle 都是
+  `240/256=93.75%`，低于历史 raw `>=95%` gate；baseline 完全复现，
+  所以 raw 差异不是 B2 引入，但不能写成 vanilla raw PASS。
+- **边界**：当前 B2 采用 per-layer window stack，**不包含 C1 单 window/
+  `moe_epoch`**；C1 仍是独立后续优化。
 
 ### PERF-B3 · KV pool `resident` + in-place
 - **问题**：KV 每 dispatch 可能重传（`P/models/step3p5/attention_full.py:183,211,218` consolidated multi-layer ABI）。
@@ -80,23 +132,40 @@
 
 ## Track C — MoE 通信协议
 
-### PERF-C1 · 单 window set + `moe_epoch` + `WaitCmp.Ge`（关键路径）
+### PERF-C1 · 单 window set + `moe_epoch` + `WaitCmp.Ge`（关键路径）⬜ 未交付
 - **问题**：`P/tools/step3p5/_gen_faithful_real.py:1342-1357` 每 MoE 层 16 个 `_L{pos}` 窗口 → 42 层 ≈ 672 窗口 / **≈766MB comm domain**。根因：RAW-only-v1 非别名（ADR-013），窗口无法跨层复用。
 - **shape**：一套窗口 = `recv_meta [8,36]` + `recv_x [1024,4096]`(8MB) + `recv_aux [1024,AUX]` + `recv_route [1024,IDX]` + `arrived/data_arrived/combine_arrived [8,1]` + `routed_y [128,4096]`(1MB)。现状 42 套并存；目标 1 套。
 - **如何生效**：现状把每层的 `recv_x [1024,4096]` 等都独立开一份 → 766MB 常驻、编译期窗口记账爆。改成**1 套复用**：每层 MoE 调用传单调 `moe_epoch`（1→42），wait 用 `WaitCmp.Ge` 对 AtomicAdd 计数器（`arrived[src] >= moe_epoch`、`data_arrived[src] >= moe_epoch*36`）→ 上一层的 notify 只把计数器抬高，本层的 `Ge` 仍判 done，**天然跨层排序**、同一 `recv_x [1024,4096]` 安全复用 42 次。comm domain 从 766MB → 十几 MB。
 - **参考**：`REF/moe.py:120-175`（`dispatch_meta` notify `arrived`）、`:178-235`（`dispatch_push` notify `data_arrived`）、`:238-248`（anchored `dispatch_wait`）、`REF/decode_fwd.py:758-769`（一次性 8 窗口）、`:377,402,495,564,654`（`moe_epoch` 递增）。
 - **改法**：host 侧一次性 `pld.alloc_window_buffer` 8 个；每次 MoE 传 `moe_epoch`；wait 改 `Ge`（禁 `Set/Eq`）；`dispatch_wait` anchored（`_idx_anchor = pl.read(indices,[0,0])`）。
 - **验证**：6 轮 RUN_CLEAN 稳定（liveness，`_probe_barrier_scale.py`）+ 多步 L3 精度不回退。
-- **边界**：**B2 的硬前置**；修 whole-net no-drain stall（memory `n1_wholenet_stall_singleprogram_nodrain`）。
+- **边界**：这是原目标架构中 B2 的前置假设；current B2 已通过继续使用
+  per-layer communication stack 绕开该依赖。C1 现在是独立的窗口/HBM
+  优化，不能因其未完成而回退 B2 的完成状态。
 
-### PERF-C2 · dispatch push → pull（fixed-slot）
+> **当前状态澄清**：上述 `766MB→十几 MB` 是 C1 设计目标，不是当前
+> `29547af6` release 的收益。当前 B2 仍使用 `NUM_MOE_LAYERS_TOTAL` leading
+> offset 的 per-layer communication stacks。
+
+### PERF-C2 · dispatch push → pull（fixed-slot）✅ 已交付
 - **问题**：`P/models/step3p5/dispatch.py:252-310` push `remote_store` scatter = A2 随机 507018 stall（跨 die 写完成竞争，memory `n1_a2_primitive_exists_not_missing`）。
 - **shape**：每 token 选 `TOP_K=8` 专家 → 每 rank 最多发 `BATCH*TOP_K=128` 条 `[1,4096]` 路由；接收端 `recv_x [1024,4096]`（`LOCAL_RECV_MAX=1024 = 8 rank × 128`）。
 - **如何生效**：push 让每个源 rank 主动 `remote_store` 到目标 rank 的 `recv_x` 槽 → 跨 die 写完成顺序不确定，随机 stall。改 **fixed-slot pull**：目标 rank 按固定槽公式 `my_rank*MAX`/`peer*MAX` 主动拉，写完成由本地掌控 → 消除跨 die 写竞争。数据量不变（同样 128 条 `[1,4096]`/rank），只换发起方。
 - **参考**：`REF/moe.py` dispatch + device-validated `P/models/step3p5/moe.py` 的 `ep_all_to_all` fixed-slot pull。
 - **改法**（memory `n1_pull_dispatch_must_align_moepy_fixedslot`）：pack fixed-slot → AtomicAdd barrier → static `pl.range(T*TOPK)` a2a → LOCAL re-pack；**combine 保持 push**（combine push = jitter 非 stall）。
-- **验证**：6 轮 0 stall（`RUN_CLEAN`/探针，liveness）+ 多步 L3 精度不回退。
-- **边界**：C1 之后；不可只改 barrier 语义（Set-alone 不是 fix）。
+- **改造前 → 当前实现**：
+  - 前：dispatch 由源 rank 对目标 rank 做 `remote_store`/push，写完成跨 die
+    可见性和竞争顺序不稳定；combine 也存在 push 回写路径。
+  - 后：dispatch 改成 fixed-slot peer-major layout，由目标 rank 按对称槽位
+    `remote_load`/pull；combine 采用固定槽位 pull-back；本地 self-bucket
+    与 peer pull 分开，完成顺序由 consumer 本地控制。
+- **收益**：消除 push dispatch 的随机 stall/`507018` 风险路径，提升
+  liveness 可重复性；通信字节数不变，不能宣称带宽或理论通信量下降。
+- **验证**：当前 N=256 256-step regression 无 stall，hidden finite 全部为真，
+  TP spread `0.0`；历史 device canonical pull path 已通过。精度与 B2
+  replacement gate 同时保持 exact。
+- **边界**：C2 不等于 C1；当前仍是 per-layer windows，C1 epoch/window
+  reuse 需单独实现和回归。
 
 ### PERF-C3 · peer loop `pl.range(N_RANKS)` → `pl.spmd`/`pl.parallel`
 - **问题**：`P/models/step3p5/dispatch.py:159,181,210,286,297,322` + `combine.py:182,209,216,225` 全顺序 barrier。

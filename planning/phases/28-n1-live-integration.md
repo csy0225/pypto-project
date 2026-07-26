@@ -1,5 +1,31 @@
 # Phase 28 — N=1 整网 → vLLM live single-handoff 集成
 
+> **2026-07-26 current-release override（优先于下方 2026-07-15/18 历史正文）**
+>
+> 当前 active release 为：
+>
+> ```text
+> pypto-lib / vllm-pypto 29547af6 (stepfun/develop)
+> pypto                    ca21ab5f
+> simpler/runtime          216e7632
+> pto-isa                  ecb6c303
+> PTOAS                    fc8c6cae
+> ptoas                    0.50
+> default Main             models.step3p5.decode_fwd:whole_decode_step3p5
+> ```
+>
+> 当前已完成的是 **Main replacement release**：固定 0724 环境 N=256，
+> canonical↔baseline token/hidden `256/256` exact、`max_abs_diff=0`、TP spread
+> `0.0`；同一 vanilla oracle 对两者均为 `240/256=93.75%`，低于历史
+> raw `>=95%` gate。因此 replacement regression PASS，但 vanilla raw gate
+> 未通过。
+>
+> 本 phase 尚未关闭：独立 live vLLM front 接管、live paged-KV bridge /
+> dynamic batch、同代 Main→MTP absolute oracle、3-way HBM/redundant weights
+> 均待闭环。下方 `3af13f4f`、`e49ce111`、`0e7a0fdd`、旧 generator /
+> `whole_decode_faithful_real` 内容只作为历史设计背景，不得作为当前 checkout、
+> 构建 pin 或“完整 serving 已平替”的证据。
+>
 > 承 Phase 27（N=1 整网融合 `whole_decode_faithful_real`，分支
 > `feat/whole-net-n1-fusion`，最终 standalone release 在机器 0162）。本 phase 把已
 > canonical 20/20、每次 `argmax=303` 的 N=1
@@ -26,7 +52,9 @@
 ## Goal
 
 真实 vLLM 请求的 decode step 走 pypto N=1 whole-net（token-exact vs vanilla 8000）。
-准出 = live A/B **L3 greedy top-1 ≥ 95%**（L1 hidden atol=0.04 / L2 cos≥0.999 辅证）。
+最终准出 = live A/B **L3 greedy top-1 ≥ 95%**（L1 hidden atol=0.04 /
+L2 cos≥0.999 辅证）+ 同代 MTP absolute gate + HBM/KV bridge 闭环。
+当前 Main replacement exact 只是其中一个已完成子 gate。
 
 ## 架构（live single-handoff）
 
@@ -59,10 +87,11 @@ vLLM(8001, mode=full, enforce_eager)          pypto sidecar (co-resident, cards 
 
 ## Stage 4 设计 — per-layer KV + KV-bridge（下 session 执行；先设计）
 
-**根因边界（本 session 读码坐实）**：`whole_decode_faithful_real` 现在 **45 层共享 ONE
-`k_cache/v_cache [KV_CACHE_ROWS_DYN=4096, HEAD_DIM] bf16`** → ctx=1-only（每层对自身
-position-0 K/V 自注意力，无 history；argmax==303 数值成立）。real multi-token decode 须
-per-layer KV + 导入 vLLM 已 prefill 的 KV。
+**历史根因边界（2026-07-15）**：当时的 `whole_decode_faithful_real` 是 **45 层共享 ONE
+`k_cache/v_cache [KV_CACHE_ROWS_DYN=4096, HEAD_DIM] bf16`**，只覆盖 ctx=1。
+当前 standalone/hidden-only release 已有 resident per-layer KV 并完成多步回归；
+**仍未完成的是从真实 live vLLM paged KV pool 导入 per-layer slice，并接动态
+`block_table/slot_mapping/seq_lens`**。下方设计按该 live 缺口阅读。
 
 **设计决策**：
 1. **KV 来源 = vLLM prefill 的 paged KV（IPC 导入，非 pypto 自算 prefill）**：vLLM 做

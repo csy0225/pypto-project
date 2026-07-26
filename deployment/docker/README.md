@@ -1,6 +1,6 @@
 # vllm-pypto 可复现镜像 — 构建 / 部署 / 验证
 
-基于 0162 验证过的环境 + `stepfun/develop` 分支,做成一个自包含、可复现的
+基于 0162 验证过的 0724 环境 + immutable repository pins,做成一个自包含、可复现的
 vllm + pypto 集成镜像。**构建于 devbox(有 docker),部署验证在 0162(NPU 机, 只有
 containerd/nerdctl)。**
 
@@ -13,8 +13,8 @@ containerd/nerdctl)。**
 - 本镜像在其上:
   1. **删 CANN 8.5.1**,只留 `cann-9.0.0-beta.1`;并修好 base 把 8.5.1 设成默认后留下的悬空引用
      (ENTRYPOINT / `/etc/profile` / ENV 里 hardcode 的 `cann-8.5.1` → `beta.1`,见 §7)
-  2. clone pypto 栈到 `/workspace`,切到验证过的可编译 pin(下表)
-  3. `ptoas-bin v0.45`(含 `$PTOAS_ROOT/ptoas` 顶层符号链接 → `bin/ptoas`,codegen 需要)
+  2. clone pypto 栈到 `/workspace`,切到 immutable release pin(下表)
+  3. `ptoas-bin v0.50`(含 `$PTOAS_ROOT/ptoas` 顶层符号链接 → `bin/ptoas`,codegen 需要)
   4. 编译 `pypto` + `runtime`(`build_runtimes --platforms a2a3`)
   5. **vLLM Track-B 补丁**:`step3p5.py`(tail-only 主网 + `PyPtoMetadataOnlyStep3p5DecoderLayer`)+
      `step3p5_mtp.py`(MTP-proposer 挂点 + MTP3 `hf_overrides` boot fix),来自 gitlab
@@ -24,14 +24,27 @@ containerd/nerdctl)。**
 
 | 仓库 | pin | 说明 |
 |------|-----|------|
-| pypto | `8af501fc` | = stepfun/develop `9ec303f6` + runtime submodule gitlink 回退到 `36957c6b` |
-| pypto-lib | `4c48215b` | stepfun/develop |
-| pto-isa | `ecb6c303` | stepfun/develop(本会话 FF-push 对齐) |
-| PTOAS(src) | `72ada0a1` | stepfun/develop(本会话 FF-push 对齐) |
-| simpler(pypto/runtime submodule) | `36957c6b` | **可编译**版;develop tip `c7fdc574` 的 Phase-24 import_ipc 半成品编译不过(见 §7),已回退 |
-| ptoas-bin | `v0.45` | 二进制 |
+| pypto | `ca21ab5f` | 0724 镜像 pin |
+| pypto-lib | `29547af6` | 当前 B2 loop-form replacement |
+| pto-isa | `ecb6c303` | 0724 镜像 pin |
+| PTOAS(src) | `fc8c6cae` | 0724 镜像 pin |
+| simpler(pypto/runtime submodule) | `216e7632` | 0724 镜像 pin，含 IPC child-region provenance 修复 |
+| ptoas-bin | `v0.50` | 0724 验证二进制 |
 
-> **镜像 tag**: `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260723`
+> **新镜像 tag**: `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5`
+>
+> **新镜像 digest**: `sha256:f58708d2c6cc60474fa98da38aef23a128b850173e4bf5ab6336590b83e2afbc`
+>
+> **image config**: `sha256:a9d4c288b0aeb15d912724d6df717ffac37a27f6826ac33ec864ecf775104ca3`
+>
+> **安全说明**：最终镜像已在 0162 验证 immutable pins、Git credential
+> audit、canonical/shim import identity 和 smoke。旧 digest
+> `sha256:285514c1…` 的源码 checkout
+> `.git/config` 中保留了 credential-bearing clone URL，已废弃。当前 digest
+> 已将 GitHub remote/submodule URL scrub 为无凭据公开 URL，并在 0162
+> 验证 `IMAGE_GIT_CREDENTIAL_AUDIT=PASS`。
+>
+> **0724 base digest**: `sha256:2b0dc4612796a34bea6720ccb4bf8fa3af4ea406cdd0f12add34586ca860d7e0`
 
 ---
 
@@ -41,8 +54,8 @@ containerd/nerdctl)。**
 cd deployment/docker
 # 每次构建的 pins+tag 在一个 spec 文件里(builds/<tag>.env),配方共用单一 Dockerfile。
 GH=/data/chensiyu/secrets/github.env GL=/data/chensiyu/secrets/gitlab.env \
-  bash build.sh builds/stepfun-develop-20260723.env
-docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260723
+bash build.sh builds/stepfun-develop-20260726-step3p5.env
+docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5
 ```
 
 - `build.sh <spec>` 读 spec 里的 pins,以 `--build-arg` 传进 Dockerfile,`-t` 用 `IMAGE_TAG`。
@@ -66,7 +79,7 @@ docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260723
 
 ```bash
 NC=/mnt/persist/k8s-install/containerd/bin/nerdctl
-IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260723
+IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5
 CKPT=/data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp   # W8A8 ckpt
 
 # 拉取(base blob 已在 containerd content store, 只下增量)
@@ -107,10 +120,10 @@ sudo $NC run --rm --net host --security-opt apparmor=unconfined \
   "$IMG" bash -lc 'bash /workspace/pypto-smoke.sh'
 ```
 
-**期望输出**(2026-07-23 0162 实测):
+**期望输出**(0724-derived v0.50 environment):
 
 ```
-[smoke] ptoas   : ptoas 0.45
+[smoke] ptoas   : ptoas 0.50
 [smoke] pypto   : 0.1.0
 [smoke] simpler : OK
 [smoke] runtime : /workspace/pypto/runtime/build/lib/a2a3/dispatcher/libsimpler_aicpu_dispatcher.so
@@ -152,9 +165,26 @@ vanilla vLLM 逐 token 对齐,精度正常。**
 > → 返回 **"北京"(token 6127)**,与 pypto 一致。即 FAIL 是 stale-oracle,不是精度问题。
 > 真正的门禁是下面的 live A/B。
 
-**live 逐 token A/B(≥95% 门禁, 替代 stale 常量)**:`tests/step3p5/ci/run_live_precision_ab.sh`
-(见 `tests/step3p5/ci/LIVE_PRECISION_AB.md`;bare-metal 已验证 124/128=96.9%)。两段式:
+**live 逐 token A/B(历史 vanilla raw ≥95% 门禁, 替代 stale 常量)**:`tests/step3p5/ci/run_live_precision_ab.sh`
+(见 `tests/step3p5/ci/LIVE_PRECISION_AB.md`)。两段式:
 oracle-gen 在 vanilla 容器里跑(pypto `.venv311` 无 transformers),pypto teacher-forced 在本镜像跑。
+
+### 5.1 当前 B2 的 256-step 判定
+
+0162 在固定 0724 镜像、相同 checkpoint、vanilla cards 0-7 和 current
+cards 8-15 上完成了 `N=256` teacher-forced A/B：
+
+| 指标 | 结果 |
+|------|------|
+| opt vs baseline token | `256/256` exact |
+| opt vs baseline hidden | `256/256` exact |
+| opt/baseline max hidden diff | `0.0` |
+| opt/baseline TP spread | `0.0` |
+| 两者对同一 vanilla oracle | 各 `240/256 = 93.75%` |
+
+因此 **B2 replacement regression 通过**，但历史 vanilla raw `>=95%`
+门禁仍未通过；不得把 `93.75%` 写成无条件 vanilla precision PASS。
+这两个 gate 必须在发布报告中分开。
 
 ---
 
@@ -189,8 +219,7 @@ prefill 即可测大 context 的稳态 ITL;**KV-IPC 全程开启**(holder `kv_ip
 在 `--num-blocks 512` 下可寻址到 512 块 → 64k),所以 attention 真实遍历 64k KV。
 
 ```bash
-# 已发布镜像 stepfun-develop-20260723 bake 的是 pypto-lib 4c48215b(无此 harness);
-# 用 -v 挂载新 harness, 或用带 7cb2a6b3 的新 build。
+# 当前镜像 bake 的 pypto-lib `29547af6` 已包含 ITL harness。
 sudo $NC run --rm --net host --ipc host --privileged --security-opt apparmor=unconfined \
   $DEVS --device /dev/davinci_manager --device /dev/hisi_hdc --device /dev/devmm_svm \
   -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro -v "$CKPT":"$CKPT":ro \
@@ -257,7 +286,7 @@ deployment/docker/
 ├── build.sh            # bash build.sh builds/<spec>.env → 读 spec 传 --build-arg + tag
 ├── pypto-smoke.sh      # bake 进镜像 /workspace/pypto-smoke.sh
 ├── builds/             # 每次镜像构建一个 spec(pins + IMAGE_TAG)
-│   └── stepfun-develop-20260723.env
+│   └── stepfun-develop-20260726-step3p5.env
 ├── README.md           # 本文档 + 下方「构建登记表」
 ├── .dockerignore / .gitignore
 └── (ptoas-bin.tgz / build_*.log 由 build.sh 生成, gitignored)
@@ -265,7 +294,7 @@ deployment/docker/
 
 **加一个新 build**(例:新 pypto commit):
 
-1. `cp builds/stepfun-develop-20260723.env builds/<新tag>.env`,改 `IMAGE_TAG` + 变动的 `*_COMMIT`。
+1. `cp builds/stepfun-develop-20260726-step3p5.env builds/<新tag>.env`,改 `IMAGE_TAG` + 变动的 `*_COMMIT`。
 2. `bash build.sh builds/<新tag>.env && docker push hub.i.basemind.com/stepcast/vllm-pypto:<新tag>`。
 3. 在下方**构建登记表**加一行(tag / 日期 / pins 摘要 / 验证状态)。
 4. Dockerfile **不动**(除非配方本身要改,如新踩坑修复——那属于所有 build 共享的配方演进)。
@@ -278,6 +307,7 @@ deployment/docker/
 |-----------|------|----------------------------------------------------------|-------------|
 | `stepfun-develop-20260723` | 2026-07-23 | `8af501fc` / `4c48215b` / `ecb6c303` / `72ada0a1` / `36957c6b` / `v0.45` | 冒烟 PASS + 整网 decode `6127→303` / step2→`6127`(与 vanilla 逐 token 一致)✅ |
 | `stepfun-develop-20260724` | 2026-07-24 | `ca21ab5f` / `fd26b1be` / `ecb6c303` / `fc8c6cae` / `216e7632` / `v0.50` | 合并 origin/main + IPC 权重 interior 指针 provenance 修复（解 `submit_next_level child_memory` 卡点）。冒烟 PASS(ptoas 0.50) + 整网 8 步 decode `6127→303→1207→6127`(与 live vanilla 逐 token 一致)✅ |
+| `stepfun-develop-20260726-step3p5` | 2026-07-26 | `ca21ab5f` / `29547af6` / `ecb6c303` / `fc8c6cae` / `216e7632` / `v0.50` | registry digest `sha256:f58708d2…`（config `sha256:a9d4c288…`）；0162 credential audit + canonical/shim identity + smoke PASS；默认 program=`whole_decode_step3p5`；新镜像 N=256 raw `240/256=93.75%`，与既有 canonical token/hidden `256/256` exact、`max_abs_diff=0`、TP spread `0`，step127/128/255 PASS |
 
 ## Pin 依据
 

@@ -1,5 +1,14 @@
 # step3p5_opt B2 loop-form — 交接文档（2026-07-25，后续改造完成）
 
+> **CURRENT OVERRIDE（2026-07-26）**：本文前半部分保留的是定位过程和
+> rename 前历史命令，不再作为当前 source of truth。当前 canonical 实现是
+> `models.step3p5.decode_fwd:whole_decode_step3p5`，
+> `step3p5_opt` 仅保留 compatibility shim；fork
+> `stepfun/develop@29547af6`，发布镜像
+> `stepfun-develop-20260726-step3p5@sha256:f58708d2…`。当前操作入口、pin 和
+> 未关闭边界以本文 §8.9、`STATUS.md`、`planning/handoff.md` 和
+> `deployment/version-matrix.md` 为准。
+
 > 承接 `2026-07-25-loop-form-status-and-507018-diagnosis.md`（那份覆盖 507018 环境问题 + B2 loop-form 结构）。
 > **本份覆盖：环境已解、TP bug 已修、L03 accuracy 分叉已修复，以及 0162
 > 镜像设备上的最终回归结果。**
@@ -237,9 +246,9 @@ NEW=/mnt/persist/chensiyu/perf-opt-ws   # 0162 device 用的 checkout（team-lea
 
 ### 8.1 最终代码状态
 
-- 设备回归使用的本地 checkout：`/data/chensiyu/hw_project/pypto/workspace/pypto-lib-perf2`
+- 当前 active checkout：`/data/chensiyu/hw_project/pypto/workspace/vllm-pypto`
 - 分支：`perf/step3p5-bc-v2`
-- 最终 HEAD：`ad478abb`
+- 最终 HEAD：`703739fb`
   - `d4491b32`：为 MTP KV IPC import 增加 `region_bytes`，修复 0724
     runtime 的 child-pointer provenance dispatch failure；
   - `0e85777c`：更新过时的 hidden-only contract 单测，使其接受正式的
@@ -249,8 +258,12 @@ NEW=/mnt/persist/chensiyu/perf-opt-ws   # 0162 device 用的 checkout（team-lea
   - `09897feb`：修正 whole-sidecar MTP protocol selftest 的 position/slot
     夹具，生产 slot 公式未改变。
   - `ad478abb`：为 production `whole_decode_sidecar.py` 增加显式 Main
-    `--layer-module/--layer-name` wiring；默认仍使用 0724 canonical
-    baseline，opt 只有在两个参数同时给出时才启用。
+    `--layer-module/--layer-name` wiring；这是 256-step 与 sidecar 设备回归
+    实际使用的 commit；
+  - `703739fb`：不改变已验证的 opt 数学实现，将
+    `models.step3p5_opt.decode_fwd:whole_decode_opt` 设为 harness/production
+    sidecar 的 release 默认；只有显式 `--baseline-main` 才回退到 0724
+    canonical baseline。
 - 当前工作树 clean；临时 `diagnostic-no-oracle` MTP wrapper 未进入代码仓。
 
 ### 8.2 与 0724 镜像的严格边界
@@ -387,10 +400,12 @@ artifact：
 
 因此，`whole_decode_sidecar.py` 的 opt 选择已经不再只存在于 standalone
 `_stage_main_hidden_only` harness：`run_sidecar()` 和
-`run_combined_sidecar()` 都会转发显式的
+`run_combined_sidecar()` 都能构造并执行 loop-form Main。该设备证据产生于
+`ad478abb` 的显式
 `--layer-module models.step3p5_opt.decode_fwd
---layer-name whole_decode_opt`。未提供参数时仍构造 0724 canonical
-baseline；只提供其中一个参数会直接拒绝，避免静默回退或半配置。
+--layer-name whole_decode_opt`；最终 `703739fb` 将同一实现设为默认，
+`--baseline-main` 才回退到 0724 baseline。只提供自定义 module/name 的
+其中一个仍会直接拒绝，避免半配置。
 本次验证覆盖了 sidecar 的真实 compile、IPC attach、单次 dispatch 和
 socket 返回；没有把 0..7 上的 vLLM front 服务停掉，也没有宣称已完成
 独立的 live vLLM Main+MTP 全链路 A/B。
@@ -462,20 +477,17 @@ token 对齐仍未闭环**：旧 `[6178,410,303]` 是旧 Main 代际结果，CPU
 reference 与设备在第三层也存在 token 分歧。该 CPU reference 当前只能作
 诊断参考，不能替代同代 live vLLM A/B 或已验证的 device oracle。
 
-production sidecar wiring 已完成，但它是**显式 opt-in**，不是默认切换：
-生产启动时需要同时传：
+production sidecar wiring 已完成，最终 `703739fb` 已把 opt 设为默认。正常
+生产启动不再需要 Main 选择参数：
 
 ```bash
 python -m tools.step3p5.whole_decode_sidecar \
   --serve-all \
-  ... \
-  --layer-module models.step3p5_opt.decode_fwd \
-  --layer-name whole_decode_opt
+  ...
 ```
 
-不传这两个参数时，sidecar 仍使用 0724 canonical baseline。这一设计保证
-当前版本可以在 production sidecar 中选择 opt，同时不改变已有
-`stepfun/develop` base 的默认启动语义。
+需要 rollback 时显式增加 `--baseline-main`。`--layer-module/--layer-name`
+仍保留给成对指定其他自定义 Main，不能与 `--baseline-main` 同时使用。
 
 ### 8.5 单测与最终判定
 
@@ -500,14 +512,212 @@ tests/step3p5/ci/test_whole_network_ci.py
 3. **当前版本尚不能完全平替 `stepfun/develop` base 的 production
    Main+MTP pipeline**：
    - production sidecar 的 opt wiring 已完成并通过 0162 设备上的真实
-     compile/AF_UNIX 单请求验证，但默认仍是 baseline，尚未完成独立 live
-     vLLM front 接管验证；
+     compile/AF_UNIX 单请求验证；`703739fb` 已将同一 opt 设为默认，但尚未
+     完成独立 live vLLM front 接管验证；
    - current Main→MTP 的绝对 token/hidden oracle 尚未同代闭环；
    - 旧 MTP oracle 的 active-batch 1/16 通过，只能证明旧输入代际下的
      MTP 程序和 IPC 路径可用。
 4. **可以确认的范围**：0724 runtime/toolchain provenance 正确；standalone
    Main opt 与 0724 pristine Main、当前 baseline 均逐步/逐层 bit-exact；
    current baseline/opt MTP A/B 也逐层 exact；production sidecar opt wiring
-   已完成。要达到“完全平替”，剩余关键工作是用同一 0724-derived Main
-   hidden 做同代 device oracle 或 live vLLM A/B，并闭环 MTP 第三层的
-   absolute token/hidden 判定。
+   已完成。要达到“完全平替”仍需同代 MTP absolute oracle 和独立 live vLLM
+   front 接管验证；本次 replacement regression 不应被描述为完整
+   `stepfun/develop` Main+MTP serving 已完成。
+
+### 8.6 2026-07-26：256-step vLLM A/B 与发布收口
+
+在上述单步、8-step、0724 provenance 和 sidecar 设备验证之后，使用固定
+0724 镜像在 0162 做了用户指定的 **256-step vLLM 长序列回归**：
+
+```text
+image:  hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260724
+digest: sha256:2b0dc4612796a34bea6720ccb4bf8fa3af4ea406cdd0f12add34586ca860d7e0
+seed:   6127
+steps:  256
+oracle: vanilla vLLM cards 0-7
+baseline/opt: current code cards 8-15, teacher-forced
+```
+
+严格区分两条结论：
+
+| gate | 结果 | 发布口径 |
+|------|------|----------|
+| vanilla raw alignment | opt `240/256=93.75%`；baseline `240/256=93.75%` | 旧 `>=95%` raw gate 未通过 |
+| opt replacement equivalence | token `256/256` exact；hidden `256/256` exact；`max_abs_diff=0`；TP spread `0.0` | **通过，可作为 replacement regression PASS** |
+
+opt 与 baseline 在 256 步每一步 token 完全相同、hidden 逐字节相同；
+`step127`、`step128` 跨 KV block 边界和 `step255` 均通过。raw miss 为：
+
+```text
+2, 20, 49, 52, 57, 62, 125, 131,
+151, 153, 161, 162, 187, 221, 231, 252
+```
+
+同一显式上下文下对 vanilla miss 重查，观察到 fresh top-1 切换和近似
+tie；同时 baseline 完全复现 240/256。因此 `93.75%` 是当前 vanilla
+raw oracle 结果，不能被写成无条件 vanilla precision PASS，也不能归因
+为 opt regression。
+
+回归产物：
+
+```text
+0162:/tmp/live_ab_opt_ad478abb_n256_20260726/raw_alignment_summary.json
+0162:/tmp/live_ab_opt_ad478abb_n256_20260726/baseline_opt_n256_compare.json
+0162:/tmp/live_ab_opt_ad478abb_n256_20260726/vanilla_miss_requery.json
+```
+
+上述 device artifact 绑定 `ad478abb`；最终 `703739fb` 只改变默认入口和对应
+合同/文档，没有改变 `whole_decode_opt` 的程序实现。新镜像需再验证无显式
+Main 参数时实际选择 opt，以及 `--baseline-main` rollback 合同。
+
+### 8.7 2026-07-26 新镜像发布与默认入口复验
+
+最终镜像已构建并推送：
+
+```text
+image:  hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-opt-b2
+digest: sha256:0b22fcef3477488b82e7c8b6fd72341b55102605563faa093d911fa238830270
+config: sha256:3792c1b6496092f04a73c6ef13db3d7dadc063afe15a1822c66df8ddd7e941e4
+```
+
+0162 静态验证：
+
+```text
+pypto-lib / vllm-pypto = 703739fb
+pypto                    = ca21ab5f
+simpler                  = 216e7632
+pto-isa                  = ecb6c303
+PTOAS                    = fc8c6cae
+ptoas                    = 0.50
+ptoas ldd not found      = 0
+pypto-smoke              = PASS
+image git credential audit = PASS
+```
+
+设备 8–15 上：
+
+- 不传 Main 选择参数时实际打印
+  `program=whole_decode_opt`；
+- `--baseline-main` 实际打印
+  `program=whole_decode_faithful_real_single_chip_hidden_only`；
+- 两者在内置 8-step teacher-forced 链上均为 7/8，仅 step 2 命中已知
+  stale oracle，输出均为 `6127`；
+- 新镜像默认 opt 完整 N=256 为 `240/256=93.75%` raw；
+- 新镜像默认 opt 与此前 `ad478abb` current baseline：
+  token chain `256/256` exact，hidden `256/256` exact，
+  `max_abs_diff=0`，TP spread `0.0`；
+- `step127`、`step128`、`step255` 均通过。
+
+新镜像默认入口 artifact：
+
+```text
+0162:/tmp/image_verify_20260726_0b22fcef_n256_default/
+```
+
+因此 `703739fb` 的默认入口切换和镜像封装没有改变已经验证的 replacement
+行为。vanilla raw 95% gate 仍未通过，发布口径不变。
+
+安全说明：第一次构建的旧 digest `sha256:285514c1…` 在源码 checkout 的
+`.git/config` 中保留了 credential-bearing remote URL，已废弃。Dockerfile
+现按 immutable vLLM commit 构建，并在 clone 后 scrub GitHub remote 与
+submodule URL；最终 `sha256:0b22fcef…` 已在 0162 验证
+`IMAGE_GIT_CREDENTIAL_AUDIT=PASS`。
+
+发布收口后的 active workspace：
+
+```text
+pypto-lib / vllm-pypto: 703739fb (perf/step3p5-bc-v2)
+pypto:     ca21ab5fcfd8203165928428302d273c377db5c6
+simpler:   216e7632267ae815c484cdeba7991c87fabf3086
+pto-isa:   ecb6c303f797749f811a494742c3c08156aacabb
+PTOAS:     fc8c6caee561914b4fb991dfc8427bb63194269e
+ptoas:     v0.50
+```
+
+旧 pypto-lib experiment checkout 的 dirty 内容已保存到：
+
+```text
+/tmp/pypto_workspace_dirty_backup_20260726
+```
+
+active workspace 已不再保留这些 variant checkout；工具链仓保持独立，
+没有把 pypto-lib 内容覆盖到 `pypto`、`pto-isa` 或 `PTOAS`。历史
+`workspace/_ws_archive_20260723` 仍有 root-owned 归档文件，因未获提权
+删除批准未强删；它不是 active source checkout，也未用于构建或运行。
+
+### 8.8 已完成优化、改造前后与收益
+
+| 优化 | 改造前 | 改造后 | 已确认收益 |
+|------|--------|--------|------------|
+| **A1 可观测性** | whole-net 主要以“是否跑通”判断，缺少统一的多步 token/hidden、finite、TP spread 和边界 step 证据 | harness 生成 N=256 report、逐 step hidden，并检查 hidden finite、TP spread、step127/128/255 | 回归结果可审计；当前 TP spread `0.0`，且能把 vanilla raw gate 与 replacement gate 分开 |
+| **B1 resident 权重池的 opt zero-copy view ABI** | 0724 baseline 已经一次 IPC import、跨 step resident，但 opt 没有从 canonical FULL `[12,...]` / SWA `[33,...]` 栈取得 10/30 层 MoE-only 连续 bucket 的 ABI | `Wsub()` 对每 rank 做 FULL `1:11`、SWA `2:32` outermost contiguous slice，再以 `StackedDeviceTensor` 跨 rank 绑定；不 materialize 新权重 | B2 可以用 dynamic `pl.slice(layer_idx)`；相对复制 opt 专用 attention buckets，按当前 shape 避免约 `965 MiB≈0.94 GiB/rank` 额外设备副本。0724 原本已 resident，**不能**写成“消除 24 GiB/rank/step H2D” |
+| **B2 45 层 loop-form** | historical `decode_layer.py` 31,686 行，MoE 主体按 40 个 layer site 重复描述 | current `decode_fwd.py` 4,775 行；L1/L2=`pl.range(2)`、L3-L42=`pl.range(40)`，L43/L44 保留必要 specialization | 主体源码约减少 **84.97%**，MoE runtime loop body `40→1`；N=256 opt↔baseline token/hidden `256/256` exact、`max_abs_diff=0`。没有同环境 compiler wall-clock A/B，不宣称编译加速比例 |
+| **C2 dispatch/combine pull** | source rank push/`remote_store`，跨 die 写完成存在竞争和随机 stall/507018 风险路径 | fixed-slot peer-major，consumer `remote_load` pull；combine 固定槽 pull-back，本地 bucket 与 peer pull 分开 | 当前 0162 N=256 无 stall、TP spread `0.0`，liveness 可重复性提高；通信字节数不变，不宣称带宽下降 |
+
+边界：
+
+- C1 单 window + `moe_epoch` + `WaitCmp.Ge` 尚未进入 current release；
+  `~766 MB→十几 MB` 仍只是设计目标。
+- B3 KV resident/in-place、D1/D2、C3、E1、F1/F2/F3、G1 以及 live
+  production front/KV/MTP/HBM 尚未闭环，不能计入本次收益。
+- 当前 harness warm `run_sec` 仅用于记录运行时间，不是完整 serving ITL；
+  没有旧 31k-line implementation 的同环境 A/B，因此不写“B2 已加速 X%”。
+
+### 8.9 canonical `step3p5` 正式发布（覆盖 §8.1–8.7 的 active 口径）
+
+最终 active release 已不再使用 `perf/step3p5-bc-v2@703739fb` 或
+`stepfun-develop-20260726-opt-b2` 作为默认入口。正式状态为：
+
+```text
+pypto-lib / vllm-pypto:
+  branch stepfun/develop
+  commit 29547af6c3c5b7db2a75c1fd5e0110959d2a7624
+
+canonical Main:
+  models.step3p5.decode_fwd:whole_decode_step3p5
+
+compatibility shim only:
+  models.step3p5_opt.decode_fwd:whole_decode_opt
+
+image:
+  hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5
+  digest sha256:f58708d2c6cc60474fa98da38aef23a128b850173e4bf5ab6336590b83e2afbc
+  config sha256:a9d4c288b0aeb15d912724d6df717ffac37a27f6826ac33ec864ecf775104ca3
+```
+
+rename 后 canonical 文件保留唯一真实 PyPTO program；`step3p5_opt` 的
+26 行文件只 re-export canonical object，不再维护第二份程序。0162 已验证：
+
+- 镜像内六个 pin、`ptoas 0.50`、credential audit、canonical/shim import
+  identity 和 `/workspace/pypto-smoke.sh` 全部 PASS；
+- 默认 8-step device smoke 实际打印
+  `program=whole_decode_step3p5`，hidden 全 finite、TP spread `0.0`；
+  仅旧硬编码 oracle 的 step2 预期 `19384` 与实际 `6127` 不同，其余
+  `7/8` exact；
+- rename 前后 N=256 token/hidden `256/256` bit-exact，
+  `max_abs_diff=0`，step127/128/255 PASS；
+- vanilla raw 仍为 `240/256=93.75%`，低于历史 95% gate，不能写成
+  vanilla precision PASS。
+- 新镜像完整 N=256 artifact：
+  `/tmp/newimage_step3p5_n256_20260726/`；与既有 canonical artifact
+  token/hidden `256/256` exact、`max_abs_diff=0`、TP spread `0.0`，
+  step127/128/255 PASS，raw miss 与此前 16 个位置完全一致。
+
+active workspace：
+
+```text
+local workspace/vllm-pypto: stepfun/develop@29547af6
+local workspace/pypto-lib:  detached@29547af6
+0162 workspace/vllm-pypto:  stepfun/develop@29547af6
+0162 workspace/pypto-lib:   detached@29547af6
+0162 workspace/pypto-lib-n1: detached@29547af6
+0162 workspace/pypto:       detached@ca21ab5f
+0162 workspace/pypto/runtime: detached@216e7632
+0162 workspace/pto-isa:     ecb6c303
+0162 workspace/PTOAS:       detached@fc8c6cae
+```
+
+0162 的根 `workspace/pypto-lib` 历史 dirty work 已保存到 git stash
+`archive pre-canonical root workspace 2026-07-26`，随后切到 detached
+`29547af6`；`/mnt/persist/chensiyu/perf-opt-ws` 未操作，仍只作历史实验
+worktree，不是 active release source。

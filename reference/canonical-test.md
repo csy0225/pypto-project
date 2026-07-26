@@ -10,14 +10,32 @@
 > 本文定义测试准出标准；stable 文档冻结完整三仓、runtime binary、工具链、
 > checkpoint、设备和环境变量。
 
+> **⚠ 2026-07-26 current release 覆盖说明**：当前 active checkout 为
+> `workspace/{pypto-lib,vllm-pypto} @ 29547af6`，默认 Main 已切换为
+> `models.step3p5.decode_fwd:whole_decode_step3p5`；显式 `--baseline-main`
+> 才回退到 0724 canonical baseline。当前 runtime/toolchain 继续固定为
+> 0724 provenance：pypto `ca21ab5f`、simpler `216e7632`、pto-isa
+> `ecb6c303`、PTOAS `fc8c6cae`、ptoas `0.50`。本文件后面的
+> pre-prune program、generator 和 2026-07-17/18 pin 均为历史证据，不是
+> 当前 workspace 或新镜像的 active pin；当前镜像操作入口见
+> [pypto-image-verify skill](../.claude/skills/pypto-image-verify/SKILL.md)。
+>
+> 当前 `N=256` 必须按两个 gate 报告：vanilla raw canonical/baseline 均为
+> `240/256=93.75%`，低于历史 `>=95%` raw gate，**raw precision 未通过**；
+> canonical↔baseline token/hidden `256/256` exact、`max_abs_diff=0`、TP spread
+> `0.0`，因此 **B2 replacement regression 通过**。replacement PASS
+> 不能改写成完整 vanilla precision PASS，也不能改写成 production
+> Main+MTP serving 已完全平替。
+
 > **⚠ 2026-07-24 base 校正（读本文前先看）**：go-forward base 已前进到最新
 > **`stepfun/develop @ bc5eecb1`**（fork csy0225；origin 无此分支）。下面 §1/§4/§5 记录的
 > `release commit = 3af13f4f`、`branch = feat/whole-net-n1-fusion`、`layer module = decode_layer_single_chip`、
 > generator `_gen_*` + §5 round-trip 均为**历史快照**：commit `759c23e8 "prune to single-chip vllm integration"`
 > 已删 `decode_layer.py` + 全部 generator + §5 round-trip 工作流。**当前 LIVE 被测对象 =
-> `models/step3p5/decode_layer_single_chip_hidden.py`（手写维护，无 generator）**，program 名沿用
-> `whole_decode_faithful_real_single_chip` 语义（hidden-only）。§2 多步 decode 精度准出标准与 §3 命令骨架
-> 仍有效（layer-module 换 `decode_layer_single_chip_hidden`）。§5 generator round-trip gate **已废除**（无 generator）。
+> `models/step3p5/decode_fwd.py`（loop-form canonical Main）**；0724
+> `decode_layer_single_chip_hidden.py` 只保留为 `--baseline-main` rollback。
+> §2 多步 decode 精度准出标准与 §3 命令骨架仍有效；§5 generator
+> round-trip gate **已废除**（无 generator）。
 
 ## 1. 被测对象与固定组合
 
@@ -51,10 +69,15 @@ kernel。PUSH 探针、历史 push 版本、以及旧 46 layer-level submission 
 > vLLM。多步已覆盖第一个 token，**单步/单 token 测试不再单列**；单 token `argmax==303` 降级为
 > **首 token 快速冒烟 / liveness** 指标，不再是唯一精度 PASS。
 
-- **精度准出（唯一）**：**多步 decode 逐 token** teacher-forced 对比 live vanilla vLLM W8A8
-  oracle，seed=6127 / N=128 → **ALIGNED ≥ 95%**（当前 baseline 124/128=96.9%，miss 均为
-  vanilla 自身 near-tie）。驱动：`pypto-lib/tests/step3p5/ci/{LIVE_PRECISION_AB.md,
-  run_live_precision_ab.sh}`（`stepfun/develop`）。
+- **vanilla raw 精度准出**：**多步 decode 逐 token** teacher-forced 对比 live vanilla
+  vLLM W8A8 oracle，seed=6127，要求 **ALIGNED ≥ 95%**。2026-07-23 的历史
+  N=128 baseline 为 `124/128=96.9%`；2026-07-26 当前 N=256 opt/baseline
+  均为 `240/256=93.75%`，所以当前 raw gate 未通过。
+- **replacement regression**：current opt 必须与 current canonical baseline
+  逐 token、逐 hidden exact。2026-07-26 N=256 为 `256/256` exact，
+  `max_abs_diff=0`、TP spread `0.0`，该 gate 通过。
+- 驱动：`pypto-lib/tests/step3p5/ci/{LIVE_PRECISION_AB.md,
+  run_live_precision_ab.sh}`。两个 gate 必须分开记录。
 - **首 token 冒烟 / liveness（快速回归，非精度准出）**：`--hidden-token 6127`、`ctx=1`、
   rope position-0 identity、`BATCH=16`（仅 row0 有效，row1..15 padding）、检查
   `logits_shard_out[r, 0]` 的 `argmax == 303`。用于快速确认 whole-net 能跑通 + 首 token 对；
@@ -171,8 +194,9 @@ ptoas-bin  self-report 0.45
 ptoas-bin  sha256 fe7949daa62cdf787958101df35fe15dfa430bd18bf7e880353935a29b966076
 ```
 
-当前稳定 binary 实际自报 `ptoas 0.45`；历史 `v0.49` 仅保留在历史记录中，
-不能作为当前环境重建 pin。
+该 **2026-07-17 frozen manifest** 的 binary 自报 `ptoas 0.45`；它不是
+2026-07-26 active workspace 的重建 pin。当前 0724-derived release 使用
+`ptoas 0.50`。
 
 其中 pypto 提供 `StackedDeviceTensor` 分层连续 sub-view 和
 `DistributedWorker.import_ipc_all`；simpler 在 forked chip child 的 ACL

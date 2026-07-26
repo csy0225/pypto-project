@@ -1,5 +1,14 @@
 # vLLM + pypto 集成 · 系统设计（HLD）
 
+> **2026-07-26 current-release override**：当前 release pins 见
+> [`deployment/version-matrix.md`](../../deployment/version-matrix.md)。
+> `pypto-lib stepfun/develop@29547af6` 的默认 Main 是
+> `models.step3p5.decode_fwd:whole_decode_step3p5`，固定 0724
+> 环境 N=256 canonical↔baseline replacement `256/256` exact；这只关闭了
+> standalone/Main replacement 子 gate。独立 live front 接管、真实 paged-KV
+> bridge、同代 MTP absolute gate 和 3-way HBM 仍是 active work，不得把本设计
+> 中的历史 plumbing 证据写成完整 production serving 平替。
+>
 > **层级**：System Design / High-Level Design。回答"vLLM 与 pypto 怎么分工、
 > 怎么在同 8 卡共驻、请求怎么走到 pypto 整网再回来"。落地实现细节（monkey-patch
 > / sidecar 协议 / KV·weight IPC / co-tenancy 开关）见
@@ -139,7 +148,7 @@ graph TD
 
 ## 6. 精度验收（A/B）
 
-- 目标：live token-exact——8001（pypto hidden → vLLM lm_head → token）对 8000（原生 vLLM oracle），greedy top-1 ≥ 95%（terminal 目标逐 step 完全一致）。
+- 目标：live token-exact——8001（pypto hidden → vLLM lm_head → token）对 8000（原生 vLLM oracle），greedy top-1 ≥ 95%（terminal 目标逐 step 完全一致）。当前 B2 replacement `256/256` exact 不是该 live absolute gate。
 - harness `e2_ab.py N`（spec'd，未编码）。standalone 侧 canonical P42 = argmax 303（[`../../reference/canonical-test.md`](../../reference/canonical-test.md)）。
 
 ## 7. 完成度（系统级）
@@ -149,7 +158,7 @@ graph TD
 | monkey-patch + sidecar + socket + 同卡共驻 | ✅ device-verified（live 8001 co-resident 跑通、返回 token） |
 | `SIMPLER_COMM_NO_HCCL` co-tenancy | ✅ device-verified |
 | KV-IPC / weight-IPC 导入 + 整网 serving（plumbing） | ✅ device-verified（PROBE_PASS） |
-| **live token-exact A/B** | 🔴 未做（0162 provisioning 阻塞：无 vLLM 容器） |
+| **live token-exact A/B** | 🔴 未完成（当前 Main replacement 已完成；独立 live front / same-generation absolute oracle 仍待闭环） |
 | per-layer KV bridge（多 KV group ABI） | 🟡 现为单 flat pool，多 group 待做 |
 | 3-way HBM / redundant-weight 精简 | 🟡 单 key ~47GB/rank，多 pool split 待做 |
 

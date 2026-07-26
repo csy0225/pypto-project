@@ -1,65 +1,164 @@
 # 接力上下文（Handoff）
 
-> **这是 ephemeral 接力文档**——给"接着干"的人一页纸当前工作面。durable 的
-> 规划看 [`roadmap.md`](roadmap.md)，此刻状态看 [`../STATUS.md`](../STATUS.md)，
-> 历史流水看 [`../archive/milestones-2026-Q2.md`](../archive/milestones-2026-Q2.md)。
-> **最后更新：2026-07-18。** 更新时直接改写本文（不追加流水）。
+> **这是 ephemeral 接力文档**——给“接着干”的 agent 一页纸当前工作面。
+> durable 规划看 [`roadmap.md`](roadmap.md)，实时状态看
+> [`../STATUS.md`](../STATUS.md)，B2 详细证据看
+> [`../develop/OPT-B2-NEXT-SESSION-HANDOFF-20260725.md`](../develop/OPT-B2-NEXT-SESSION-HANDOFF-20260725.md)。
+> **最后更新：2026-07-26。** 更新时直接改写本文，不追加流水。
 
-## 1. 当前结论（N=1 整网 standalone gate 已关闭）
+## 1. 当前 active release
 
 ```text
-program = whole_decode_faithful_real
-machine = gpu-a910x-0162
-devices = 8..15
-token   = 6127
-P_FAITHFUL_MOE_LAYERS = 42
-weights = native W8A8 IPC
-KV      = IPC
-dispatch = fixed-slot pull
-combine  = pull
-golden  = argmax 303
+machine:    gpu-a910x-0162
+devices:    8..15（vanilla oracle 使用 0..7）
+checkpoint: /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp
+
+pypto-lib / vllm-pypto:
+  29547af6c3c5b7db2a75c1fd5e0110959d2a7624
+  branch stepfun/develop
+pypto:   ca21ab5fcfd8203165928428302d273c377db5c6
+simpler: 216e7632267ae815c484cdeba7991c87fabf3086
+pto-isa: ecb6c303f797749f811a494742c3c08156aacabb
+PTOAS:   fc8c6caee561914b4fb991dfc8427bb63194269e
+ptoas:   0.50
 ```
 
-- **2026-07-18 single-submit 合入三仓 `stepfun/develop`** 并干净回归：
-  P42 20/20 PASS，每次 `argmax=303`，`TOP5=[303,9592,1043,768,2086]`，
-  runtime mean≈0.67s，fingerprint 唯一。
-  三仓 pin：simpler `c7fdc574`、pypto `9ec303f6`、pypto-lib `e1513d22`。
-- 0162 clean 环境唯一 stable 记录：
-  [`../develop/N1/N1-STABLE-ENV-0162-20260717.md`](../develop/N1/N1-STABLE-ENV-0162-20260717.md)。
-- 唯一验收入口：[`../reference/canonical-test.md`](../reference/canonical-test.md)。
+当前 Main 默认入口：
 
-## 2. 架构边界（收敛后，不要动）
+```text
+models.step3p5.decode_fwd:whole_decode_step3p5
+```
 
-- **dispatch**：`_dispatch_pack_publish`（本地 fixed-slot pack + pub_counts row）→ `_dispatch_pull`（AtomicAdd/Ge rendezvous，拉 counts_all，生成 recv_counts/CSR/inverse_map，self local-load + peer remote-load）→ `_dispatch_stage`（peer-major → expert-major compact）。
-- **routed expert**：`local_routed_x` INT8 + `local_routed_x_scale` FP32，native INT8 gate/up/down matmul，signed tile remainder，**无 BF16 权重 dequant fallback**。
-- **combine**：`_stage_routed_src` → `_pull_routed_y`（消费 dispatch 产出的 inverse_map）→ `_weighted_gather_and_add`；self 用 `pl.load`，peer 用 `remote_load`。
-- **control signal**：逻辑 `[8,1] INT32`（32B），物理 `COMM_CONTROL_SIGNAL_BYTES=512`（216/216 signal 都 512B，offset %512=0）。
-- **generator 已收敛**：不再用旧 A/B helper 把 inverse-map 重建移到 combine；任何生成器改动必须重跑 round-trip（`PRECOMMIT_ROUNDTRIP=PASS` / `ROUNDTRIP_CMP_RC=0`）。
+- hidden-only harness 和 production sidecar 不传 Main 参数时默认使用
+  canonical loop-form Main；
+- `models.step3p5_opt.decode_fwd:whole_decode_opt` 只保留为 compatibility
+  shim；
+- 只有显式 `--baseline-main` 才回退到 0724 unroll baseline；
+- `--layer-module` 与 `--layer-name` 必须成对使用，且不能与
+  `--baseline-main` 同时使用。
 
-## 3. 下一步（Phase 28 live serving）
+active pypto-lib checkout 只保留：
 
-standalone gate 与 live serving 是**两个独立结论**，不能混写成"serving 已完成"。
+```text
+workspace/pypto-lib  -> detached 29547af6
+workspace/pypto-lib-n1 -> detached 29547af6（历史 dirty 已 stash）
+workspace/vllm-pypto -> stepfun/develop @ 29547af6
+```
 
-1. **恢复 0234 访问**，生成三仓/build/environment manifest 并复核历史记录的
-   fresh-canonical stall（0234 只拉 pypto-lib 不足以复现，需全栈等价）。
-2. 保持 0162 clean stack 为回归基线。
-3. **live vLLM per-layer paged KV bridge**（现为单 flat pool）。
-4. **消除 vLLM 与 exporter 的冗余权重**，解决 3-way HBM。
-5. **live single-handoff token-exact A/B**（`e2_ab.py`，需可用 vLLM 容器）。
+不要把 pypto-lib 内容覆盖到 `workspace/pypto`、`workspace/pto-isa` 或
+`workspace/PTOAS`。已清理的 experiment checkout 不得重新当作 source of truth。
 
-> live holder/sidecar/KV importer/容器 backend 是独立 live WIP，不在
-> standalone release commit 内；进入 Phase 28 前先按工作区实际状态整理、
-> review 并单独提交 live 组件。详见
-> [`../design/vllm-pypto/02-detailed-design.md`](../design/vllm-pypto/02-detailed-design.md)。
+0162 其余 active toolchain checkout 也已与最终镜像统一：
 
-## 4. 历史结论复核（防止重走）
+```text
+workspace/pypto          -> detached ca21ab5f
+workspace/pypto/runtime  -> detached 216e7632
+workspace/pto-isa        -> ecb6c303
+workspace/PTOAS          -> detached fc8c6cae
+```
 
-1. 历史 `argmax=303` 证明数学路径正确，但不证明历史版本无 stall。
-2. 旧 push/pull kernel 位置是线索，不足以证明某个 TPUT / signal bit 是唯一硬件根因。
-3. `routed_h_quant` 不是统一挂点；失败 build 曾表现为 rank 8–14 卡 `_pull_routed_y`、rank 15 卡 `_dispatch_pull`。
-4. fixed-slot / count-pull / signed tile / self local-load / AtomicAdd signal / per-layer distinct buffers 都有依据，保留。
-5. 32B→512B control signal 是最小布局 A/B 变量，0162 上强关联 stall 消失，但不是跨机器充分条件或唯一硬件根因。
+历史 dirty 内容保存在 git stash；runtime 的旧 build backup 移到
+`/tmp/pypto_workspace_dirty_backup_20260726/0162/`，未直接删除。
 
-> 相关复盘：[`../postmortems/07-whole-net-scheduler-timeout.md`](../postmortems/07-whole-net-scheduler-timeout.md)、
-> [`../postmortems/08-multiprogram-coprepare-deadlock.md`](../postmortems/08-multiprogram-coprepare-deadlock.md)、
-> [`../postmortems/12-integration-churn-meta.md`](../postmortems/12-integration-churn-meta.md)。
+## 2. 已关闭的 B2 gate
+
+固定 0724 镜像：
+
+```text
+hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260724
+digest sha256:2b0dc4612796a34bea6720ccb4bf8fa3af4ea406cdd0f12add34586ca860d7e0
+```
+
+256-step 结果必须按两条 gate 分开写：
+
+| gate | 结果 | 结论 |
+|------|------|------|
+| vanilla raw alignment | canonical `240/256=93.75%`；baseline `240/256=93.75%` | 历史 `>=95%` raw gate **未通过** |
+| canonical replacement equivalence | token `256/256` exact；hidden `256/256` exact；`max_abs_diff=0`；TP spread `0.0` | **PASS** |
+| pre-rename ↔ canonical rename | token `256/256` exact；hidden `256/256` bit-exact；`max_abs_diff=0`；step127/128/255 PASS | **PASS** |
+
+raw miss steps：
+
+```text
+2, 20, 49, 52, 57, 62, 125, 131,
+151, 153, 161, 162, 187, 221, 231, 252
+```
+
+baseline 完全复现相同 raw 结果，所以该差异不是 opt 引入的 regression。
+不能把 `93.75%` 写成 vanilla precision PASS；也不能把 replacement PASS
+扩写成 production Main+MTP serving 已完全平替。
+
+设备回归 artifact：
+
+```text
+/tmp/live_ab_opt_ad478abb_n256_20260726/
+/mnt/persist/chensiyu/pypto_image_verify_20260726_ad478abb
+/tmp/pypto_sidecar_opt_ad478abb2/sidecar_opt_report.json
+/tmp/canonical_step3p5_n256_20260726_1900/
+```
+
+`29547af6` 将同一已验证 loop-form 实现正式迁入
+`models/step3p5/decode_fwd.py`，并把 `step3p5_opt` 降为 shim；与改名前
+镜像产物逐 step bit-exact，因此没有修改数学实现。
+
+## 3. 当前镜像发布
+
+已发布并在 0162 复验的目标镜像：
+
+```text
+hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5
+digest: sha256:f58708d2c6cc60474fa98da38aef23a128b850173e4bf5ab6336590b83e2afbc
+config: sha256:a9d4c288b0aeb15d912724d6df717ffac37a27f6826ac33ec864ecf775104ca3
+spec: deployment/docker/builds/stepfun-develop-20260726-step3p5.env
+```
+
+源码/镜像/设备侧已完成：
+
+1. 六个源码 pin 与上节一致；
+2. 不传 Main 参数时 holder 实际 program 为 `whole_decode_step3p5`；
+3. canonical N=256 raw `240/256`，与改名前产物 token/hidden
+   `256/256` bit-exact、`max_abs_diff=0`、TP spread `0`；
+4. step127、step128、step255 通过；
+5. `--baseline-main` 成功编译为
+   `WholeDecodeFaithfulRealSingleChipHiddenOnly` 并完成 3-step device smoke；
+   step2 仅因已知 stale hardcoded oracle 预期退出。
+6. 镜像内 `ptoas 0.50`、`/workspace/pypto-smoke.sh`、
+   Git credential audit 和 canonical/shim import identity 全部 PASS；
+7. 新镜像默认 8-step device smoke 实际打印
+   `program=whole_decode_step3p5`；hidden 全 finite、TP spread `0.0`，
+   仅已知 stale-oracle step2 不匹配，其余 `7/8` exact。artifact：
+   `0162:/tmp/newimage_canonical_8step_20260726/run.log`。
+8. 新镜像完整 N=256 canonical regression：
+   raw `240/256=93.75%`，16 个 miss step 与此前对照完全一致；
+   与既有 canonical artifact token/hidden `256/256` exact，
+   `max_abs_diff=0`、TP spread `0.0`，step127/128/255 PASS。artifact：
+   `0162:/tmp/newimage_step3p5_n256_20260726/`。
+
+历史 `opt-b2@sha256:0b22fcef…` 是安全的 rename 前对照镜像；更早的
+`sha256:285514c1…` 因 `.git/config` 留有 credential-bearing clone URL
+已废弃，禁止部署。
+
+操作命令与判读见：
+
+- [`../deployment/docker/README.md`](../deployment/docker/README.md)
+- [`../.claude/skills/pypto-image-verify/SKILL.md`](../.claude/skills/pypto-image-verify/SKILL.md)
+
+## 4. 尚未关闭的边界
+
+以下仍是独立工作，不与 B2 replacement regression 混写：
+
+1. 独立 live vLLM front 接管；
+2. current Main→MTP 的同代 absolute token/hidden oracle；
+3. live per-layer paged KV bridge 与动态 batch 映射；
+4. vLLM、exporter、sidecar 的 3-way HBM 收口；
+5. C1 单 window / `moe_epoch` 通信优化。
+
+## 5. 操作约束与残留
+
+- 不操作 `/mnt/persist/chensiyu/perf-opt-ws`；
+- 设备回归默认使用 8–15，启动前确认无其他 agent 的 device process；
+- 禁止 `kill -9`，禁止 `npu-smi reset`；
+- 清理前必须先停 exporter/worker 并确认设备进程退出；
+- `workspace/_ws_archive_20260723` 仍有 root-owned 历史归档残留，不是 active
+  source checkout，也未参与构建/运行；未获提权删除批准前不要强删；
+- 旧 dirty checkout 已备份到 `/tmp/pypto_workspace_dirty_backup_20260726`。

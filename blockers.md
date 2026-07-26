@@ -10,7 +10,7 @@
 如 507899/507018、co-tenancy(G4)、tmov Vec-LHS、gate_topk、多程序 co-prepare 死锁、
 gap-5、scheduler-timeout、attention 乱码、G5b import_ipc、swa_moe const-fold 等均已归档。
 
-**最后检视**：2026-07-18。
+**最后检视**：2026-07-26。
 
 ---
 
@@ -38,9 +38,13 @@ runtime `.so` hash/mtime；③ CANN/PTOAS/checkpoint/device/ring env；④ 对�
 
 ## 🔴 ACTIVE — Phase 28 live serving：per-layer KV bridge + 3-way HBM / redundant weights
 
-**边界**：0162 standalone N=1 canonical stall gate 已关闭（`dispatch pull + combine pull`，
-真 W8A8 + 真 KV-IPC + P42，连续 20/20 `argmax=303`，见
-[`reference/canonical-test.md`](reference/canonical-test.md)）。该结论不覆盖 N1-S-0234。
+**当前 release 边界（2026-07-26）**：`pypto-lib stepfun/develop@29547af6` 默认
+`models.step3p5.decode_fwd:whole_decode_step3p5`。固定 0724 环境 N=256
+canonical↔baseline token/hidden `256/256` exact、`max_abs_diff=0`、TP spread
+`0.0`，所以 Main replacement regression 已关闭。对同一 vanilla oracle
+两者均为 `240/256=93.75%`，低于历史 95% raw gate；不能写成 raw PASS，
+也不能外推成完整 Main+MTP serving 已平替。该结论不覆盖 N1-S-0234。
+历史 `step3p5_opt` 路径仅为 compatibility shim。
 
 **当前 live serving blocker**：
 
@@ -59,18 +63,20 @@ runtime `.so` hash/mtime；③ CANN/PTOAS/checkpoint/device/ring env；④ 对�
 > **结论:多decode精度 blocker 已解决,整网 forward 数值忠实、逐 token 对齐 vanilla。**
 > 历史"near-tie/未完全正常"表述作废。详见 memory `n1_multidecode_neartie_faithful_a632c42e`。
 
-1. **per-layer KV bridge**：whole-net standalone substrate 仍是 45 层共享的
-   `k_cache/v_cache`，只覆盖 ctx=1。live multi-token decode 需从 vLLM paged KV pool
-   导入 per-layer BF16 KV slice，并按 decode step 传 `block_table`/`slot_mapping`/`seq_lens`。
-   （**注**：hidden-only `a632c42e` 已在 standalone 侧实现 per-step KV 常驻并跑通 8 步；
-   live 侧从真实 vLLM paged pool 导入仍待接。）
+1. **live per-layer paged-KV bridge**：standalone current release 已有
+   resident per-layer KV 并完成多步回归；缺口是从真实 vLLM paged KV pool
+   导入 per-layer BF16 slice，并按请求/step 传
+   `block_table`/`slot_mapping`/`seq_lens` 与 dynamic batch metadata。
 2. **3-way HBM / redundant weights**：vLLM W8A8 常驻权重 + exporter 的 whole-net INT8
    IPC 权重 + whole-net runtime working set 同时存在时，0162 live 报 `207001` OOM。
    不是 standalone stall，也不是调小 ring heap 能解决；需消除 vLLM/exporter 重复权重，
-   或做等价 in-place/shared-weight 方案。token-exact live A/B 尚未完成。
+   或做等价 in-place/shared-weight 方案。
+3. **独立 live front + 同代 MTP absolute gate**：sidecar 默认 canonical Main wiring 已完成，
+   但真实 online request 接管、current Main 输出进入 MTP 后的 absolute
+   token/hidden oracle 尚未闭环。
 
-**解除条件**：完成 per-layer KV model-side 改造 + device 验证；解决重复权重与 live HBM
-预算；再按 Phase 28 标准做 token-exact A/B 验收。详见
+**解除条件**：完成 live paged-KV/dynamic batch 接线 + device 验证；解决重复权重与
+live HBM 预算；完成独立 live-front A/B 和同代 MTP absolute gate。详见
 [`planning/phases/28-n1-live-integration.md`](planning/phases/28-n1-live-integration.md)、
 [`design/vllm-pypto/02-detailed-design.md`](design/vllm-pypto/02-detailed-design.md)。
 

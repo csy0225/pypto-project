@@ -33,7 +33,8 @@ description: >
   ```
   镜像: 可用 ✅ / 不可用 ❌
   卡在: <Step N / 无>
-  证据: 冒烟 [smoke] PASS + 整网 step0 6127->303 / step2->6127(与 vanilla 一致)
+  证据: 冒烟 [smoke] PASS + 默认 canonical Main 可执行 + replacement gate 结果
+  vanilla raw gate: <ALIGNED/N；是否达到 95%>
   待办: <需用户做的:升 driver / 挂 ckpt / 释放卡 …>
   ```
 
@@ -61,7 +62,9 @@ ls -d /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp  # W8A8 ck
 ## Step 1 · 拉镜像
 
 ```bash
-IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260723
+IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5
+# 发布 manifest digest:
+# sha256:f58708d2c6cc60474fa98da38aef23a128b850173e4bf5ab6336590b83e2afbc
 sudo $NC pull "$IMG"        # base blob 已在 content store, 只下增量
 sudo $NC images | grep vllm-pypto
 ```
@@ -85,7 +88,7 @@ sudo $NC run --rm --net host --security-opt apparmor=unconfined \
 **期望**(全绿即 Step 2 通过):
 
 ```
-[smoke] ptoas   : ptoas 0.45
+[smoke] ptoas   : ptoas 0.50
 [smoke] pypto   : 0.1.0
 [smoke] simpler : OK
 [smoke] runtime : .../a2a3/dispatcher/libsimpler_aicpu_dispatcher.so
@@ -113,6 +116,17 @@ sudo $NC run --rm --net host --ipc host --privileged --security-opt apparmor=unc
       --ckpt $CKPT --devices 8,9,10,11,12,13,14,15 --out /tmp/n1_ci"
 ```
 
+当前 release（`pypto-lib stepfun/develop@29547af6`）不传 Main 选择参数时默认使用：
+
+```text
+models.step3p5.decode_fwd:whole_decode_step3p5
+```
+
+只有显式给 hidden-only harness / sidecar 传 `--baseline-main` 时才回退到
+0724 unroll baseline。`models.step3p5_opt.decode_fwd:whole_decode_opt`
+仅为兼容 shim。`--layer-module` 和 `--layer-name` 只用于成对选择
+其他自定义 Main，不能与 `--baseline-main` 同时使用。
+
 **判读(关键)**——canonical 金标准 = token `6127` → argmax `303`:
 
 - step0 `6127→303`、step1 `303→1207`、step2 `1207→6127` = **pypto 与 vanilla 逐 token 一致,精度正常 ✅**。
@@ -121,7 +135,17 @@ sudo $NC run --rm --net host --ipc host --privileged --security-opt apparmor=unc
   独立确认:查在跑的 8000 vanilla oracle
   `curl -s http://127.0.0.1:8000/v1/completions -H 'Content-Type: application/json' -d '{"model":"step3.5-flash","prompt":[6127,303,1207],"max_tokens":1,"temperature":0}'`
   → 返回 **"北京"(token 6127)**,与 pypto 一致 → 判"可用"。
-- 权威 ≥95% 门禁走 live A/B:`tests/step3p5/ci/run_live_precision_ab.sh`(见 LIVE_PRECISION_AB.md)。
+- 权威 gate 走 live A/B:`tests/step3p5/ci/run_live_precision_ab.sh`（见
+  `LIVE_PRECISION_AB.md`），并且必须分开报告：
+  1. **vanilla raw alignment**：历史门槛 `>=95%`；
+  2. **replacement equivalence**：current opt 与 current baseline 的 token/hidden
+     是否 exact。
+
+  2026-07-26 的固定 0724 环境 `N=256` 结果为：raw opt/baseline 均
+  `240/256=93.75%`，所以 raw 95% gate **未通过**；opt↔baseline token/hidden
+  `256/256` exact、`max_abs_diff=0`、TP spread `0.0`，所以 B2 replacement
+  regression **通过**。不得把前者写成 vanilla precision PASS，也不得把该
+  raw 差异归因于 opt。
 
 > 失败时读留存的 exporter 日志:`/data/chensiyu/ci_out/../..` 或加
 > `-v <宿主>:/tmp/n1_ci_artifacts` 后看 `logs/main_hidden_8step.log`。
@@ -264,4 +288,6 @@ step0/step1 `token_exact=true` + step2 `output=6127`(= skill 金标准 `1207→6
 3. **命令走 `bash -lc`**(登录 shell 才 source `/etc/profile.d/pypto-env.sh`,把 `/workspace/ptoas-bin/lib` 加进 `LD_LIBRARY_PATH`);**容器内场景尤其重要**——smoke PASS ≠ codegen 能跑,必须 `bash -lc` 才能过 codegen。多卡(宿主场景)加 `--privileged --ipc host --shm-size`。
 4. **runner step2 FAIL ≠ 精度问题**:是 harness stale oracle(`DEFAULT_ORACLE_TOKENS[2]=19384`),用 8000 vanilla、live A/B 或容器内 worker log 自证 step0/1 `token_exact=true` + step2 output=6127 佐证。
 5. **禁 `-9` 强杀 device 进程 / 禁 `npu-smi reset`**(netboot 机重启锁死 / card poison)。
-6. **容器内场景先识别**:若 `ls /workspace/pypto-smoke.sh` 存在且无 nerdctl,**不要再装容器运行时**——直接走"容器环境内场景"小节,跳过 Step 1。 
+6. **raw gate 与 replacement gate 必须分开**：`93.75%` 不是 raw PASS；
+   `256/256` exact 只证明 current opt 没有相对 current baseline 引入回归。
+7. **容器内场景先识别**:若 `ls /workspace/pypto-smoke.sh` 存在且无 nerdctl,**不要再装容器运行时**——直接走"容器环境内场景"小节,跳过 Step 1。

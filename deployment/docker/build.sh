@@ -3,15 +3,15 @@
 # builds/<spec>.env(见 README「组织方式」)。
 # 用法:
 #   bash build.sh [builds/<spec>.env]        # 默认最新 spec
-#   GH=.../github.env GL=.../gitlab.env bash build.sh builds/stepfun-develop-20260723.env
+#   GH=.../github.env GL=.../gitlab.env bash build.sh builds/stepfun-develop-20260726-step3p5.env
 # 需要: docker (BuildKit --secret)。GH/GL 是含 PAT 的文件 (不落镜像层)。
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SPEC=${1:-${SPEC:-builds/stepfun-develop-20260723.env}}
+SPEC=${1:-${SPEC:-builds/stepfun-develop-20260726-step3p5.env}}
 [ -f "$SPEC" ] || { echo "缺 build spec: $SPEC (见 builds/)"; exit 1; }
 # shellcheck disable=SC1090
-source "$SPEC"    # IMAGE_TAG + PYPTO_COMMIT/PYPTO_LIB_COMMIT/PTO_ISA_COMMIT/PTOAS_COMMIT/SIMPLER_COMMIT/PTOAS_BIN_VER/VLLM_PATCH_BRANCH
+source "$SPEC"    # IMAGE_TAG + immutable source pins
 : "${IMAGE_TAG:?spec 缺 IMAGE_TAG}"
 
 GH=${GH:-/data/chensiyu/secrets/github.env}
@@ -55,6 +55,7 @@ DOCKER_BUILDKIT=1 docker build \
   --build-arg SIMPLER_COMMIT="$SIMPLER_COMMIT" \
   --build-arg PTOAS_BIN_VER="$PTOAS_BIN_VER" \
   --build-arg VLLM_PATCH_BRANCH="$VLLM_PATCH_BRANCH" \
+  --build-arg VLLM_PATCH_COMMIT="$VLLM_PATCH_COMMIT" \
   "${PROXY_ARGS[@]}" \
   --secret id=gh_token,src="$GH" \
   --secret id=gl_token,src="$GL" \

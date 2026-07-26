@@ -2,7 +2,7 @@
 name: pypto-runtime-install
 description: >
   从零在一台 Ascend 910B 硬件上装好 pypto 运行时环境的分步 runbook（参照 0162
-  stepfun/develop 现状）。当用户拿到新机器/新 pod、拉了 GitHub 仓库代码，问"接下来
+  2026-07-26 release）。当用户拿到新机器/新 pod、拉了 GitHub 仓库代码，问"接下来
   装环境的步骤是什么 / 怎么跑起来 / 怎么避免装错"时使用。覆盖：Phase 16 三剑合璧
   版本核验、5 仓库拉取与 pin、Python venv、pip install -e、simpler runtime 构建、
   ptoas-bin、三件套激活、smoke/L3/canonical 验证，以及每步的高频踩坑与规避。
@@ -12,7 +12,7 @@ description: >
 
 > 目标：**用户拿到一台硬件 → 拉仓库 → 按本文步骤把 pypto 运行时装到能跑
 > smoke + 多卡 allreduce + 单卡 ST**。每步都给"正确做法 + 高频踩坑"。
-> 参照 `gpu-a910x-0162` 上 `stepfun/develop` 的现状。
+> 参照 `gpu-a910x-0162` 上 2026-07-26 immutable release pins。
 >
 > **权威出处（出问题先查这几篇）**：
 > - 版本硬绑定：[`deployment/phase16-three-pillars.md`](../../deployment/phase16-three-pillars.md)
@@ -35,7 +35,7 @@ binary + 1 个 venv：
 ├── pypto-lib/               # step3p5 模型 + kernel
 ├── pto-isa/                 # tile ISA（$PTO_ISA_ROOT 指这里）
 ├── PTOAS/                   # 字节码 assembler 源码
-├── ptoas-bin/               # ptoas 二进制发布（v0.45），进 $PATH/$LD_LIBRARY_PATH
+├── ptoas-bin/               # ptoas 二进制发布（v0.50），进 $PATH/$LD_LIBRARY_PATH
 ├── .venv311/                # Python 3.11 venv
 └── activate.sh              # 激活脚本（只设 venv+PTOAS，不设 CANN！见 Step 6）
 ```
@@ -45,19 +45,24 @@ binary + 1 个 venv：
 
 > **两种装法**：
 > - **一键可复现镜像（推荐，无需手工装 5 仓）**：[`deployment/docker/`](../../deployment/docker/)
->   的 Dockerfile 已把 5 仓 stepfun/develop pin + ptoas-bin v0.45 + vLLM Track-B 补丁 bake 好
+>   的 Dockerfile 已把 immutable 5 仓 pin + ptoas-bin v0.50 + 固定 commit 的 vLLM
+>   Track-B 补丁 bake 好
 >   （base = stepcast ascend 镜像，自带 CANN beta.1 + vLLM）。`bash deployment/docker/build.sh`
 >   构建，跑时挂 NPU 设备 + checkpoint 即可（详见该目录 README）。仍需宿主满足上面硬前提。
 > - **手工装（本 skill 下面 Step 1-8）**：新机器没 docker、或要在宿主直接改代码调试时用。
+>
+> **当前 0162 workspace 注意**：宿主的 `.venv311` 解释器链接已失效，当前完整
+> build/device regression 只在 release 镜像中闭环。不要把宿主 `activate.sh`
+> 成功 source 当作 release 验证；优先使用镜像。
 
 > **⚠ 代码在哪 + 用哪条分支（跑测试前必读）**：
 > - 可跑的 **model / test 脚本在代码仓 `$WS/pypto-lib`**（`tests/step3p5/**`、`models/step3p5/**`），
 >   **不在 `pypto-project`**（后者是跟踪/设计/复盘 doc 仓，无可跑脚本）。跑任何
 >   `python -m tests...` / `python -m models...` 前 **先 `cd $WS/pypto-lib`**。
-> - **统一用 stable 线 `stepfun/develop`**（5 仓全部一致）：合入验证过的稳定版本，whole-net
->   整网入口也已合入这条线——**不再需要 `feat/whole-net-vllm-live` 之类的 dev 分支**。装环境 +
->   跑本文 Phase B CI smoke 都在 `stepfun/develop` 上做。
-> - whole-net 入口名 / CI 逐 step token 期望，以代码仓当前 `stepfun/develop` 的
+> - **当前 release 必须按 commit pin checkout**，不能把各仓当前 branch tip
+>   当作同一测试对象。pypto-lib release branch 是 `stepfun/develop`，
+>   其余组件沿用 0724 pins。
+> - whole-net 入口名 / CI 逐 step token 期望，以当前 pinned pypto-lib 的
 >   `tests/step3p5/ci/WHOLE_NETWORK_CI.md` + 本仓 [`reference/canonical-test.md`](../../reference/canonical-test.md)
 >   为准（canonical 金标准 = `argmax=303` / token `6127`）。
 
@@ -115,32 +120,39 @@ test -f /usr/local/Ascend/cann/set_env.sh && echo OK
 
 ## Step 3 · 拉 5 个仓库到 workspace + 对 pin
 
-从 GitHub fork（`csy0225/*`）克隆，全部切 `stepfun/develop`。**simpler 是 pypto
-的 submodule**，不要单独平级 clone。
+从 GitHub fork（`csy0225/*`）克隆，然后逐仓 checkout 下表 immutable pin。
+**simpler 是 pypto 的 submodule**，不要单独平级 clone。
 
 ```bash
 export WS=/data/chensiyu/hw_project/pypto/workspace   # 换成你的持久盘路径
 mkdir -p "$WS" && cd "$WS"
 
-git clone -b stepfun/develop https://github.com/csy0225/pypto.git
-git -C pypto submodule update --init --recursive      # 拉出 pypto/runtime = simpler
-git clone -b stepfun/develop https://github.com/csy0225/pypto-lib.git
-git clone -b stepfun/develop https://github.com/csy0225/pto-isa.git
-git clone -b stepfun/develop https://github.com/csy0225/PTOAS.git
+git clone https://github.com/csy0225/pypto.git
+git -C pypto checkout ca21ab5fcfd8203165928428302d273c377db5c6
+git -C pypto submodule update --init runtime
+git -C pypto/runtime checkout 216e7632267ae815c484cdeba7991c87fabf3086
+
+git clone https://github.com/csy0225/pypto-lib.git
+git -C pypto-lib checkout 29547af6c3c5b7db2a75c1fd5e0110959d2a7624
+
+git clone https://github.com/csy0225/pto-isa.git
+git -C pto-isa checkout ecb6c303f797749f811a494742c3c08156aacabb
+
+git clone https://github.com/csy0225/PTOAS.git
+git -C PTOAS checkout fc8c6caee561914b4fb991dfc8427bb63194269e
 ```
 
-**当前 stepfun/develop 参考 pin**（2026-07-23：simpler develop 回退到可编译的
-`36957c6b`，pypto develop gitlink 同步；精确可复现 pin 以
-[`N1-STABLE-ENV`](../../develop/N1/N1-STABLE-ENV-0162-20260717.md) §2 为准）：
+**当前 release pin**（2026-07-26；与 0724 镜像一致，仅 pypto-lib 前进到
+B2 release）：
 
 | 仓库 | 参考 commit |
 |------|-------------|
-| pypto | `8af501fc`（= 9ec303f6 + runtime gitlink→36957c6b） |
-| pypto-lib | `4c48215b` |
-| simpler (pypto/runtime submodule) | `36957c6b`（develop 已回退；c7fdc574 编不过，见 Step 4） |
-| pto-isa | `ecb6c303`（≈ origin/main） |
-| PTOAS (src) | `72ada0a1` |
-| ptoas-bin | `v0.45`（binary，见 Step 5） |
+| pypto | `ca21ab5f` |
+| pypto-lib | `29547af6`（`stepfun/develop`；canonical Main=`models.step3p5.decode_fwd:whole_decode_step3p5`） |
+| simpler (pypto/runtime submodule) | `216e7632` |
+| pto-isa | `ecb6c303` |
+| PTOAS (src) | `fc8c6cae` |
+| ptoas-bin | `v0.50`（binary，见 Step 5） |
 
 > **踩坑**：
 > - **只拉 pypto-lib 不构成同一测试对象**——pypto 的 `StackedDeviceTensor`/`import_ipc_all`、simpler 的 forked-child ACL IPC import、runtime build 产物缺一都跑不通。5 仓要一起对齐。
@@ -181,7 +193,8 @@ python -c "import simpler" 2>/dev/null || pip install --no-build-isolation -e "$
 > - **不要传 `CMAKE_BUILD_TYPE=Release`**——会撞 `tensor.h buffer_elems -Werror=unused-variable`，用 cmake dev default 即可。
 > - rebase / 换 pin 后第一次 build 先清缓存：`rm -rf "$WS"/pypto/build/cp311-* "$WS"/pypto/build/cache "$WS"/pypto/build/lib`。
 > - Python 必须 3.11（venv 名 `.venv311`）。
-> - **simpler pin：用 `36957c6b`（stepfun/develop 现 tip，可编译，0162 验证过的 .so 就是它）。**
+> - **当前 simpler pin：用 `216e7632`**。以下 `36957c6b`/`c7fdc574`
+>   内容是 2026-07-23 历史故障说明，不是 current pin。
 >   ⚠ **别用 `c7fdc574`**（曾经的 develop tip，已废弃/回退）：它 = `36957c6b` + 9 个 WIP
 >   commit，其中 Phase-24 `import_ipc` 半成品的 python bindings **编不过**——① `orchestrator.cpp:41`
 >   调 `get_worker(...)` 但 header 只有 `get_worker_by_id`（同文件 35/47/53 都是 `get_worker_by_id`，
@@ -196,9 +209,10 @@ python -c "import simpler" 2>/dev/null || pip install --no-build-isolation -e "$
 ## Step 5 · 构建 simpler runtime (a2a3) + ptoas-bin 就位
 
 ```bash
-# ptoas-bin：从 PTOAS release 下载 v0.45 的 ptoas-bin-x86_64.tar.gz，解到 $WS/ptoas-bin
-#   校验：$WS/ptoas-bin/bin/ptoas --version  ->  ptoas 0.45
-# （运行 ptoas 前必须先 source activate.sh，否则缺 libMLIR...so.19.1）
+# ptoas-bin：使用 0724/current release 的 v0.50 payload，解到 $WS/ptoas-bin
+#   校验：LD_LIBRARY_PATH=$WS/ptoas-bin/lib $WS/ptoas-bin/bin/ptoas --version
+#   -> ptoas 0.50
+# （不带 LD_LIBRARY_PATH 直接执行会缺 libMLIRMlirOptMain.so.21.1）
 
 # 构建 a2a3 平台 runtime .so（host_runtime / aicpu_kernel / aicore_kernel / dispatcher）
 cd "$WS/pypto"
@@ -255,11 +269,11 @@ python examples/workers/l3/allreduce_distributed/main.py -p a2a3 -d 0-1
 
 **② 权威 CI smoke（需 checkpoint + cards 8–15）—— 通过即"环境可用"**
 
-在 **stable 线 `stepfun/develop`** 上跑权威 CI runner（preflight ckpt/PTO-ISA/cards →
+在 **pinned pypto-lib `29547af6`** 上跑权威 CI runner（preflight ckpt/PTO-ISA/cards →
 whole-net 8-step → MTP → 清理 exporter；详见 `pypto-lib/tests/step3p5/ci/WHOLE_NETWORK_CI.md`）：
 
 ```bash
-cd "$WS/pypto-lib"          # 确认在 stepfun/develop
+cd "$WS/pypto-lib"          # 确认 HEAD=29547af6
 python -m tests.step3p5.ci.run_whole_network_ci \
   --ckpt /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp \
   --devices 8,9,10,11,12,13,14,15 \
@@ -269,7 +283,10 @@ python -m tests.step3p5.ci.run_whole_network_ci \
 
 **期望（通过判据）**：
 - canonical 金标准：`argmax=303` / token `6127`（见 [`reference/canonical-test.md`](../../reference/canonical-test.md)）。
-- CI runner 逐 step token 期望 → 以代码仓当前 `stepfun/develop` 的 `tests/step3p5/ci/WHOLE_NETWORK_CI.md` 为准（会随版本更新，别在本文写死）。
+- 默认 Main 应为 `models.step3p5.decode_fwd:whole_decode_step3p5`；只有显式
+  `--baseline-main` 才回退到 0724 baseline。
+- raw vanilla gate 与 replacement gate 分开：当前 N=256 raw `240/256=93.75%`
+  未达到历史 95%；opt↔baseline token/hidden `256/256` exact，replacement PASS。
 - **无 stall / 无残余 exporter PID**。
 
 > 数值正确与无 stall 是两个独立 gate。step1 对、step2 错 → 先查 token/embedding、
@@ -298,13 +315,13 @@ Phase B ② 的更细粒度复现（fresh exporter pool + worker、清理铁律�
 | `ASCEND_HOME_PATH not set` | 没 source CANN set_env.sh | 三件套第 1 行（Step 6） |
 | `PTO_ISA_ROOT not set` | 没 export PTO_ISA_ROOT | 三件套第 3 行（Step 6） |
 | `python` 找不到 | activate.sh 后 venv 未激活 | `source $WS/.venv311/bin/activate`（Step 6） |
-| ptoas 缺 `libMLIR...so.19.1` | 没先 source activate.sh | 先激活再跑 ptoas（Step 5） |
+| ptoas 缺 `libMLIRMlirOptMain.so.21.1` | `LD_LIBRARY_PATH` 未含 v0.50 `lib` | 先激活，或显式 `LD_LIBRARY_PATH=$WS/ptoas-bin/lib`（Step 5） |
 | build `buffer_elems -Werror` | `CMAKE_BUILD_TYPE=Release` | 用 dev default，别传（Step 4） |
 | `CMake configuration not found` | venv 缺 cmake | `pip install cmake==3.31.6`（Step 5） |
 | ccec `'cstdint' file not found` | 缺 libstdc++-12-dev | `apt-get install libstdc++-12-dev`（Step 5） |
 | a2a3 HOST 编译 `PLATFORM_ONBOARD_SCHEDULER_TIMEOUT_MS` 未定义 | 旧 fork 状态 a2a3 `platform_config.h` 缺该宏（a5 有），common `device_runner_base.cpp` 引用 | 拉当前 pin（已修=10000）；或在 a2a3 header 补 `constexpr int32_t PLATFORM_ONBOARD_SCHEDULER_TIMEOUT_MS = 10000;`。仅 compile-time，不影响旧 `.so` 运行（Step 5） |
-| simpler `c7fdc574` python bindings 编不过 | 该 commit = 36957c6b + 半成品 Phase-24 import_ipc（orchestrator.cpp:41 `get_worker` 笔误 + control_import_ipc 缺 header 声明） | 用 `36957c6b`（develop 已回退，2026-07-23）；别退 origin/main 7ccd2a5a（缺 no-HCCL/peer-access）（Step 4） |
-| ptoas parse error | pypto 越过动 MLIR op 的 commit，ptoas-bin 太旧 | bump ptoas-bin ≥ v0.45（Step 5） |
+| simpler `c7fdc574` python bindings 编不过 | 2026-07-23 历史半成品 | current release 直接用 `216e7632`（Step 4） |
+| ptoas parse error | pypto/PTOAS/ptoas-bin 混搭 | 恢复 current pins + ptoas-bin v0.50（Step 5） |
 | 跑通一次后结果变/污染 | monkey-patch 后 stale `.pyc` | `find models/step3p5 -name "*.py" -exec touch {} +`（Step 6） |
 | git push/pull 130s 超时 | 内网 HTTP/2 | `git -c http.version=HTTP/1.1 ...`（Step 3） |
 
