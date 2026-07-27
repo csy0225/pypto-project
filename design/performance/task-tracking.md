@@ -55,7 +55,7 @@ producer → 数学变换/quant/route-map → transport/window
 ### Track D — INT8-native W8A8（gap-5）
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| D1 | 对齐 V4-Flash deferred-norm + INT8 activation/scale producer | P1 | 🟦 | codex-bc | — | current 已有部分 INT8+scale；剩余是按 V4-Flash 统一 norm/amax/scale producer 与 gate/dispatch/shared consumer，不能再把 INT8 transport写成step3p5独有能力 | 2026-07-27 |
+| D1 | 对齐 V4-Flash deferred-norm + INT8 activation/scale producer | P1 | 🟦 | codex-bc | — | current 已统一 deferred norm/amax/single per-token scale 与 INT8 dispatch ABI；0162 active-batch=1 仍有数值/输出 token 异常，extent=2 仅恢复 TP spread 但未恢复 token，已回退该 workaround；继续做 D1 producer 与 pre-D1 对照，不能把问题误归因于 C 通信 | 2026-07-27 |
 | D2 | 对齐 V4-Flash routed expert INT8×INT8/requant/W2 epilogue | P1 | 🟦 | codex-bc | D1 | current 已有部分 INT8 cube、scale、requant；剩余是统一 tile/pipeline、route-weight placement 和 expert-lane output。combine 不重复乘 route weight；512B data tile与signal stride分开 | 2026-07-27 |
 
 ### Track E — LM head
@@ -73,7 +73,7 @@ producer → 数学变换/quant/route-map → transport/window
 ### Track G — 调度轴 / 动态 batch
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| G1 | experts/feature调度轴 + runtime dynamic active batch/token | P1 | 🟦 | codex-bc | 与B2/C2/C3协同 | 新合同：默认16不是逻辑batch硬约束；若frontend需静态formal shape，只能作为可配置capacity上界。attention、MoE、combine和KV写入均须按runtime active bound运行；待非16 capacity compile、batch/token 1/2/8/16数值/route/KV row-diff与多轮设备DFX | 2026-07-27 |
+| G1 | experts/feature调度轴 + runtime dynamic active batch/token | P1 | 🟦 | codex-bc | 与B2/C2/C3协同 | 默认16仅是storage capacity；packed-global active rows 已贯穿 attention、MoE、combine、KV。0162 clean 单次 active-batch=2/8/16 通过（token=303、finite、TP spread=0）；active-batch=1 在 clean 与 dep 均异常，不能宣称 DONE。仍缺 route telemetry、KV row-diff、多轮 invocation 和非默认 capacity device 证据 | 2026-07-27 |
 
 ---
 
@@ -131,6 +131,8 @@ producer → 数学变换/quant/route-map → transport/window
 | 2026-07-27 | C1/C2/C3 | 文档/合同决定更新：C2/C3不再保留“先量化current pull再决定”的分支，直接迁移V4-Flash expert-lane dispatch push/gather与combine scatter/wait/token reduce；C1删除pull专属双波描述，仅保留shared windows、单调epoch与真实arrival/completion生命周期 | probe拓扑与shape不作为硬约束；本次仅改文档，不改canonical代码 |
 | 2026-07-27 | G1 | 产品合同更新：`BATCH=16`不再是step3p5逻辑batch硬约束；runtime active batch/token贯穿attention、MoE、combine和KV写入 | 静态formal shape仅可作为可配置capacity上界；清理固定16 padding与永久KV reserve表述；本次仅改文档 |
 | 2026-07-27 | 方法论 | 禁止局部shape/name比较；所有“step3p5独有/必须保留”判断改为producer→数学变换→transport/window→consumer→rounding/reduction→lifetime端到端审计 | 差异统一分为能力/算法、数学语义、layout/shape、host/allocator集成、backend/profile workaround；任务描述先与current source对账 |
+| 2026-07-27 | C/D/G 设备回归 | 0162 镜像、cards 8-15、canonical `whole_decode_step3p5`：clean active-batch=2/8/16 单次通过；clean active-batch=1 复现 `output_token=6127`、TP spread `4.203125`，`N1_DFX=dep` 旧产物也异常；norm extent=2 实验恢复 spread=0 但 token 仍错误，已回退 | DFX 不是唯一根因；不能把 batch=2/8/16 泛化为全部动态 batch；C/D source/compile/lowered 仍保持 DeepSeek-first |
+| 2026-07-27 | C/D/G 约束清理 | canonical 注释改为 V4-Flash-style shared EP window + epoch lineage；512B 仅 stacked/reused control slot 的 step3p5 backend/profile 隔离，不是通用 DeepSeek signal ABI；未改 TP all-reduce、未恢复 pull | 旧 pull 只作历史回归基线；按 source/compile/lowered/device/runtime DAG 分级，不因 probe 编译越级 DONE |
 
 
 ### 2026-07-27 顶层方向收口
