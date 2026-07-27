@@ -28,14 +28,14 @@
 |----|--------|--------|------|-------|------|------|----------|
 | B1 | resident 权重池 + loop-form zero-copy view ABI | P0 | ✅ | — | — | 前：0724 已一次 IPC import/resident，但 loop-form Main 无 10 FULL + 30 SWA 连续 bucket ABI；后：`Wsub()` 从 loader pool 取 FULL `1:11` / SWA `2:32` zero-copy view，再跨 rank stacking。相对复制专用 bucket，按 shape 避免约 `0.94 GiB/rank` 额外设备副本；不再误写成 24 GiB/rank/step H2D。dynamic-offset probe PASS，N=256 replacement exact | 2026-07-26 |
 | B2 | 45 层 unroll → `pl.range` 循环 | P1 | ✅ | b1-weights | — | 前：historical `decode_layer.py` 31,686 lines / 40 MoE layer sites；后：canonical `decode_fwd.py` 4,772 lines、MoE `pl.range(40)` 单 loop body + L43/L44 specialization，源码约 -84.94%。N=256 canonical-only 清理前后 token/hidden 均 256/256 exact；raw 同为 240/256，低于历史 raw gate | 2026-07-26 |
-| B3 | KV pool `resident` + in-place | P2 | 🟦 | codex-bc | B1 | canonical `pl.InOut` + holder 单次 IPC import/build + `run()` 无整池 copy 的静态合同已通过；仍缺镜像连续 ≥6 次 invocation、45 层×8 rank K/V row-diff 和 immutable digest 复验 | 2026-07-27 |
+| B3 | KV pool `resident` + in-place | P2 | 🟦 | codex-bc | B1 | canonical source contract、全物理池 fail-closed row-diff/first-write-no-op 合同及 0162/0726 镜像 backend compile 已通过；历史 r4 在首个 invocation 的 AICPU/collective 初始化后 `507018 + S1:running-stalled`，0 个 invocation 完成，故连续 ≥6 次、45 层×8 rank K/V device row-diff 仍 NO-GO | 2026-07-27 |
 
 ### Track C — MoE 通信协议
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| C1 | 单 window set + `moe_epoch` + `WaitCmp.Ge` | P0 | 🟦 | codex-bc | — | canonical 已实现 ready/read-complete 双波 epoch（`2e-1/2e`）、control-only wait、真实 token RAW 和单套 EP data window；512B 只用于 stacked/reused notify/wait/AtomicAdd control slot，普通 data/MTP 独立 signal 不扩容；仍缺 lowered IR、TGET 和多轮设备 liveness | 2026-07-27 |
+| C1 | 单 window set + `moe_epoch` + `WaitCmp.Ge` | P0 | 🟦 | codex-bc | — | canonical source contract 与 0162/0726 镜像 current-source manifest/lowered gate 已通过：限定的 6 个 stacked/reused control slot 精确为 `[128,1]`/stride128，普通 data 与 MTP compact signal 未泛化；synthetic per-wait RAW DAG fail-closed 通过，但真实 runtime `deps.json`、TGET ordering 和多 epoch device liveness 缺失，整体仍 NO-GO | 2026-07-27 |
 | C2 | dispatch push → pull（fixed-slot） | P1 | ✅ | — | — | 前：source push/remote-store，跨 die completion 竞争；后：fixed-slot peer-major `remote_load` pull + combine pull-back。收益是消除随机 stall 路径、提高 liveness 可重复性；数据量不变。commit `42ac1ffd`，N=256 无 stall | 2026-07-26 |
-| C3 | peer loop → `pl.spmd`/`pl.parallel` | P2 | 🟦 | codex-bc | C1 | 尚未实现：当前 peer loop 仍为 `pl.range`。必须先把 per-peer non-aliasing task ABI 和 explicit join 提升到 orchestration/SPMD 边界；禁止把 `pl.parallel` 塞进 InCore 伪完成 | 2026-07-27 |
+| C3 | peer loop → `pl.spmd`/`pl.parallel` | P2 | 🟦 | codex-bc | C1 | 正确最小架构已在 0162/0726 镜像真实 PTOAS backend compile：`pl.spmd_submit` peer grid + peer-major non-aliasing slab + captured TaskId/`task_dummy` join + sole token reducer；修复了 DistributedTensor submit-return alias 丢 CommCtx 的根因。canonical 仍保留 InCore peer loop/TGET，无该 ABI 与 join，production audit 明确 NO-GO | 2026-07-27 |
 
 ### Track D — INT8-native W8A8（gap-5）
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
@@ -58,7 +58,7 @@
 ### Track G — 调度轴 / 动态 batch
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| G1 | 调度轴 batch→experts/feature + dynamic active-token | P1 | 🟦 | codex-bc | 与 B2 协同 | canonical/holder 已接入 `num_tokens_per_owner` runtime ABI，gate/dispatch/combine 只 route active rows，gate fan-out 迁到 expert chunk，persistent prepare 已启用；仍缺 batch=1/2/8/16 镜像 compile、active/inactive 数值、DFX 和多轮设备验证 | 2026-07-27 |
+| G1 | 调度轴 batch→experts/feature + dynamic active-token | P1 | 🟦 | codex-bc | 与 B2 协同 | source/AST fail-closed contract 与 0162/0726 镜像 current-source backend compile/lowered gate 已通过：owner-vector read、`[0,16]` clamp、active scalar 下传、storage/KV shape 均可观察；报告明确 `device_runtime_route_telemetry=false`，仍缺 batch=1/2/8/16 active/inactive 数值、route counter、DFX 和多轮设备验证 | 2026-07-27 |
 
 ---
 
@@ -110,3 +110,4 @@
 | 2026-07-27 | — | canonical-only 清理：删除 retired unroll Main、两份 Phase-2 single-layer decode draft、断链的 per-layer MoE socket worker 和零引用一次性 repro/golden；dense MLP 抽到 `models/step3p5/dense_mlp.py` 供 Main/MTP 共用；holder/sidecar/harness/CI 删除 rollback 与自定义 Main selector | 后续只以 `decode_fwd.py:whole_decode_step3p5` 为 base；历史 reference 加 retired 标识，不再作为执行指南 |
 | 2026-07-27 | C1 | 收紧 512B 口径与合同：只对同 backing 中 stacked/reused 且参与 notify/wait/AtomicAdd 的 control slot 使用 512B physical stride；逻辑访问仍为前 `n_ranks` 个 INT32 | DeepSeek 的 512B 是 data tile/cache-line/MTE 口径，不是通用 signal/window ABI；MTP 独立 compact signal 保持 `tp_size*4` |
 | 2026-07-27 | B3/C1/G1 | canonical 静态实现与 25 项合同测试通过；设备/镜像 gate 尚未完成 | C3 明确保持 IN PROGRESS，不能以 InCore `pl.parallel` 伪完成 |
+| 2026-07-27 | B3/C1/C3/G1 | 验收门禁与 0162 镜像证据收敛：B3 canonical compile-only PASS；C1 current-source lowered signal chain PASS、无 runtime DAG 故整体 NO-GO；G1 current-source compile/lowered active-bound PASS、无 route telemetry；C3 正确 peer-SPMD 最小架构真实 backend compile PASS，但 canonical audit 仍 NO-GO | pypto-lib 本地 commits `899c7ffa` / `dc523fed` / `efc511c3`；未 push。所有 source/synthetic/compile/device 证据分级记录，未把低等级 PASS 冒充 device DONE；canonical/all-reduce 无本轮未提交改动 |
