@@ -26,7 +26,7 @@ native INT8 权重，token-exact 对齐 vLLM 参考。**strict raw-hidden 边界
 ```mermaid
 graph TD
     IN["current_hidden[tp,BATCH,HIDDEN]<br/>(已 embed 的 token)"]
-    subgraph PROG["单个 @pl.program: whole_decode_faithful_real_single_chip_hidden_only"]
+    subgraph PROG["单个 @pl.program: whole_decode_step3p5"]
         direction TB
         L0["L0 · full-dense<br/>attention_full + dense MLP"]
         L12["L1,L2 · swa-dense<br/>attention_swa + dense MLP"]
@@ -184,13 +184,15 @@ sequenceDiagram
 
 ## 9. 生成与调参
 
-- **唯一生产入口** = `whole_decode_faithful_real_single_chip_hidden_only`
-  （`models/step3p5/decode_layer_single_chip_hidden.py`，`stepfun/develop`）：完整 Main
+- **唯一生产入口** = `whole_decode_step3p5`
+  （`models/step3p5/decode_fwd.py`）：完整 Main
   45 层跑在一个 `@pl.program`，输出 pre-final-norm hidden，**无 lm_head、无 per-layer
   production dispatcher**。MTP 有独立 hidden-only fwd（`mtp_hidden_fwd.py`）。
-- 整网 builder 由生成器 `tools/step3p5/_gen_faithful_real.py` 文本生成（只保留 final
-  single-submit 实现 + 共享 helper）。
-- 调参旋钮 `P_FAITHFUL_MOE_LAYERS`（默认 42 = 全网）控制发射多少 MoE 层，用于 bisect。
+- canonical 使用 runtime `pl.range` 表达重复层；L0/L43/L44 保留显式
+  specialization。诊断截断和单层探针只存在于 `tests/step3p5/probes/`，
+  不进入产品 program。
+- retired unroll source、generator、rollback selector 和自定义 Main
+  module/name 参数均已删除。
 - **argmax 精度校验**（standalone）：hidden → host `final_logits_from_vllm.py`
   （final RMSNorm + lm_head）→ logits → argmax，**lm_head 不在 kernel 内**。
 

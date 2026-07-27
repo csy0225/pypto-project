@@ -4,7 +4,7 @@
 > 每日流水在 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)；
 > 整体规划在 [`planning/roadmap.md`](planning/roadmap.md)；接力面在
 > [`planning/handoff.md`](planning/handoff.md)。
-> **最后更新：2026-07-26。**
+> **最后更新：2026-07-27。**
 
 ## 两条线（项目结构）
 
@@ -19,16 +19,18 @@
      `PyPtoMetadataOnlyStep3p5DecoderLayer` + MTP-proposer 挂点 + MTP3 `hf_overrides` boot fix，
      commit `1b3e538c`）+ `vllm-ascend/` fork。
 
-> **2026-07-26 集成现状快照**：B2 loop-form Main 已正式迁入
+> **2026-07-27 集成现状快照**：B2 loop-form Main 已正式迁入
 > `models/step3p5/decode_fwd.py`，并完成 0162 发布镜像内 canonical-only
 > regression。删除 `models/step3p5_opt` package、`whole_decode_opt` 和
 > `WholeDecodeOpt` 后，与清理前 canonical 镜像逐 step token/hidden
 > `256/256` exact，`max_abs_diff=0`、TP spread `0.0`，step127/128/255 全通过；
 > 删除兼容入口没有改变数学执行。同一 vanilla oracle 的 raw 对齐为
 > 240/256=93.75%，低于历史 95% raw gate，不能写成无条件 vanilla PASS。
-> `pypto-lib stepfun/develop@53eb7212` 现在只保留
-> `models.step3p5.decode_fwd:whole_decode_step3p5` 这一默认 Main；显式
-> `--baseline-main` 仍可回退到 0724 unroll baseline，但不属于兼容 alias。
+> 当前工作区只保留
+> `models.step3p5.decode_fwd:whole_decode_step3p5` 这一 Main。retired 0724
+> unroll source、rollback selector 和自定义 Main module/name 参数已删除；
+> 后续以 0726 canonical 结构为唯一 base。Main/MTP 共用的 dense MLP kernel
+> 已抽到 `models/step3p5/dense_mlp.py`。
 > 新镜像 `stepfun-develop-20260726-step3p5-only`
 > （registry digest `sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81`，
 > config `sha256:d296461051559e6ea0e22d04a4cc44f749c82f19a50418fe6db75387f1f067e9`）

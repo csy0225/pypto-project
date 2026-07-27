@@ -31,8 +31,8 @@
   step127/128/255 PASS；
 - 对同一 vanilla oracle，canonical-only 为 `240/256=93.75%`，低于历史
   `>=95%` raw gate；不能写成 vanilla raw precision PASS；
-- `--baseline-main` rollback 编译成功并完成 3-step device smoke；step2
-  退出是已知 stale hardcoded oracle，不是 rollback 失效；
+- 2026-07-27 后 retired unroll source、rollback selector 和自定义 Main
+  module/name 参数均已删除；旧 rollback smoke 只作为历史证据，不属于当前镜像 gate；
 - 最终镜像内默认 holder 实际打印
   `program=whole_decode_step3p5`；8-step device smoke hidden 全 finite、
   TP spread `0.0`，除已知 stale oracle step2 外其余 `7/8` token exact；

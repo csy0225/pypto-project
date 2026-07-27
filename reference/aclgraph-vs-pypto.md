@@ -4,8 +4,7 @@
 > **「decode 用 pypto kernel 替换掉 vllm-ascend 的 graph 调度后还兼容吗?上限谁更高?」**
 >
 > 关联:
-> - `pypto-lib/models/step3p5/decode_fwd.py` — 顶层 `Step3p5DecodeFwd`(host_orch / chip_orch)
-> - `pypto-lib/models/step3p5/decode_layer.py` — `select_decode_layer()` + 2 个 per-layer builder
+> - `pypto-lib/models/step3p5/decode_fwd.py` — canonical `whole_decode_step3p5`（单个 whole-net `@pl.program`）
 > - `pypto/runtime/.../tensormap_and_ringbuffer/docs/RUNTIME_LOGIC.md` — simpler 运行时调度模型
 > - 关联 Phase:[`../phases/20-vllm-backend-monkey-patch.md`](../archive/completed-phases/20-vllm-backend-monkey-patch.md)、[`../phases/22-perf-baseline.md`](../archive/completed-phases/22-perf-baseline.md)
 > - 关联 arch:[`vllm-step3p5-mapping.md`](../design/vllm-pypto/03-vllm-op-mapping.md)(op-级映射)
@@ -16,7 +15,7 @@
 
 1. **术语**:Ascend 上不是 CUDA graph,是 **ACL graph (aclgraph)** / **torchair graph mode**。
 2. **兼容性**:pypto kernel **不能**作为 drop-in 塞进 vllm 捕获的图里——两者是**互斥**地解决同一个问题(decode 的 host launch 开销)。正确姿势是**用 pypto 融合取代那段 graph**,被 patch 的路径走 `enforce_eager`,MoE fallback 段可留在 aclgraph 里。
-3. **粒度**:aclgraph 的节点 = 1 个 aclnn 算子(细);pypto 整网最终只有 **9 个粗粒度 program**(或融成 1 个),层内 attention/MoE/lm_head 全在编译期内联掉。
+3. **粒度**:aclgraph 的节点 = 1 个 aclnn 算子(细);当前 pypto production 是 **1 个 whole-net `@pl.program`**，45 层 attention/MoE 在编译期进入同一 Main，LM head 留在 vLLM tail。
 4. **调度**:单个 pypto program 内,host 只 upload 一次 + kick + sync,**AICPU 自调度,host 出 loop**。要让 host 在 48 层之间也出 loop,机制是**编译期把多层融成一个 orchestration**,而不是把多个 program 提交到共享队列。
 5. **上限**:两者物理上限是**同一个 roofline**。aclgraph 只清「host 调度」一桶(和 pypto 共享的地板);pypto 额外清掉 kernel 边界 + 中间张量 HBM 往返 + 多引擎重叠 → **更逼近 roofline**,是 aclgraph 的超集。**收益 prefill 大、纯 decode 小**。
 6. **大 batch**:收益曲线是**凸的**——离开小 batch 内存墙角后上升、中等 batch 见顶、极大 batch 因 compute-bound 又被压平;同时**大 batch 让 aclgraph 自身失去意义**(host 开销趋零)。

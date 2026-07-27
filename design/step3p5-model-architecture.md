@@ -96,7 +96,7 @@ flowchart TD
 ```
 
 > **pypto 生产程序边界**：整网 `@pl.program`
-> (`whole_decode_faithful_real_single_chip_hidden_only`) 只跑到 **pre-final-norm
+> (`whole_decode_step3p5`) 只跑到 **pre-final-norm
 > hidden**；下面各图中的 final RMSNorm + lm_head + sampling 由**下游**（standalone
 > host / live vLLM）承担，**不在 pypto kernel 内**。详见
 > [`whole-net/01-system-design.md`](whole-net/01-system-design.md) §2。

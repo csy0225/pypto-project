@@ -122,11 +122,9 @@ sudo $NC run --rm --net host --ipc host --privileged --security-opt apparmor=unc
 models.step3p5.decode_fwd:whole_decode_step3p5
 ```
 
-`models/step3p5_opt` package、`whole_decode_opt` 和 `WholeDecodeOpt` 已删除；
-旧调用方必须 fail-fast，禁止重新引入兼容 alias。只有显式给 hidden-only
-harness / sidecar 传 `--baseline-main` 时才回退到 0724 unroll baseline。
-`--layer-module` 和 `--layer-name` 只用于成对选择其他自定义 Main，不能与
-`--baseline-main` 同时使用。
+retired 0724 unroll source、rollback selector、自定义 Main module/name 参数、
+`models/step3p5_opt` package 和 opt aliases 均已删除。旧调用方必须
+fail-fast，禁止重新引入第二个 Main 产品入口。
 
 **判读(关键)**——canonical 金标准 = token `6127` → argmax `303`:
 
@@ -159,9 +157,14 @@ sudo $NC run --rm --net host --security-opt apparmor=unconfined \
   "$IMG" bash -lc 'set -e
     test "$(git -C /workspace/pypto-lib rev-parse HEAD)" = \
       53eb7212c29c9bd015ee060cd9924a13ea781ae0
+    test ! -e \
+      /workspace/pypto-lib/models/step3p5/decode_layer_single_chip_hidden.py
     test ! -e /workspace/pypto-lib/models/step3p5_opt
-    ! grep -RqsE "whole_decode_opt|WholeDecodeOpt" \
-      /workspace/pypto-lib/models/step3p5
+    ! grep -RqsE \
+      "whole_decode_opt|WholeDecodeOpt|baseline-main|baseline_main" \
+      /workspace/pypto-lib/models/step3p5 \
+      /workspace/pypto-lib/tools/step3p5 \
+      /workspace/pypto-lib/tests/step3p5
     ldd /workspace/ptoas-bin/ptoas | grep -q "not found" && exit 1 || true
     echo CANONICAL_ONLY_SYMBOL_AUDIT=PASS'
 ```

@@ -1,5 +1,13 @@
 # MoE routed-expert live wiring 集成 spec（源码落地版）
 
+> **历史 / retired（2026-07-27）**：本文描述的 per-layer routed-expert
+> socket worker 已退出产品路径，相关 `vllm_routed_experts.py`、
+> `_routed_jit_probe.py`、`pypto_mlp_worker.py`、`pypto_moe_backend.py`
+> 已删除。当前 release 只允许
+> `models.step3p5.decode_fwd:whole_decode_step3p5` 在单个 whole-net
+> `@pl.program` 内执行 gate/dispatch/expert/combine。本文仅保留历史定位证据，
+> 命令和环境变量不得用于当前交付。
+>
 > 目标：把已验证的 `pypto-lib/models/step3p5/vllm_routed_experts.py`（RoutedExperts
 > per-rank grouped-GEMM，真 W8A8 bad_ratio=0.0000）接进 live 8001，替换 MoE 层
 > (3-44) 的 routed-expert 计算，再对 8000 vanilla oracle 做 live A/B。

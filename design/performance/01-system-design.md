@@ -13,7 +13,7 @@
 ## 1. 背景 & 目标
 
 本专项的历史起点是 `whole_decode_faithful_real`
-（`pypto-lib/models/step3p5/decode_layer.py`，**31,686 行**）的 45 层展开实现；
+（historical `pypto-lib/models/step3p5/decode_layer.py`，**31,686 行**）的 45 层展开实现；
 current release 已切到 `models/step3p5/decode_fwd.py:whole_decode_step3p5`
 （4,772 行）。下文 §2–§4 保留历史诊断和目标架构，current 实际交付及收益
 以 §5 为准。

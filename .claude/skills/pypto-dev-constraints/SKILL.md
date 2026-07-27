@@ -110,6 +110,14 @@ description: >
 | 4 | **L2 cache line 512-B（性能，非 correctness）** | tensor 的 **trailing（最内）维** | multiple of 512B → **BF16 256 elem / FP32 128 / INT8 512** | L2 | 慢 MTE 路径；`perf_hints.log PH001` 告警 |
 
 > 出处：#1 `known-pypto-pitfalls §1(:54-64)/§2(:97-128)`；#2 `§1:62-69`；#3 `tensor_valid_shape.md`（= 设计宪法 P2.2）；#4 `performance-tuning.md:272-319`。**记忆钩子：32B 只管 UB 里 Vec tile 的行宽；512B 管三处（GM↔UB tile、tensor 存储 shape、L2 cache line 性能）。**
+>
+> **不要把 512B 泛化成所有 window / signal window 的 size ABI。**
+> DeepSeek v4 的 MoE control signal（如 `arrived` / `data_arrived` /
+> `combine_arrived`）源码仍是 `DistributedTensor[[N_RANKS, 1], INT32]` +
+> `alloc_window_buffer(N_RANKS * 4)`；DeepSeek 中大量 512B 主要对应 data
+> tile、L2 cache line、MTE 性能/搬运对齐（如 expert_routed 的
+> `QQUANT_TILE=512`、attention/compressor 的 K/N tile），不是通用
+> control-signal ABI。
 
 - **`[N,1]`/`[1,1]` FP32 tile 禁用 `pl.slice` 构造**（行字节=4B 违反规则#1，静态漏检→运行时 507018）；用 `pl.row_sum`/`pl.row_max`/`pl.reshape` 或 `row_expand_mul` 广播。`§1`
 - kernel 体内 **禁裸 `for`**；用 `pl.range/parallel/pipeline/spmd/unroll/while_`。`§6`
@@ -127,6 +135,7 @@ description: >
 - IPC：`aclrtIpcMemGetExportKey` **只在 dptr==块基址**成功（base+offset→507899）；**一块一 key**，export 后必须 `aclrtIpcMemClose` 收尾（裸指针上 close 会 segfault）；forked chip 场景用 export-side `DISABLE_PID_VALIDATION`+import `ENABLE_PEER_ACCESS`。`troubleshooting-8001` / `phases/22-device-shared-inprocess.md`
 - EP-MoE 507018 = `HEAP_RING_DEADLOCK`(orch_error=2) → `PTO2_RING_HEAP≥1GB/ring`；ring→**barrier-mesh** + 固定 ar_chunk。`project_moe_multicard_blocker` / `project_barrier_allreduce_fixes`
 - **EP barrier 用 `AtomicAdd`（非 `Set`）**；`ep_all_to_all` 用**对称 fixed-slot a2a**（dst*MAX/src*MAX，read_off=my_rank*MAX，原路径只 rank0 对）；`pub_counts`↔barrier 间加 `pipe_barrier` fence。`pypto_if_int_lt_symbolic_dropped` / `moe-block-nextwork`
+- **step3p5 stacked control-signal stride 是本地工程约束，不是 DeepSeek 通用 ABI**：仅当 control signal 被 `notify` / `wait` / `AtomicAdd` 使用，且多个 layer/slot 在**同一个 backing buffer** 中堆叠或跨 epoch 复用时，每个独立 slot 的物理 stride 至少 512B（推荐 `COMM_CONTROL_SIGNAL_BYTES=512`, `COMM_SIGNAL_STRIDE_I32=128`，formal/window/slice shape 用 `[COMM_SIGNAL_STRIDE_I32, 1]`，避免 compiler/runtime 只记录 32B byte-span/provenance）；逻辑有效范围仍只访问前 `n_ranks` 行。普通 data window、独立非堆叠 signal window、MTP/rollback 中不满足“同 backing 堆叠/复用”的 signal，不要机械扩成 512B。
 - **DeepSeek 不 fuse attention+MoE** → step3p5 用 **Option-C 两独立 program**（TP-attn program → resid1 → EpTpMoE block），别把 TP-attn+EP-MoE 塞一个 chip_orch。`blockers.md`
 - gate_topk 必须 **format1 渐进 mrgsort 链**（format2 半块未排序→状态机不终止→挂死）。`troubleshooting-moe-block-8card-gate-topk.md`
 - `_expert_routed` partial-tile grouped-GEMM **去掉输入 `valid_shape` + 新变量 `fillpad(gated,0)`**（cube 16×16 fractal 会混无效行）；`tile_valid>0` guard 防空 tile 提交 507018。`blockers.md` / `moe-block-nextwork`
@@ -177,7 +186,7 @@ description: >
 - [ ] 方案有没有违反第 0 层九条核心不变量？（尤其 512B shape 对齐 / shard×rank 恒等 / ISchedulerLayer 递归 / 双条件回收 / function group 同 cluster / 零 Python 关键路径）
 - [ ] 单卡 ST/UT 用了 `apply_perrank_patch`（TP=8 slice）而非 `apply_tp1_patch`？
 - [ ] 新 kernel 的 chunk 是固定常量、不跟 slice 走？tile 行字节 32B 对齐？没有 `[N,1]` slice / 裸 for / `pl.range(常量)` unroll？
-- [ ] 多卡：三件套版本齐？EP barrier 用 AtomicAdd + 对称 a2a？没有 `-9` 强杀 / `npu-smi reset`？
+- [ ] 多卡：三件套版本齐？EP barrier 用 AtomicAdd + 对称 a2a？stacked/reused control signal slot 才做 512B stride 隔离，未把普通 window/独立 signal 机械扩成 512B？没有 `-9` 强杀 / `npu-smi reset`？
 - [ ] 精度：oracle 是 vLLM dump（非 synthetic）？W8A8 两处 INT8 quant + shared 不 quant + router_bias BF16 + EPS=1e-5？没有 silent fallback mask？
 - [ ] 集成：整网在 pypto、vLLM 只调度？monkey-patch 整模型非 per-layer？enforce_eager？
 - [ ] 流程：改前 audit divergence？改后 stale pyc touch？push 用 HTTP/1.1？launch 前 pkill+pgrep+npu-smi？

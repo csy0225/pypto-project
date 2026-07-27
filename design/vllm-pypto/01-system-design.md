@@ -48,7 +48,7 @@ graph TB
             VF["Step3p5Model.forward (monkey-patched)"]
         end
         subgraph P["pypto sidecar 进程 (holder, resident rt)"]
-            H["WholeDecodeHolder<br/>whole_decode_faithful_real_single_chip_hidden_only"]
+            H["WholeDecodeHolder<br/>whole_decode_step3p5"]
         end
     end
     KVPOOL["vLLM paged KV pool (HBM)"]
@@ -114,11 +114,10 @@ sequenceDiagram
 ```
 
 **关键点**：
-- pypto 用 **hidden-only 变体** `whole_decode_faithful_real_single_chip_hidden_only`
-  （`decode_layer_single_chip_hidden.py`）：整网返回**末层 hidden**（`next_hidden_out`
+- pypto 用唯一 canonical hidden-only program `whole_decode_step3p5`
+  （`decode_fwd.py`）：整网返回**末层 hidden**（`next_hidden_out`
   BF16），**final RMSNorm + lm_head + sampler 由 vLLM 承担**——这就是 vLLM↔pypto 的
-  清晰边界（sidecar `--layer-name ..._single_chip_hidden_only`）。standalone 用带
-  lm_head 的 full 变体（出 logits）。
+  清晰边界。holder/sidecar 不提供 rollback 或自定义 Main selector。
 - 决策广播走 **CPU/Gloo `broadcast_object`**，**不是** NPU `tp.broadcast`（后者会与 pypto 的全卡 collective 在同卡上死锁）。
 - socket 不存在 + 真实请求 + tail-only 模型 ⇒ `GATE_FAIL_CLOSED`（raise，不静默 fallback）。
 - 非 rank0 worker 阻塞在第二个 `broadcast_object`，不占 NPU/HCCL。

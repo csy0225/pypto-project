@@ -45,7 +45,8 @@ canonical-only N=256 与清理前 canonical 镜像 token/hidden `256/256` exact�
 `max_abs_diff=0`、TP spread `0.0`，所以 compatibility removal regression 已关闭。
 对同一 vanilla oracle raw 为 `240/256=93.75%`，低于历史 95% raw gate；不能写成
 raw PASS，也不能外推成完整 Main+MTP serving 已平替。该结论不覆盖 N1-S-0234。
-显式 `--baseline-main` 仍可回退到 0724 unroll baseline，但不属于兼容入口。
+2026-07-27 已删除 retired 0724 unroll source、rollback selector 和自定义
+Main module/name 参数；后续 blocker 定位只允许 canonical。
 
 **当前 live serving blocker**：
 

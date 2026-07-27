@@ -9,18 +9,18 @@
 > [`../../reference/canonical-test.md`](../../reference/canonical-test.md) 的 pin），
 > 重构后如漂移以符号名为准。
 
-## 1. 单 `@pl.program` 结构与生成器
+## 1. 单 `@pl.program` canonical 结构
 
 **唯一生产入口**（`pypto-lib` @ `stepfun/develop`）：
 
-| 元素 | 位置（`models/step3p5/decode_layer_single_chip_hidden.py`） |
+| 元素 | 位置 |
 |------|------|
-| builder | `:523` `_build_whole_decode_faithful_real_single_chip_hidden_only_program` |
-| `@pl.program` 类 | `:615` `WholeDecodeFaithfulRealSingleChipHiddenOnly` |
-| 模块 binding | `:6472` `whole_decode_faithful_real_single_chip_hidden_only = _build_..._program()` |
-| host_orch | `:6311`，输出 `next_hidden_out[tp,BATCH,HIDDEN]` BF16（**pre-final-norm**，无 lm_head） |
-| 生成器 | `tools/step3p5/_gen_faithful_real.py`（文本生成，只保留 final single-submit 实现 + 共享 helper） |
-| bisect 旋钮 | `_FAITHFUL_MOE_LAYERS = int(os.environ.get('P_FAITHFUL_MOE_LAYERS','42'))` |
+| `@pl.program` 类 | `models/step3p5/decode_fwd.py:WholeDecodeStep3p5` |
+| 模块 binding | `whole_decode_step3p5 = WholeDecodeStep3p5` |
+| host_orch | 输出 `next_hidden_out[tp,BATCH,HIDDEN]` BF16（**pre-final-norm**，无 lm_head） |
+| 重复层结构 | L1/L2 与 L3-L42 使用 runtime `pl.range`；L0/L43/L44 显式 specialization |
+| 共享 dense kernel | `models/step3p5/dense_mlp.py:dense_mlp_body_tp`，供 Main/MTP inline |
+| 诊断 | 仅在 `tests/step3p5/probes/`，产品 program 不含截断/debug ABI |
 
 - **strict raw-hidden 边界**：整网跑完 Main 45 层，输出 pre-final-norm hidden；
   **final RMSNorm + lm_head + sampling 全在下游**（standalone 走 host
@@ -116,15 +116,14 @@ SiLU / SwigluStep@7）、`expert_shared.py`。
 - `StackedDeviceTensor`（`pypto.runtime.device_tensor`）：`build_stacked_weight(wmaps,key)` 组每 rank shard；`W_reshape`(holder `:197`) 自定义 per-rank shape。
 - **三分类 slice**（`weight_loader.py`）：REPLICATED / TP-sliced / EP-sliced；`expected_shapes(tp)`(`:203`) 是 canonical shape 表；slice helper `_slice_q_proj`(539)/`_slice_kv_proj`(551)/`_slice_o_proj`(563)/`_slice_g_proj`(575)/`_slice_mlp_col`(601)/`_slice_mlp_row`(613)/`_slice_lm_head`(626)。
 
-## 8. 关键 file:line 速查
+## 8. 关键位置速查
 
-| 主题 | 位置（`models/step3p5/decode_layer_single_chip_hidden.py` 除非注明） |
+| 主题 | 位置 |
 |------|------|
-| builder / program 类 / binding | `:523` / `:615` / `:6472` |
-| host_orch（出 pre-final-norm hidden） | `:6311` |
-| bisect 旋钮 `P_FAITHFUL_MOE_LAYERS` | `:570` |
-| 512B signal 常量 | `:609` `COMM_CONTROL_SIGNAL_BYTES=512` |
-| tp_all_reduce / ep_all_to_all | `:619` / `:709` |
+| program 类 / binding | `decode_fwd.py:WholeDecodeStep3p5` / `whole_decode_step3p5` |
+| host_orch（出 pre-final-norm hidden） | `decode_fwd.py:host_orch` |
+| 512B stacked/reused control slot | `decode_fwd.py:COMM_CONTROL_SIGNAL_BYTES/COMM_SIGNAL_STRIDE_I32` |
+| tp_all_reduce / dispatch / combine | `decode_fwd.py:tp_all_reduce/dispatch_step/combine_step` |
 | gate / dispatch / combine | `gate.py:112` / `dispatch.py:140+` / `combine.py:95+` |
 | INT8 transform | `tools/step3p5/_a5_int8_transform.py` |
 | dispatch/combine pull patch | `tools/step3p5/_patch_moepy_dispatch.py` / `_patch_combine_pull.py` |

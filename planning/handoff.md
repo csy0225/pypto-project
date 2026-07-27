@@ -4,7 +4,7 @@
 > durable 规划看 [`roadmap.md`](roadmap.md)，实时状态看
 > [`../STATUS.md`](../STATUS.md)，B2 详细证据看
 > [`../develop/OPT-B2-NEXT-SESSION-HANDOFF-20260725.md`](../develop/OPT-B2-NEXT-SESSION-HANDOFF-20260725.md)。
-> **最后更新：2026-07-26。** 更新时直接改写本文，不追加流水。
+> **最后更新：2026-07-27。** 更新时直接改写本文，不追加流水。
 
 ## 1. 当前 active release
 
@@ -29,12 +29,11 @@ ptoas:   0.50
 models.step3p5.decode_fwd:whole_decode_step3p5
 ```
 
-- hidden-only harness 和 production sidecar 不传 Main 参数时默认使用
-  canonical loop-form Main；
-- `models/step3p5_opt` package、`whole_decode_opt` 和 `WholeDecodeOpt` 已删除；
-- 只有显式 `--baseline-main` 才回退到 0724 unroll baseline；
-- `--layer-module` 与 `--layer-name` 必须成对使用，且不能与
-  `--baseline-main` 同时使用。
+- hidden-only holder、sidecar、harness 和 CI 只使用 canonical loop-form Main；
+- retired 0724 unroll source、rollback selector、自定义 Main module/name
+  参数、`models/step3p5_opt` package 和 opt aliases 均已删除；
+- Main/MTP 共用的 dense MLP kernel 位于
+  `models/step3p5/dense_mlp.py`，该模块不包含产品入口。
 
 active pypto-lib checkout 只保留：
 
@@ -122,9 +121,7 @@ spec: deployment/docker/builds/stepfun-develop-20260726-step3p5-only.env
 3. canonical-only N=256 raw `240/256`，与清理前 canonical 产物 token/hidden
    `256/256` bit-exact、`max_abs_diff=0`、TP spread `0`；
 4. step127、step128、step255 通过；
-5. `--baseline-main` 成功编译为
-   `WholeDecodeFaithfulRealSingleChipHiddenOnly` 并完成 3-step device smoke；
-   step2 仅因已知 stale hardcoded oracle 预期退出。
+5. 旧 rollback 3-step smoke 只保留为历史证据；当前产品路径已删除该入口。
 6. 镜像内 `ptoas 0.50`、`/workspace/pypto-smoke.sh`、
    Git credential audit 和 canonical-only symbol audit 全部 PASS；
 7. 新镜像默认 8-step device smoke 实际打印

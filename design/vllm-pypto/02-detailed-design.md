@@ -5,8 +5,8 @@
 > [`03-vllm-op-mapping.md`](03-vllm-op-mapping.md)。
 > **代码位置**：集成实现在 `pypto-lib/tools/step3p5/`（`stepfun/develop`）。
 >
-> 目标：把已在 canonical 验证通过的整网 hidden-only 入口
-> `whole_decode_faithful_real_single_chip_hidden_only` 接入 vLLM serving decode 路径，
+> 目标：把整网 canonical hidden-only 入口
+> `models.step3p5.decode_fwd:whole_decode_step3p5` 接入 vLLM serving decode 路径，
 > 完成 PyPTO 后端替换。
 > 关联：[`../../planning/phases/28-n1-live-integration.md`](../../planning/phases/28-n1-live-integration.md)、
 > [`../../reference/canonical-test.md`](../../reference/canonical-test.md)、
@@ -29,7 +29,7 @@
 
 ### 0.1 必须保持的硬约束
 
-1. **生产形态只允许单个 whole-net `@pl.program`**：`whole_decode_faithful_real` 继续作为 45 层 decode 的唯一 PyPTO 程序形态；禁止退回 per-layer 多 program。
+1. **生产形态只允许单个 whole-net `@pl.program`**：`models.step3p5.decode_fwd:whole_decode_step3p5` 是 45 层 decode 的唯一 PyPTO Main；禁止退回 per-layer 多 program。
 2. **vLLM 只保留 serving 外壳和 tail**：tokenizer、scheduler、paged KV 管理、sampler、OpenAI API 继续由 vLLM 提供；45 层 decoder forward 由 PyPTO sidecar 替换。
 3. **native W8A8 权重路线不回退**：routed expert 权重 INT8 + FP32 scale，activation INT8 + per-token scale，clamp 后二次 requant；禁止恢复历史 BF16 dequant 权重版本。
 4. **buffer/metadata 边界必须显式**：hidden、KV、comm window、signal、padding row、valid row、dtype、shape、地址对齐都有唯一 owner 和 lifetime。
@@ -68,7 +68,7 @@ flowchart TD
     subgraph P["PyPTO whole-net sidecar，co-resident cards 0-7"]
         EXP["native W8A8 weight exporters\n唯一 decoder 权重副本"]
         HOLDER["WholeDecodeHolder\nbuild + prepare once"]
-        WNET["whole_decode_faithful_real\n45 decoder layers in ONE @pl.program"]
+        WNET["whole_decode_step3p5\n45 decoder layers in ONE @pl.program"]
         EXP --> HOLDER --> WNET
     end
 
@@ -96,7 +96,7 @@ sequenceDiagram
     RN->>RN: same collective gate state
     R0->>SC: send hidden[valid T,H] + padded metadata
     SC->>SC: zero padding rows, set hidden/meta, resident RoPE lookup
-    SC->>RT: rt.run(whole_decode_faithful_real)
+    SC->>RT: rt.run(whole_decode_step3p5)
     RT-->>SC: next_hidden_out[tp,16,H]
     SC-->>R0: next_hidden[valid T,H]
     R0->>TP: broadcast next_hidden to ranks 1..7
@@ -181,7 +181,7 @@ header_json = {
 响应 meta：
 
 ```text
-{"argmax_debug": int, "dt_sec": float, "program": "whole_decode_faithful_real"}
+{"argmax_debug": int, "dt_sec": float, "program": "whole_decode_step3p5"}
 ```
 
 ### 2.3 collective 一致性 gate
@@ -213,7 +213,7 @@ all ranks branch on broadcasted ok
 ```mermaid
 flowchart TD
     H0["current_hidden [16,4096] BF16\ninput from vLLM embed"] --> L0
-    subgraph WNET["ONE @pl.program: whole_decode_faithful_real"]
+    subgraph WNET["ONE @pl.program: whole_decode_step3p5"]
         L0["Layer 0 full dense"] --> H1["ping buffer A: next_hidden_out"]
         H1 --> L1["Layer 1 swa dense"] --> H2["ping buffer B: h_mid_out"]
         H2 --> L2["Layer 2 swa dense"] --> H3["ping buffer A"]
@@ -448,7 +448,7 @@ tail-only 改动属于 vLLM-Ascend backend seam，不应改 upstream generic vLL
 |---|---|---|---|
 | integration docs/runbooks | `pypto-project/phases`, `develop/N1` | manifest、任务、验证 | integration repo |
 | whole-net holder/sidecar/KV importer | `pypto-lib/tools/step3p5/*` | PyPTO live backend | model/product patch |
-| generated whole-net live variant | `pypto-lib/models/step3p5/decode_layer.py` + generator | PyPTO model code | generator-owned patch |
+| canonical whole-net Main | `pypto-lib/models/step3p5/decode_fwd.py:whole_decode_step3p5` | PyPTO model code | canonical product path |
 | vLLM hook/autoload | `vllm-ascend` backend patch or `/logs/pypto_patch` self-contained backend | backend seam | Class C |
 | KV pool allocator/export | `vllm-ascend/worker/model_runner_v1.py` narrow override | backend seam | Class C |
 | tail-only loader/stub | `vllm-ascend` Step3p5-specific patch | backend seam/model-specific | Class B/C |
@@ -509,10 +509,10 @@ tail-only 改动属于 vLLM-Ascend backend seam，不应改 upstream generic vLL
 
 | ID | 任务 | 主要文件 | 依赖 | 验收 |
 |---|---|---|---|---|
-| F1 | whole-net live KV rows 常量 | generator config | D4 | standalone default 4096 不被污染；live variant 可设 `45*slots` |
-| F2 | attention row formula 复核 | `decode_layer.py` generator | F1 | `layer_base = layer_idx * slots_per_layer`，层间不 alias |
-| F3 | generator round-trip | `_gen_faithful_real.py` | F2 | strip/regenerate byte compare PASS |
-| F4 | standalone canonical 回归 | 0162/0234 clean | F3 | P42 token6127 argmax=303 不回退 |
+| F1 | whole-net live KV rows 常量 | canonical `decode_fwd.py` / holder config | D4 | standalone storage 不被污染；live pool 为 `45*slots` |
+| F2 | attention row formula 复核 | canonical attention + `decode_fwd.py` layer slice | F1 | `layer_base = layer_idx * slots_per_layer`，层间不 alias |
+| F3 | canonical source contract | `test_main_hidden_only_contract.py` + `test_performance_bc_contract.py` | F2 | 唯一 Main、KV InOut、无 retired generator/selector |
+| F4 | standalone canonical 回归 | 0162 clean image | F3 | live hidden/token gate 不回退 |
 
 ### G. Native W8A8 与 HBM closure
 

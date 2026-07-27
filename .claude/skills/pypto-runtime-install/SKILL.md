@@ -283,9 +283,10 @@ python -m tests.step3p5.ci.run_whole_network_ci \
 
 **期望（通过判据）**：
 - canonical 金标准：`argmax=303` / token `6127`（见 [`reference/canonical-test.md`](../../reference/canonical-test.md)）。
-- 默认 Main 应为 `models.step3p5.decode_fwd:whole_decode_step3p5`；只有显式
-  `--baseline-main` 才回退到 0724 baseline。
-- `models/step3p5_opt`、`whole_decode_opt`、`WholeDecodeOpt` 必须不存在。
+- Main 必须且只能是
+  `models.step3p5.decode_fwd:whole_decode_step3p5`。
+- retired unroll source、rollback selector、自定义 Main module/name 参数、
+  `models/step3p5_opt` 和 opt aliases 必须不存在。
 - raw vanilla gate 与 replacement gate 分开：当前 N=256 raw `240/256=93.75%`
   未达到历史 95%；canonical-only 清理前后 token/hidden `256/256` exact，
   compatibility removal regression PASS。

@@ -1,5 +1,12 @@
 # MoE 单块 8 卡精度收尾 + vLLM+pypto 集成后续工作（含用户约束铁律）
 
+> **历史约束快照（2026-07-06，已被 2026-07-27 canonical 设计覆盖）**：
+> 本文记录早期单块 MoE 与 per-layer worker 阶段，不能作为当前产品实现指令。
+> 当前唯一 Main 是 `models.step3p5.decode_fwd:whole_decode_step3p5`；C1 采用
+> pull-safe 双波 epoch，512B 只约束 stacked/reused notify/wait/AtomicAdd
+> control signal slot。本文中要求旧 push 路径或 per-layer worker 的段落仅作
+> 历史证据，不得覆盖 current design/task-tracking。
+>
 > 2026-07-06 落。承接 `troubleshooting-moe-block-8card-gate-topk.md`。
 > 本文是**后续工作的入口 + 用户明确要求的约束铁律**。任何续接会话先读本文 + STATUS.md。
 
