@@ -166,6 +166,34 @@ producer → 数学变换/quant/route-map → transport/window
 
 ---
 
+## C/D/G 实现演进索引（2026-07-28）
+
+本轮不是单提交完成，而是按“架构迁移 → ABI 修正 → 数值 lineage → 布局不变量”逐层收敛：
+
+```mermaid
+flowchart LR
+    A[10523b3f V4 MoE + dynamic scheduling] --> B[4ccb5048 / 326d985e dependency ordering]
+    B --> C[90afaed1 / 467ba72d aux width + one scale]
+    C --> D[2677e05b / c9eb925c source provenance]
+    D --> E[c06ba3a6 / a3b186a6 deferred norm producer]
+    E --> F[26ab8da6 / 98098e18 remove old pull maps/helpers]
+    F --> G[5dadfb46 gate + attention lineage]
+    G --> H[b404a3c9 fixed expert physical lanes]
+```
+
+| 提交 | 主要逻辑变化 | 对应优化点 |
+|---|---|---|
+| `10523b3f` | V4 expert-lane dispatch/combine 与 runtime active-token 主体迁移 | C2/C3/G1 |
+| `4ccb5048`, `326d985e` | 用真实 TaskId/阶段顺序约束远端通信依赖 | C1/C3 |
+| `90afaed1`, `467ba72d` | 区分 aux 物理宽度与数学字段；scale 收敛为每 token 一列 | C2/D1 |
+| `2677e05b`, `c9eb925c` | 保留并传递 source lane provenance，供 combine 唯一回写 | C2/C3 |
+| `c06ba3a6`, `a3b186a6` | deferred norm/quant producer 与 UB 分块实现 | D1/G1 |
+| `26ab8da6`, `98098e18` | 删除旧 pull map/helper，明确 dynamic-batch 产品合同 | C2/G1 |
+| `5dadfb46` | gate 重回 resid/gamma/inv_rms 的 V4 数值 lineage | D1 |
+| `b404a3c9` | 动态 compact expert slab 改为固定 expert physical lanes | C2/D2/G1 |
+
+> 读取代码时以 `b404a3c9` 的产品逻辑为本轮设备验收基线；`563fe62a` 仅追加 image CI cleanup 与 `--skip-mtp`，不改变模型数学。
+
 ## Track C — MoE 通信协议
 
 ### PERF-C1 · shared window set + `moe_epoch` + `WaitCmp.Ge`（关键路径）✅ 已完成
@@ -182,6 +210,71 @@ producer → 数学变换/quant/route-map → transport/window
 - **保护区**：attention/shared TP all-reduce 的 `tmp+signal`、固定peer累加顺序、FP32 accumulator和最终一次BF16 store保持不变。
 - **验证**：source ownership/epoch合同 → canonical compile/lowered DAG → 多epoch设备liveness → batch=1/2/8/16 active-route telemetry → live精度与KV row-diff。低层probe只能证明表达能力。
 
+#### 改造脉络、问题与经验（2026-07-28）
+
+##### 示意图：共享 EP window 的 epoch 时序
+
+```mermaid
+sequenceDiagram
+    participant G as Gate / route producer
+    participant S as Source rank dispatch
+    participant M as Shared metadata window
+    participant P as Shared payload window
+    participant E as Destination expert lane
+    participant C as Shared combine window
+    participant R as Source token reducer
+
+    Note over G,R: MoE epoch = e
+    G->>S: expert_indices / route_weight / active routes
+    S->>M: publish route counts
+    S->>M: AtomicAdd(metadata_arrived, e)
+    M-->>E: WaitCmp.Ge(e)
+    S->>P: tensor.put(x_i8, scale, weight, provenance)
+    S->>P: AtomicAdd(payload_arrived, e * N_LOCAL)
+    P-->>E: WaitCmp.Ge(e * N_LOCAL)
+    E->>E: gather + routed expert
+    E->>C: tensor.put(weighted routed_y)
+    E->>C: AtomicAdd(combine_arrived, e * N_LOCAL)
+    C-->>R: WaitCmp.Ge(e * N_LOCAL)
+    R->>R: FP32 TOPK reduction
+    Note over M,C: Reuse backing only after the epoch-e final consumer finishes
+    Note over G,R: Next MoE call uses epoch = e + 1
+```
+
+```mermaid
+flowchart LR
+    subgraph Shared_EP[跨 42 次 MoE 复用的一套 EP backing]
+        Meta[recv_meta + metadata_arrived]
+        Payload[recv_x / recv_aux / recv_route + data_arrived]
+        Combine[routed_y_buf + combine_arrived]
+    end
+    subgraph Per_Layer[仍保持逐层隔离]
+        Attn[attention TP tmp + signal]
+        Shared[shared-expert TP tmp + signal]
+    end
+    Meta --> Payload --> Combine
+    Attn --> AttnSignal[per-layer expected 1/2]
+    Shared --> SharedSignal[per-layer expected 1/2]
+    Combine -. EP 与 TP scratch 不合并 .-> AttnSignal
+```
+
+
+##### 代码符号对照
+
+| 代码符号 | 作用 | 不变量 |
+|---|---|---|
+| `moe_epoch` | 标记第几次 MoE window 复用 | whole-net 单调 1..42 |
+| `meta_arrived` | metadata 发布完成计数 | wait `>= moe_epoch` |
+| `data_arrived` | 每个 local expert 的 payload 到达计数 | wait `>= moe_epoch * n_local_experts` |
+| `combine_arrived` | 每个 local expert 的回写完成计数 | wait `>= moe_epoch * n_local_experts` |
+| `COMM_SIGNAL_STRIDE_I32` | control slot 物理隔离 | 只改变 backing stride，不改变逻辑 rank 数 |
+
+- **之前是什么样**：历史实现按 MoE 层堆叠 dispatch/combine data window 和 signal window，42 次调用各自拥有一套 EP storage；通信协议还带有 pull 时代的 ready/read-complete 双波语义。物理隔离直观，但常驻 HBM、编译期 window 记账和 whole-net 生命周期都被展开。
+- **遇到的问题**：不能把“共享 window”简单理解成所有 signal 共用一个 counter，也不能把所有 512B signal 统一扩大。metadata arrival、payload arrival、combine arrival 是三条不同 producer→consumer lineage；attention/shared TP all-reduce 的 per-layer `expected=1/2` scratch 也不能和 EP 协议混用。只看 signal shape 或 probe 编译通过，也不能证明上一 epoch 的最终 consumer 已经结束。
+- **之后是什么样**：whole-net 只为 EP dispatch/combine 保留一套共享的 `recv_meta/recv_x/recv_aux/recv_route/routed_y` backing 和 arrival signal。40 层 runtime loop 使用 `moe_epoch = layer_idx + 1`，specialized layer 使用后续 epoch，形成 1..42 的单调序列。dispatch 的 metadata wait 使用 `expected=moe_epoch`；payload/combine arrival 按 local-expert fan-out 使用 `expected=moe_epoch * n_local_experts`。C1 删除 pull 专属 `2*epoch-1/2*epoch` 合同，但没有删除阶段边界。
+- **代码逻辑约束**：metadata notify 必须发生在 route count 发布后；payload notify 必须发生在所有远端 `tensor.put` 完成后；combine notify 必须发生在 routed output scatter 完成后。下一 epoch 只有在本 epoch 的最终 semantic consumer 完成后才能覆盖 backing。512B 只用于同 backing 中反复参与 `AtomicAdd/TWAIT` 的 control slot 物理隔离；逻辑 signal 仍是 rank 行，普通 data、MTP signal 和 attention/shared signal 不机械扩展。
+- **经验**：通信优化必须先画出 `producer → remote put/notify → arrival wait → consumer → reuse` DAG，再折叠 storage；每新增阶段都要写清 epoch、expected 增长规则和最终 consumer。多 rank 不 hang 或单个 wait dump 正确，都不足以证明多 epoch liveness。
+
 ### PERF-C2 · 迁移 V4-Flash dispatch/combine 数据流 ✅ 已完成
 - **完成证据**：gate/top-k 前各阶段 row0 bit-identical；修复固定 expert lanes 后 MoE 输出恢复 batch-extension invariance，未回退 V4 dispatch/combine。
 - **目标**：以 `origin/main:models/deepseek/v4-flash/moe.py` 为唯一算法基线，替换current fixed-slot pull目标架构。
@@ -193,6 +286,99 @@ producer → 数学变换/quant/route-map → transport/window
 - **shape/ABI边界**：不得把V4-Flash示例的 `RECV_MAX`、probe的peer-major slab、`core_num=N_RANKS`、`task_dummy`或任何固定二维shape写成硬约束。实际容量必须证明不会overflow且满足512B storage/alignment和下游consumer ABI。
 - **验证**：route/count/map oracle、write-disjoint ownership、remote arrival DAG、active/inactive route数、combine FP32顺序、multi-rank multi-epoch liveness、live precision。
 
+#### 改造脉络、问题与经验（2026-07-28）
+
+##### 示意图：pull 旧路径与 expert-lane 新路径
+
+```mermaid
+flowchart TB
+    subgraph Old[改造前：peer-major pull / pull-back]
+        O1[Source 固定 peer slot]
+        O2[Destination 顺序 TGET]
+        O3[动态 local compact prefix]
+        O4[Routed expert]
+        O5[Inverse map / pull-back]
+        O6[Token combine]
+        O1 --> O2 --> O3 --> O4 --> O5 --> O6
+    end
+
+    subgraph New[改造后：V4 expert-lane push / scatter]
+        N1[Gate: expert id + route weight]
+        N2[Publish per expert/source count]
+        N3[tensor.put payload + provenance]
+        N4[固定 expert/source/slot lane gather]
+        N5[Routed expert + W2 weighted epilogue]
+        N6[tensor.put to source-owned route slot]
+        N7[FP32 TOPK reduction]
+        N1 --> N2 --> N3 --> N4 --> N5 --> N6 --> N7
+    end
+```
+
+##### 示意图：动态 compact 为什么破坏 BS1
+
+```mermaid
+flowchart LR
+    subgraph Compact[错误：动态 compact prefix]
+        direction TB
+        C1[BS1 counts: e0=8, e1=0, e2=8]
+        C2[base e2 = count e0 + count e1 = 8]
+        C3[BS2 counts: e0=16, e1=0, e2=16]
+        C4[base e2 = 16]
+        C5[同一 row0 在 e2 的物理地址改变]
+        C1 --> C2 --> C5
+        C3 --> C4 --> C5
+    end
+
+    subgraph Fixed[正确：固定 expert lane]
+        direction TB
+        F1[expert_recv_max = N_RANKS * BATCH]
+        F2[base e = e * expert_recv_max]
+        F3[count e 只控制 valid rows]
+        F4[BS1/BS2 row0 地址与 tile shape 不变]
+        F1 --> F2 --> F3 --> F4
+    end
+```
+
+```text
+local_recv_max
+┌──────────────── expert 0: expert_recv_max rows ────────────────┐
+│ source 0 slots │ source 1 slots │ ... │ source 7 slots         │
+├──────────────── expert 1: expert_recv_max rows ────────────────┤
+│ source 0 slots │ source 1 slots │ ... │ source 7 slots         │
+├─────────────────────────────────────────────────────────────────┤
+│ ...                                                             │
+└──────────────── expert 35: expert_recv_max rows ───────────────┘
+
+physical base(expert e) = e * expert_recv_max
+valid rows(expert e)    = local_expert_count[e]
+```
+
+
+##### 代码符号对照
+
+| 代码符号 | 改造后的含义 | 禁止重新引入的语义 |
+|---|---|---|
+| `expert_recv_max` | 单个 local expert 的固定 `[source, slot]` capacity | 不能由本次 route count 动态缩放 |
+| `local_recv_max` | `n_local_experts * expert_recv_max` | 不能退回跨 expert compact prefix |
+| `local_expert_count[e]` | expert `e` 的有效 row 数 | 不能决定 expert physical base |
+| `local_expert_offset[e]` | 固定 `e * expert_recv_max` | 不能写成前序 count 累加 |
+| `recv_aux[...,0/1]` | activation scale / route weight | padding 列无数学语义 |
+| `recv_route` / source provenance | combine 回写的唯一地址来源 | 不能在 combine 阶段猜测或重建 |
+
+- **之前是什么样**：step3p5 是 fixed-slot、peer-major 的 pull/pull-back；source 先写固定区域，destination 按 peer 顺序 TGET，combine 再依赖 inverse map 拉回。route owner、expert owner、输出 owner 分散在多套 map 中，难以保持 V4-Flash 的 expert-lane provenance。
+- **之后是什么样**：gate 生成 active token 的 TOPK expert id 和 route weight；dispatch 统计 `(destination rank, local expert)` route count 并发布 metadata；source 用 `tensor.put` 推送 INT8 activation、per-token scale、route weight 和 source/route provenance；destination 按固定 `[expert, source, slot]` lane gather；W2 完成后按 provenance scatter 回 source-owned route buffer；source 在 combine arrival 后按 token/TOPK 固定顺序 FP32 reduce。pull/pull-back 仅保留为历史回归基线。
+- **辅助 ABI 的问题**：scale 的逻辑语义应是 `[CAPACITY,1]`，早期多列辅助字段容易把物理宽度误当成数学字段；现在 `aux[0]` 是 activation scale、`aux[1]` 是 route weight，其余列仅用于 alignment。source provenance 必须由 dispatch producer 传入，combine 不能根据 route id 猜 source lane；route/count/map 必须从同一 producer 派生，不能由不同阶段重建。
+- **决定性 BS1 问题**：初版 gather 后把 local experts 压成动态 prefix，`local_expert_offset[e] = sum(count[0:e])`。因此 BS1 增加相同 row1 后，只要其他 expert count 变化，后续 expert 的 physical base 就移动；最终表现为 attention、post-norm、gate/top-k 全部 bit-identical，但 `moe_out` row0 不同。
+- **最终代码改动**：恢复固定 expert lane：
+  ```text
+  expert_recv_max = n_ranks * BATCH
+  expert_base(e)  = e * expert_recv_max
+  local_recv_max  = n_local_experts * expert_recv_max
+  row(e, source, slot) = expert_base(e) + source_prefix + slot
+  ```
+  `local_expert_count[e]` 只决定 valid rows；`local_expert_offset[e]` 固定为 `e * expert_recv_max`，dispatch gather、routed expert、combine 全部直接使用相同 base。这样添加 row1 不会改变 row0 的物理地址、tile shape 或 codegen 路径。
+- **经验**：不要只在 dispatch/gather/expert/combine 内二分；先检查端到端不变量“添加相同 row1 不得改变 row0”。固定 capacity 是通信/执行 ABI，不是逻辑 batch；若以后 compact，必须证明 indirection 不改变地址 lineage、kernel shape 和 source provenance。
+
 ### PERF-C3 · expert-lane SPMD 与 whole-net 调度适配 ✅ 已完成
 - **完成证据**：最终 candidate 镜像 Main 8-step PASS；N=256 hidden finite `256/256`、TP spread `0`。
 - **目标**：在C2的V4-Flash数据流上完成可编译、可调度的expert-lane fan-out，而不是重新选择是否保留pull。
@@ -202,6 +388,68 @@ producer → 数学变换/quant/route-map → transport/window
 - **非约束项**：`pl.spmd`与captured TaskId是V4-Flash参考表达；若当前frontend需要等价submit形式，只能做最小ABI适配。peer slab、`spmd_submit`、`task_dummy`、sole reducer及probe tensor shape都不是验收硬门槛。
 - **保护区**：不改canonical入口、KV ownership、TP/all-reduce、top-k FP32累加顺序和最终BF16 store。
 - **验证**：source/alias合同 → parser/compile → lowered TaskId/DAG → 2-rank/8-rank write-disjoint与多epochliveness → batch=1/2/8/16 DFX → live精度与性能。
+
+#### 改造脉络、问题与经验（2026-07-28）
+
+##### 示意图：任务 DAG 与写入 ownership
+
+```mermaid
+flowchart TD
+    Gate[Gate / TopK]
+    MetaPut[Metadata publish]
+    MetaWait[Metadata arrival wait]
+    Push[SPMD dispatch push]
+    DataWait[Payload arrival wait]
+    Gather[SPMD expert-lane gather]
+    Expert[SPMD routed expert]
+    Scatter[SPMD combine scatter]
+    CombineWait[Combine arrival wait]
+    Reduce[Token FP32 TOPK reduce]
+
+    Gate --> MetaPut --> MetaWait --> Push --> DataWait --> Gather --> Expert --> Scatter --> CombineWait --> Reduce
+
+    LocalRAW[Local tensor RAW]
+    RemoteArrival[Remote AtomicAdd + WaitCmp.Ge]
+    LocalRAW -. 只能约束本地 .-> Gather
+    RemoteArrival -. 才能证明远端 put 完成 .-> DataWait
+```
+
+```mermaid
+flowchart LR
+    subgraph E0[Expert e0 lane]
+        E0S0[source0 slots]
+        E0S1[source1 slots]
+        E0S7[source7 slots]
+    end
+    subgraph E1[Expert e1 lane]
+        E1S0[source0 slots]
+        E1S1[source1 slots]
+        E1S7[source7 slots]
+    end
+    E0 -->|write-disjoint| Route0[source-owned route buffer]
+    E1 -->|write-disjoint| Route1[source-owned route buffer]
+    Route0 --> Reduce0[token reducer]
+    Route1 --> Reduce0
+```
+
+> 每个并行阶段都必须回答：lane key 是什么、写入地址是什么、谁 notify、谁 wait、最终 consumer 是谁。`pl.spmd` 或 `task_dummy` 本身不是正确性证明。
+
+
+##### 代码符号对照
+
+| 阶段/符号 | 并行 ownership | 完成条件 |
+|---|---|---|
+| `dispatch_push` | source route → destination expert lane | payload `tensor.put` + arrival notify |
+| `dispatch_gather` | local expert 固定区域 | payload wait 已满足 |
+| `_expert_routed*` | expert × tile × hidden/intermediate feature | 仅处理 `local_expert_count[e]` valid rows |
+| `combine_scatter` | expert output → source-owned route slot | write-disjoint put + arrival notify |
+| `combine_reduce` | active token × TOPK | combine wait 后按固定顺序 FP32 累加 |
+
+- **之前是什么样**：pull 路径按 peer 顺序组织通信，设备并行围绕固定 batch/peer 展开。迁移后若只把循环机械改成 `pl.spmd`，可能有并行却没有远端 arrival 依赖；若加入 fake scalar、`x*0` 或 `task_dummy`，又只是制造假依赖。
+- **之后的阶段顺序**：metadata publish → metadata wait → payload push → payload wait → expert-lane gather → routed expert → combine scatter → combine wait → token reduce。worker 只计算，不在 InCore 中递归 submit；local RAW 不能替代远端 `tensor.put` 完成通知。
+- **代码 ownership**：dispatch push/gather 和 combine scatter 以 local expert 为 lane；每个 expert 区域是 `[e*expert_recv_max,(e+1)*expert_recv_max)`，互不重叠。routed expert 以 `RECV_TILE` 分块并用 `tile_valid/valid_shape` 屏蔽尾部；combine 依据 source/route provenance 写回 source-owned route buffer，sender/expert 的 put 必须 write-disjoint。
+- **whole-net 问题**：40 层 MoE 在 runtime `pl.range` 内，另有 L43/L44 specialization；所有调用点必须保持 dispatch/expert/combine 参数和 epoch 语义一致。EP window epoch 为 1..42，attention/shared TP scratch 仍保持 per-layer `expected=1/2`，不能因为共处 mega-kernel 就混为一类。
+- **经验**：`pl.spmd`、captured TaskId、peer slab、`spmd_submit`、`task_dummy` 和 probe shape 都不是 production 架构判据。真正硬约束是 lane key、写入地址、notify、wait、最终 consumer、write-disjoint 和 reduction 顺序；无法回答这五类问题的并行化不应合入 whole-net。
 
 ---
 
@@ -217,6 +465,65 @@ producer → 数学变换/quant/route-map → transport/window
 - **验证**：gate 输出 vs BF16 参考 `ratio_allclose`（单元级）。
 - **边界**：独立数值 track，与结构线零耦合。
 
+#### 改造脉络、问题与经验（2026-07-28）
+
+##### 示意图：deferred RMSNorm producer 与三个 consumer
+
+```mermaid
+flowchart TD
+    Resid[resid_hold BF16]
+    Gamma[gamma + 1 FP32]
+    XG[xg = FP32 resid * gamma+1]
+    RMS[inv_rms per token]
+    Amax[amax abs xg per token]
+
+    Resid --> XG
+    Gamma --> XG
+    XG --> Amax
+    XG --> Norm[post_norm = BF16 xg * inv_rms]
+    RMS --> Norm
+
+    XG --> Quant[x_i8 = round xg * 127 / amax]
+    Amax --> Quant
+    Amax --> Scale[scale = inv_rms * amax / 127]
+    RMS --> Scale
+
+    XG --> GateMM[FP32 matmul xg, W_gate]
+    GateMM --> GateRMS[row multiply inv_rms]
+    RMS --> GateRMS
+    GateRMS --> TopK[sigmoid + bias + top-k]
+
+    Norm --> Shared[Shared expert consumer]
+    Quant --> Dispatch[Dispatch payload]
+    Scale --> Dispatch
+```
+
+```mermaid
+flowchart LR
+    Old[旧：resid → full BF16 post_norm → gate matmul]
+    New[新：resid/gamma → FP32 chunk xg → gate matmul → inv_rms]
+    Old -->|额外 BF16 rounding| Risk[near-tie route 风险]
+    New -->|对齐 V4 rounding lineage| Stable[稳定 gate/top-k]
+```
+
+
+##### 代码符号对照
+
+| 代码符号 | dtype/shape | consumer |
+|---|---|---|
+| `resid_hold` | BF16 `[BATCH,HIDDEN]` | deferred norm 与 gate 的共同原始输入 |
+| `moe_inv_rms` | FP32 `[BATCH,1]` | post-norm、dispatch scale、gate logits |
+| `post_norm` | BF16 `[BATCH,HIDDEN]` | shared expert / residual 路径 |
+| `x_disp_i8` | INT8 `[BATCH,HIDDEN]` | routed expert dispatch |
+| `x_disp_scale` | FP32 `[BATCH,1]` | routed W1 dequant |
+| `_gate(resid,...,inv_rms)` | chunked FP32 | sigmoid/bias/top-k |
+
+- **之前是什么样**：post-attention residual 先完整生成 BF16 `post_norm`，gate、dispatch/shared expert 再消费该 tensor；scale 也曾按多列辅助字段传输。这样虽然能跑，但把 V4 deferred-norm 拆成了额外 BF16 rounding 边界。
+- **数学与代码改动**：令 `xg = resid * (gamma+1)`，`inv_rms` 为每 token RMS 倒数。一次 `_norm_quant_moe_input()` producer 输出 BF16 `post_norm = BF16(xg*inv_rms)`、FP32 `moe_inv_rms [BATCH,1]`、INT8 `x_disp_i8` 和 FP32 `x_disp_scale [BATCH,1]`；量化 scale 为 `inv_rms * amax(xg) / 127`。gate 不再直接把 BF16 post_norm 当唯一输入，而是按 K chunk 在 FP32 重建 xg，完成 gate matmul 后再乘 `inv_rms`，然后 sigmoid、bias、top-k。
+- **为什么要 chunk-wise**：当前 backend UB 无法稳定保留完整 `[BATCH,HIDDEN]` FP32 xg，因此按 K chunk 重算 gamma/`xg`；这是 storage/backend 适配，不是改变数学 lineage。active rows 通过 `active_tokens/valid_shape`，inactive rows 不进入 gate、量化和 dispatch。
+- **遇到的误区**：BS1 最终 token 曾仍为 `6127`，容易误判成输入输出透传或 deferred norm 失效；中间 dump 证明 attention/resid、post-norm、gate/top-k 均与 BS2 row0 bit-identical，故 D1 不是根因。后续必须把 producer input、`inv_rms`、scale、gate consumer 一起 dump，不能只看最终 token。
+- **经验**：文档必须同时标出 dtype、scale 定义、consumer 应用点和每个 cast/round 边界；`norm→BF16→matmul` 与 `FP32 xg→matmul→inv_rms` 公式相似但 rounding 不同，可能改变 near-tie route。
+
 ### PERF-D2 · routed expert INT8×INT8 + requant 链 ✅ 已完成
 - **完成证据**：route weight 仍只在 W2 epilogue 乘一次，combine 仅 FP32 reduce；固定 expert lane 后 BS1/2/16 通过。
 - **问题**：step3p5 当前已经具备部分 INT8×INT8、scale 和 intermediate requant 路径；剩余工作是按 V4-Flash 统一 expert-lane、tile/pipeline、scale 和 W2 epilogue 语义，而不是从 BF16 重新发明 INT8 架构。
@@ -226,6 +533,71 @@ producer → 数学变换/quant/route-map → transport/window
 - **改法**：以 `REF/expert_routed.py` 为模板收敛当前 routed expert 的 producer/consumer placement；只修改 step3p5 shape、weight layout、capacity 和 backend 必要适配。`QUANT_TILE=512` 仅属于 data tile/cache/MTE 性能对齐，不得与 control-signal 512B stride 混写。
 - **验证**：多步 L3（N=128 ≥95% vs vanilla）+ 逐层 detail（当前 BF16-dequant 是待替换的临时路径）。
 - **边界**：D1 之后；这是 V4-Flash 数据流迁移与 step3p5 shape 适配，不是新建独立 INT8 架构。
+
+#### 改造脉络、问题与经验（2026-07-28）
+
+##### 示意图：W8A8 routed expert 的 scale 与 rounding 链
+
+```mermaid
+flowchart LR
+    X[x_i8]
+    XS[activation dequant scale]
+    W1[W_gate/W_up INT8]
+    W1S[W_gate/W_up weight scale]
+    A1[INT32 accum]
+    SW[SwiGLU BF16/FP32]
+    HQ[h_i8 requant]
+    HS[h_scale_dq]
+    W2[W_down INT8]
+    A2[W2 INT32 accum]
+    RW[route_weight]
+    WS[w_down_scale]
+    EPI[FP32 epilogue multiply]
+    Y[BF16 weighted routed_y]
+    RED[Combine FP32 TOPK reduce]
+
+    X --> A1
+    W1 --> A1
+    SW --> HQ --> A2
+    W2 --> A2
+    SW --> HS
+    A2 --> EPI
+    HS --> EPI
+    RW --> EPI
+    WS --> EPI
+    EPI -->|single BF16 cast| Y --> RED
+    XS --> W1DQ[W1 dequant: INT32 * activation scale * weight scale]
+    W1S --> W1DQ
+    A1 --> W1DQ --> SW
+```
+
+```text
+W2 epilogue:
+  y_fp32 = FP32(y_acc) * h_scale_dq * route_weight * w_down_scale
+  routed_y_bf16 = BF16(y_fp32)
+
+Combine:
+  token_fp32 = shared_y + Σ(topk routed_y_bf16)
+  # route_weight must NOT be multiplied again here
+```
+
+
+##### 代码符号对照
+
+| 代码符号 | 数值语义 | rounding 边界 |
+|---|---|---|
+| `local_routed_x_scale` | W1 activation dequant scale | W1 INT32 accumulate 后应用 |
+| `h_scale_dq` | SwiGLU intermediate requant 的反 scale | W2 INT32 accumulate 后应用 |
+| `local_routed_weight` | route weight | 只在 W2 epilogue 应用一次 |
+| `w_down_scale` | W2 per-output-channel scale | W2 epilogue 应用 |
+| `local_routed_y` | 已加权 BF16 expert output | combine 前唯一 BF16 cast |
+| `combine_step()` | FP32 TOPK reduction | 不再读取 route weight |
+
+- **之前是什么样**：已有 INT8 cube、INT32 accumulate、intermediate requant 和 W2，但 route weight、activation/intermediate/W2 scale 的应用位置没有完全统一，combine 还容易沿用旧逻辑再次处理 route weight。
+- **之后的数值链**：lane 携带 `x_i8`、activation scale、route weight、provenance；W1 gate/up 为 INT8×INT8→INT32；SwiGLU 后按 row amax/requant 得到 INT8 intermediate 和 `h_scale_dq`；W2 为 INT8×INT8→INT32；W2 epilogue 应用 `FP32(y_acc) * h_scale_dq * route_weight * w_down_scale` 后才 cast BF16；combine 只按 TOPK 固定顺序做 FP32 reduction。
+- **关键问题**：route weight 若在 expert epilogue 和 combine 都乘会平方；若推迟到 combine，则 BF16 routed output 已先 rounding。当前 contract 明确 `combine_step()` 不出现 route weight，weight 只在 routed W2 epilogue 乘一次。
+- **tile 与 BS1 问题**：固定 expert capacity 按 `RECV_TILE` 处理，`local_expert_count[e]` 只生成 `tile_valid`；`set_validshape/fillpad` 只处理尾 tile，不能改变 expert base。早期把 BS1/BS2 差异怀疑为 `tile_valid=8/16` SIMD 行为，固定 lane 后恢复，说明根因是动态 expert base，不是单行 expert 数学。
+- **经验**：W8A8 必须记录 `producer value + scale definition + transport field + consumer multiply point + cast/round boundary`。`QUANT_TILE=512` 是 data tile/cache/MTE 语义，`COMM_SIGNAL_STRIDE_I32=128` 是 control signal 隔离，两个“512B”不能混写。
 
 ---
 
@@ -283,6 +655,80 @@ producer → 数学变换/quant/route-map → transport/window
 - **参考**：`REF/decode_fwd.py`的owner-vector max，`REF/moe.py`的runtime `active_tokens`与expert-lane `pl.spmd`，以及V4-Flash attention中的runtime token循环。
 - **验证**：至少覆盖runtime active batch/token `1/2/8/16`，并覆盖至少一组非16 physical capacity配置；检查active/inactive数值、route count、KV row-diff、window overflow、lowered predicate/valid bound、L3精度和设备DFX。默认16配置通过不能证明dynamic合同完成。
 - **边界**：若某frontend版本不能表达所需dynamic bound，应记录当前ABI限制并使用可配置capacity适配；不得把该限制升级为模型固定batch或永久padding/reserve合同。
+
+#### 改造脉络、问题与经验（2026-07-28）
+
+##### 示意图：physical capacity 与 logical active rows 分离
+
+```mermaid
+flowchart TB
+    Owner[owner vector / request metadata]
+    Num[num_tokens]
+    Clamp[active_tokens = clamp num_tokens, 0, BATCH]
+    Owner --> Num --> Clamp
+
+    Clamp --> Attn[Attention active rows]
+    Clamp --> Norm[Norm / quant active rows]
+    Clamp --> Gate[Gate / top-k active rows]
+    Clamp --> Dispatch[Dispatch active routes]
+    Clamp --> Expert[Expert valid rows]
+    Clamp --> Combine[Combine active tokens]
+    Clamp --> KV[KV writes active slots only]
+
+    Capacity[Formal tensors retain CAPACITY shape]
+    Capacity -. storage only .-> Attn
+    Capacity -. storage only .-> Dispatch
+    Capacity -. storage only .-> Expert
+```
+
+##### 示意图：batch-extension invariance
+
+```mermaid
+flowchart LR
+    B1[BS1: row0 = X]
+    B2[BS2: row0 = X, row1 = X]
+
+    B1 --> A1[attention row0]
+    B2 --> A2[attention row0]
+    A1 --> N1[norm/gate row0]
+    A2 --> N2[norm/gate row0]
+    N1 --> E1[expert fixed lane row0]
+    N2 --> E2[expert fixed lane row0]
+    E1 --> H1[hidden row0]
+    E2 --> H2[hidden row0]
+
+    A1 -. exact .- A2
+    N1 -. exact .- N2
+    E1 -. exact .- E2
+    H1 -. exact .- H2
+```
+
+```text
+动态 batch 的完整合同：
+1. inactive row 不参与计算、通信、reduce 或 KV write；
+2. active row 的 physical address 不依赖其他 row 的存在；
+3. 增加相同 row1 后，原 row0 每个阶段和最终 hidden 保持 exact。
+```
+
+
+##### 代码符号对照
+
+| 代码符号 | physical / logical 角色 | 不变量 |
+|---|---|---|
+| `BATCH` / `CAPACITY` | formal storage 上界 | 不是本次逻辑 batch |
+| `num_tokens` | runtime 输入 | 各 stage 的 active count 来源 |
+| `active_tokens` | clamp 后逻辑范围 | inactive rows 不计算/通信/KV write |
+| `expert_recv_max` | expert 固定 physical capacity | 不随 `active_tokens` 改变 |
+| `local_expert_count[e]` | 本次有效 route 数 | 只影响 valid rows |
+| row0 batch-extension diff | 跨 batch 正确性 oracle | BS1 row0 必须与复制成 BS2 后 exact |
+
+- **之前是什么样**：`BATCH=16` 同时承担 formal storage、循环上界和设备并行轴；即使 holder 传入 active count，部分 attention/MoE/combine 仍可能按 capacity 运行并保留 padding/KV reserve。BS2/8/16 正确不能外推 BS1。
+- **之后的 active-token 逻辑**：whole-net 从 owner vector 得到 `num_tokens`，各阶段 clamp 为 `[0,BATCH]` 的 `active_tokens`。attention、norm/quant、gate/top-k、dispatch、routed/shared expert、combine 和 KV 只处理 active rows；formal tensor 仍可保留 capacity shape，但 inactive 区间只是 storage，不是逻辑 batch。
+- **调度轴改动**：token 变成 runtime sequential bound；gate 使用 expert-column chunk `pl.spmd`，routed expert 使用 local-expert/intermediate/hidden feature fan-out，避免把 capacity 轴当唯一 core fan-out。
+- **决定性问题**：初版 active guard 虽然覆盖循环，动态 compact expert slab 仍使用 route count prefix 改变 expert base，导致 BS1 row0 被 row1 的存在影响。因此 dynamic batch 的合同不只是“inactive row 不计算”，还必须满足 batch-extension invariance。
+- **最终代码逻辑**：physical capacity 固定、valid count 动态；每个 expert 永久拥有 `expert_recv_max=n_ranks*BATCH` 行，`local_expert_count[e]` 只控制 valid rows，不控制 physical base；inactive route 不 notify、不 reduce、不写 KV。
+- **调试和 dump 经验**：验收必须同时看 token、关键阶段/每层 hidden、TP spread、finite/nonzero、route metadata 和 batch-extension row diff。dump 程序先做 hook 生效自检，并记录 step/layer/stage/rank/active-batch；只看最终最重 token 或只看单层 hidden 都不足以定位问题。
+- **后续边界**：已验证 BS1/2/16、BS1 persistent 4-step、candidate Main 8-step 和 N=256 hidden finite/TP spread=0；非默认 physical capacity 与空间压缩仍需额外证明，任何 compact 优化都不能破坏 batch-extension invariance。
 
 ---
 
