@@ -84,6 +84,7 @@
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS(src) | simpler | ptoas-bin |
 |------|------|-------|-----------|---------|-----------|---------|-----------|
+| 2026-07-28 | PERF-C4 TP all-reduce → reduce-scatter + **push** all-gather（`perf/step3p5-bc-20260726@cfbdcce8`，未推 develop）；根因=pull-after-remote-notify 跨方向握手无序（postmortems/13），修正 design/performance/03 §5；回归 whole-network CI PASS + 40 个 decode step token 全对且 `hidden_tp_spread` 全 0.0；ITL p50 −3.6%/−3.9% | `ca21ab5f` | `cfbdcce8` | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |
 | 2026-07-28 | C/D/G + BS1 收口；`stepfun/develop@563fe62a`；固定 expert physical lanes；最终自包含镜像 smoke/Main 8-step PASS，N=256 hidden finite/TP spread=0、token exact 241/256 | `ca21ab5f` | `563fe62a` | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |
 | 2026-07-24 | PERF-A1 逐层 DFX 接线（holder N1_DFX→swim/pmu + harness `--dfx`）；在镜像 20260724(cards 8-15) 采集 → routed-expert 占 90.7% / PMU cube_int8 88.6%（benchmark/2026-07-24-perlayer-dfx） | `ca21ab5f` | `bc5eecb1`(+DFX over `fd26b1be`) | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |
 | 2026-07-24 | 合并 origin/main 到 stepfun/develop（全 FF，保留 fork ITL harness `7cb2a6b3`）+ IPC 权重 interior 指针 provenance 修复（解 `submit_next_level child_memory` 卡点）；镜像 `vllm-pypto:stepfun-develop-20260724`(ptoas v0.50) 冒烟 PASS + 整网 8 步 `6127→303→1207→6127` 与 live vanilla 逐 token 一致 | `ca21ab5f` | `fd26b1be` | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |
