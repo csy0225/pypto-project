@@ -30,7 +30,7 @@ graph TD
 | Phase 16 | 多卡三剑合璧（driver/firmware/CANN） | ✅ 2026-06-19 | [`../deployment/phase16-three-pillars.md`](../deployment/phase16-three-pillars.md) |
 | Phase 23 | 零拷贝 KV-IPC 验证（IPC 主卡点解除） | ✅ 2026-07-03 | [`../archive/completed-phases/23-zero-copy-kv-ipc-validation.md`](../archive/completed-phases/23-zero-copy-kv-ipc-validation.md) |
 | **Phase 27** | **N=1 整网融合**（单 `@pl.program` Main） | ✅ 2026-07-18 | 历史 P42 20/20；0724 canonical baseline 保留为 rollback |
-| **B2 release** | **45 层 loop-form Main replacement** | ✅ 2026-07-26 | `stepfun/develop@53eb7212` canonical-only 默认 `whole_decode_step3p5`；0162 镜像内清理前后 N=256 token/hidden 均 `256/256` exact |
+| **B2 release** | **45 层 loop-form Main replacement** | ✅ 2026-07-26 | `stepfun/develop@563fe62a` canonical-only 默认 `whole_decode_step3p5`；0162 历史发布镜像内清理前后 N=256 token/hidden 均 `256/256` exact |
 | **Phase 28** | **N=1 整网 → vLLM live 集成** | 🟡 进行中 | release 镜像与 Main replacement 已完成；live front、paged KV、同代 MTP、HBM 待完成 |
 
 > Phase 20/21/22/24/25/26 的设计/中间态已归档到
@@ -42,14 +42,14 @@ graph TD
 
 - **当前形态**：单个 `@pl.program`，45 层 loop-form Main，TP=8/EP=8，
   native W8A8；0724 hidden-only unroll baseline 仅作显式 rollback。
-- **已达成**：`pypto-lib stepfun/develop@53eb7212` 已作为 canonical-only release Main；
-  正式路径为 `models.step3p5.decode_fwd:whole_decode_step3p5`；0162 发布镜像内
+- **已达成**：`pypto-lib stepfun/develop@563fe62a` 已作为当前代码 Main；
+  正式路径为 `models.step3p5.decode_fwd:whole_decode_step3p5`；0162 的 0726 已发布镜像内
   N=256 清理前后 token/hidden `256/256` exact、`max_abs_diff=0`、
   TP spread `0.0`。
 - **口径**：同一 vanilla oracle 的 raw canonical/baseline 都是
   `240/256=93.75%`，低于历史 95% raw gate；这不是 opt regression，
   但也不是 raw precision PASS。
-- **遗留**：C1 通信优化、perf 调优，以及 serving 侧独立闭环。
+- **已收口**：C/D/G 与 BS1 动态 batch correctness 已完成；**遗留**：B3 KV resident/in-place、perf 调优，以及 serving 侧独立闭环。
 
 ### 3.2 vLLM 集成子系统（vllm-pypto）→ 设计 [`../design/vllm-pypto/`](../design/vllm-pypto/)
 

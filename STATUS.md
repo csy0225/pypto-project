@@ -4,7 +4,7 @@
 > 每日流水在 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)；
 > 整体规划在 [`planning/roadmap.md`](planning/roadmap.md)；接力面在
 > [`planning/handoff.md`](planning/handoff.md)。
-> **最后更新：2026-07-27。**
+> **最后更新：2026-07-28。**
 
 ## 两条线（项目结构）
 
@@ -19,29 +19,36 @@
      `PyPtoMetadataOnlyStep3p5DecoderLayer` + MTP-proposer 挂点 + MTP3 `hf_overrides` boot fix，
      commit `1b3e538c`）+ `vllm-ascend/` fork。
 
-> **2026-07-27 集成现状快照**：B2 loop-form Main 已正式迁入
-> `models/step3p5/decode_fwd.py`，并完成 0162 发布镜像内 canonical-only
-> regression。删除 `models/step3p5_opt` package、`whole_decode_opt` 和
-> `WholeDecodeOpt` 后，与清理前 canonical 镜像逐 step token/hidden
-> `256/256` exact，`max_abs_diff=0`、TP spread `0.0`，step127/128/255 全通过；
-> 删除兼容入口没有改变数学执行。同一 vanilla oracle 的 raw 对齐为
-> 240/256=93.75%，低于历史 95% raw gate，不能写成无条件 vanilla PASS。
-> 当前工作区只保留
-> `models.step3p5.decode_fwd:whole_decode_step3p5` 这一 Main。retired 0724
-> unroll source、rollback selector 和自定义 Main module/name 参数已删除；
-> 后续以 0726 canonical 结构为唯一 base。Main/MTP 共用的 dense MLP kernel
-> 已抽到 `models/step3p5/dense_mlp.py`。
-> 新镜像 `stepfun-develop-20260726-step3p5-only`
-> （registry digest `sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81`，
-> config `sha256:d296461051559e6ea0e22d04a4cc44f749c82f19a50418fe6db75387f1f067e9`）
-> 已按 immutable `53eb7212` 构建并推送；0162 镜像内 smoke、unit、
-> canonical-only contract、credential/symbol/ldd audit 和 N=256 regression
-> 均有留存证据。历史镜像仅作为可复现对照。
-> vanilla vLLM+MTP3 已能起（`hf_overrides` fix）、接受率可从 vLLM `/metrics` 读；
-> pypto 作为 vLLM live backend（主网 tail-only + MTP proposer）**vLLM 侧挂点已入库、端到端在线路径尚未跑通**（KV bridge + 动态 batch 映射待接）。
-> **push 状态（2026-07-26）**：github `csy0225/pypto-lib:stepfun/develop`
-> → `53eb7212`（canonical-only Main + compatibility removal contract）✅；
-> gitlab `sys/stepcast/vllm` 分支 `csy/pypto-tail-mtp-integration` → `1b3e538c`（vLLM 侧 tail-only + MTP-proposer + MTP3 boot fix）✅。
+> **2026-07-28 集成现状快照**：唯一 release Main 仍为
+> `models.step3p5.decode_fwd:whole_decode_step3p5`；retired unroll、rollback
+> selector、自定义 Main module/name 参数和 `models/step3p5_opt` 均保持删除。
+> `stepfun/develop@563fe62a` 已完成 C1/C2/C3/D1/D2/G1：V4-Flash-style
+> shared EP window/epoch、expert-lane dispatch/combine、deferred norm/INT8
+> producer、routed-expert W8A8 与 runtime active batch/token 均已收口。
+>
+> BS1 错误不是输入输出透传，也不是 gate/top-k：根因是 local experts 被压入动态
+> prefix slab，BS1/BS2 会改变 expert 的物理基址，破坏“增加相同 row1 不得改变 row0”
+> 的 batch-extension invariance。`b404a3c9` 恢复固定 expert physical lane bases 后，
+> BS1/2/16 单步均为 `6127→303`、TP spread `0`，BS1 row0 hidden 与 BS2/BS16
+> bit-identical；BS1 persistent 4-step 为 `6127→303→1207→19384→872`。
+>
+> 最终自包含镜像
+> `hub.i.basemind.com/stepcast/vllm-pypto:step3p5-b404a3c9-ci-final-20260728`
+> （0162 本地 image ID `sha256:06261920cced91dafc585cd5e63622a88f798ad5ef6aeeba6480433049d1544f`，
+> 产品 HEAD `b404a3c9`，CI 三文件以工作树补丁包含后续 `563fe62a` 的 cleanup/skip-MTP
+> 逻辑，**尚未推送 registry**）smoke PASS；canonical Main 8-step token
+> `303,1207,19384,872,428,6127,4231,2636` 全 exact，hidden 全 finite、8 个
+> active rank rows nonzero、TP spread `0`。镜像内 N=256 teacher-forced 回归为
+> hidden finite `256/256`、TP spread `0`、token exact `241/256=94.14%`；因此
+> raw vanilla 95% gate **不宣称通过**。MTP oracle 位于镜像外，本轮使用
+> `--skip-mtp`，其缺失不作为 C/D/G 或 Main 失败。
+>
+> vLLM 侧 tail-only + MTP proposer 挂点仍在 `1b3e538c`；真实在线请求接管、
+> KV bridge、动态 batch 映射与同代 MTP absolute gate 仍属于 Phase 20/28 后续。
+> **push 状态（2026-07-28）**：GitHub `csy0225/pypto-lib` 的
+> `stepfun/develop` 与 `perf/step3p5-bc-20260726` 均已推至 `563fe62a`；
+> GitHub `csy0225/pypto-project:main` 已同步本轮 C/D/G 状态文档；GitLab
+> `sys/stepcast/vllm:csy/pypto-tail-mtp-integration` 保持 `1b3e538c`。
 
 ## 阶段跟踪
 
@@ -58,7 +65,7 @@
 | **21** | 与 vLLM 原生精度对比 harness（L1/L2/L3） | ✅ dump-based 闭环；在线 gate 待 Phase 20 | [`archive/completed-phases/21-precision-validation.md`](archive/completed-phases/21-precision-validation.md) |
 | **22/26** | Perf baseline + 优化；TP=8 多卡 | 📐 设计已落；gate 见 roadmap | [`archive/completed-phases/22-perf-baseline.md`](archive/completed-phases/22-perf-baseline.md) |
 | **27** | N=1 单 `@pl.program` whole-net standalone | ✅ canonical P42 20/20 `argmax=303`（2026-07-18 single-submit 合入三仓 `stepfun/develop`） | [`planning/phases/27-n1-whole-net-fusion.md`](planning/phases/27-n1-whole-net-fusion.md) |
-| **28** | N=1 whole-net → vLLM live single-handoff | 🟡 Main replacement regression 256/256 exact；live-8001 接管、同代 MTP absolute gate、3-way HBM 仍待完成 | [`planning/phases/28-n1-live-integration.md`](planning/phases/28-n1-live-integration.md) |
+| **28** | N=1 whole-net → vLLM live single-handoff | 🟡 C/D/G + BS1 + 自包含镜像 Main 已收口；live-8001 接管、同代 MTP absolute gate、3-way HBM 仍待完成 | [`planning/phases/28-n1-live-integration.md`](planning/phases/28-n1-live-integration.md) |
 
 > 交付分级 / 到 v1.0 的规划见 [`planning/roadmap.md`](planning/roadmap.md)。
 > **口径提醒**：dump-based 精度闭环 ≠ 真实 vLLM 请求已走 PyPTO NPU runner；
@@ -77,6 +84,7 @@
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS(src) | simpler | ptoas-bin |
 |------|------|-------|-----------|---------|-----------|---------|-----------|
+| 2026-07-28 | C/D/G + BS1 收口；`stepfun/develop@563fe62a`；固定 expert physical lanes；最终自包含镜像 smoke/Main 8-step PASS，N=256 hidden finite/TP spread=0、token exact 241/256 | `ca21ab5f` | `563fe62a` | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |
 | 2026-07-24 | PERF-A1 逐层 DFX 接线（holder N1_DFX→swim/pmu + harness `--dfx`）；在镜像 20260724(cards 8-15) 采集 → routed-expert 占 90.7% / PMU cube_int8 88.6%（benchmark/2026-07-24-perlayer-dfx） | `ca21ab5f` | `bc5eecb1`(+DFX over `fd26b1be`) | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |
 | 2026-07-24 | 合并 origin/main 到 stepfun/develop（全 FF，保留 fork ITL harness `7cb2a6b3`）+ IPC 权重 interior 指针 provenance 修复（解 `submit_next_level child_memory` 卡点）；镜像 `vllm-pypto:stepfun-develop-20260724`(ptoas v0.50) 冒烟 PASS + 整网 8 步 `6127→303→1207→6127` 与 live vanilla 逐 token 一致 | `ca21ab5f` | `fd26b1be` | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |
 | 2026-07-26 | B2 loop-form Main canonical-only 收口；`stepfun/develop@53eb7212`；删除兼容 package/alias 后与清理前镜像 N=256 token/hidden `256/256` exact | `ca21ab5f` | `53eb7212` | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |
@@ -107,7 +115,9 @@
 
 **`gpu-a910x-0162`（Phase 16 验证机，当前主力）**：driver 25.5.2 ✅ / firmware
 7.8.0.7.220 ✅ / CANN 9.0.0-beta.1 ✅；simpler L3 allreduce、前端 smoke、dense/SWA/MoE
-ST、N=1 canonical P42 20/20 均 PASS。唯一 stable 环境记录见
+ST、N=1 canonical P42 20/20 均 PASS。2026-07-28 cards 8-15 完成最终自包含镜像
+Main 8-step PASS 与 N=256 teacher-forced 回归（hidden finite `256/256`、TP spread `0`、
+token exact `241/256`），作业退出后无残留主进程。唯一 stable 环境记录见
 [`develop/N1/N1-STABLE-ENV-0162-20260717.md`](develop/N1/N1-STABLE-ENV-0162-20260717.md)。
 
 **`gpu-a910x-0234`**：三剑合璧已齐（driver 25.5.2 / firmware 7.8.0.7.220 / CANN

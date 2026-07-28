@@ -10,7 +10,7 @@
 如 507899/507018、co-tenancy(G4)、tmov Vec-LHS、gate_topk、多程序 co-prepare 死锁、
 gap-5、scheduler-timeout、attention 乱码、G5b import_ipc、swa_moe const-fold 等均已归档。
 
-**最后检视**：2026-07-26。
+**最后检视**：2026-07-28。
 
 ---
 
@@ -38,9 +38,12 @@ runtime `.so` hash/mtime；③ CANN/PTOAS/checkpoint/device/ring env；④ 对�
 
 ## 🔴 ACTIVE — Phase 28 live serving：per-layer KV bridge + 3-way HBM / redundant weights
 
-**当前 release 边界（2026-07-26）**：`pypto-lib stepfun/develop@53eb7212`
-只保留 `models.step3p5.decode_fwd:whole_decode_step3p5`。`models/step3p5_opt`
-package、`whole_decode_opt` 和 `WholeDecodeOpt` 已删除。0162 发布镜像内
+**当前代码 release 边界（2026-07-28）**：`pypto-lib stepfun/develop@563fe62a`
+只保留 `models.step3p5.decode_fwd:whole_decode_step3p5`。C/D/G 的 BS1
+correctness 已在 `b404a3c9` 修复并完成 0162 cards 8-15 验证；本节 blocker
+只描述 Phase 28 live serving 缺口，不再把 BS1 的旧 `6127` 结果视为当前代码状态。
+`models/step3p5_opt`
+package、`whole_decode_opt` 和 `WholeDecodeOpt` 已删除。0726 已发布镜像内
 canonical-only N=256 与清理前 canonical 镜像 token/hidden `256/256` exact、
 `max_abs_diff=0`、TP spread `0.0`，所以 compatibility removal regression 已关闭。
 对同一 vanilla oracle raw 为 `240/256=93.75%`，低于历史 95% raw gate；不能写成

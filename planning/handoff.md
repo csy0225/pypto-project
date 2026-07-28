@@ -4,8 +4,10 @@
 > durable 规划看 [`roadmap.md`](roadmap.md)，实时状态看
 > [`../STATUS.md`](../STATUS.md)，B2 详细证据看
 > [`../develop/OPT-B2-NEXT-SESSION-HANDOFF-20260725.md`](../develop/OPT-B2-NEXT-SESSION-HANDOFF-20260725.md)。
-> **最后更新：2026-07-27。** 更新时直接改写本文，不追加流水。
+> **最后更新：2026-07-28。** 更新时直接改写本文，不追加流水。
 
+
+> **2026-07-28 C/D/G update**：`b404a3c9` 修复固定 expert physical lane base 导致的 BS1/BS2 batch-extension invariance；BS1/2/16 单步 `6127→303`，BS1 四步 `6127→303→1207→19384→872`。最终本地 candidate 镜像 `step3p5-b404a3c9-ci-final-20260728` 的 Main 8-step PASS；N=256 teacher-forced 为 hidden finite `256/256`、TP spread `0`、token exact `241/256`。该镜像尚未推 registry。
 ## 1. 当前 active release
 
 ```text
@@ -13,9 +15,13 @@ machine:    gpu-a910x-0162
 devices:    8..15（vanilla oracle 使用 0..7）
 checkpoint: /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp
 
-pypto-lib / vllm-pypto:
-  53eb7212c29c9bd015ee060cd9924a13ea781ae0
+devbox/GitHub pypto-lib / vllm-pypto:
+  563fe62ac566ab7f8e3c0e94c514468d49d9d439
   branch stepfun/develop
+0162 host checkout:
+  workspace/vllm-pypto stepfun/develop @ 53eb7212
+candidate image:
+  product HEAD b404a3c9 + CI three-file patch corresponding to 563fe62a
 pypto:   ca21ab5fcfd8203165928428302d273c377db5c6
 simpler: 216e7632267ae815c484cdeba7991c87fabf3086
 pto-isa: ecb6c303f797749f811a494742c3c08156aacabb
@@ -35,13 +41,21 @@ models.step3p5.decode_fwd:whole_decode_step3p5
 - Main/MTP 共用的 dense MLP kernel 位于
   `models/step3p5/dense_mlp.py`，该模块不包含产品入口。
 
-active pypto-lib checkout 只保留：
+devbox active pypto-lib checkout：
+
+```text
+workspace/pypto-lib  -> perf/step3p5-bc-20260726 @ 563fe62a
+workspace/vllm-pypto -> stepfun/develop @ 563fe62a
+```
+
+0162 裸机 checkout 尚未同步，仍是：
 
 ```text
 workspace/pypto-lib  -> detached 53eb7212
-workspace/pypto-lib-n1 -> detached 53eb7212（历史 dirty 已 stash）
 workspace/vllm-pypto -> stepfun/develop @ 53eb7212
 ```
+
+本轮设备结论来自自包含 candidate 镜像，不依赖 0162 裸机 checkout overlay。
 
 不要把 pypto-lib 内容覆盖到 `workspace/pypto`、`workspace/pto-isa` 或
 `workspace/PTOAS`。已清理的 experiment checkout 不得重新当作 source of truth。

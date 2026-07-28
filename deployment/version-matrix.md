@@ -5,7 +5,7 @@
 
 ## 已验证组合
 
-### 当前 release（2026-07-26）
+### 当前代码与已验证镜像（2026-07-28）
 
 | 槽位 | Pin | 备注 |
 |------|-----|------|
@@ -13,18 +13,19 @@
 | Firmware | `7.8.0.7.220` | 与 driver 成对 |
 | CANN | `9.0.0-beta.1` | NOT GA |
 | pypto | `ca21ab5fcfd8203165928428302d273c377db5c6` | 与 0724 镜像一致 |
-| pypto-lib / vllm-pypto | `53eb7212c29c9bd015ee060cd9924a13ea781ae0` | `stepfun/develop`；唯一 Main=`models.step3p5.decode_fwd:whole_decode_step3p5`；`step3p5_opt` package/aliases 已删除 |
+| pypto-lib / vllm-pypto | `563fe62ac566ab7f8e3c0e94c514468d49d9d439` | GitHub `stepfun/develop`；唯一 Main=`models.step3p5.decode_fwd:whole_decode_step3p5`；`step3p5_opt` package/aliases 已删除 |
 | pto-isa | `ecb6c303f797749f811a494742c3c08156aacabb` | 与 0724 镜像一致 |
 | PTOAS | `fc8c6caee561914b4fb991dfc8427bb63194269e` | 与 0724 镜像一致 |
 | simpler | `216e7632267ae815c484cdeba7991c87fabf3086` | pypto `runtime` gitlink；与 0724 镜像一致 |
 | ptoas-bin | `v0.50` | binary sha256 `ba93fabeff6dc7fdcd2278a72fd1d4fd92cb2949faedbc83fa58e801bd5ff23b` |
 | vLLM overlay | `csy/pypto-tail-mtp-integration@1b3e538c35999e62b6d24e0651b3a85b7d16c826` | build 时按 commit checkout，不能只依赖可变 branch |
 | Python | `3.11.14` | 镜像内 `/usr/local/python3.11.14/bin/python3` |
-| 镜像 | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5-only@sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81` | config `sha256:d296461051559e6ea0e22d04a4cc44f749c82f19a50418fe6db75387f1f067e9`；0162 credential/symbol/ldd audit + smoke + unit/contract/device regression PASS |
+| 已发布镜像（代码 pin 53eb7212） | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5-only@sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81` | config `sha256:d296461051559e6ea0e22d04a4cc44f749c82f19a50418fe6db75387f1f067e9`；0162 credential/symbol/ldd audit + smoke + unit/contract/device regression PASS；不是 563fe62a 镜像 |
+| 本地 candidate（未推 registry） | `step3p5-b404a3c9-ci-final-20260728` / image ID `sha256:06261920cced91dafc585cd5e63622a88f798ad5ef6aeeba6480433049d1544f` | 镜像内 HEAD=`b404a3c9`，CI 三文件 dirty patch 对应后续 `563fe62a`；0162 smoke + Main 8-step PASS；N=256 hidden finite `256/256`、TP spread `0`、token exact `241/256`；不得用于 `nerdctl pull` |
 
 验证结论：
 
-- 0162 overlay 环境默认 `whole_decode_step3p5` 已完成 N=256；
+- GitHub 当前代码 `563fe62a` 默认入口为 `whole_decode_step3p5`；已发布 registry 镜像仍固定为 `53eb7212`，本地 candidate 才包含 `563fe62a`；
 - N=256 canonical-only 与清理前镜像 token/hidden `256/256` exact，`max_abs_diff=0`，
   TP spread `0.0`，compatibility removal regression PASS；
 - 与清理前 canonical 镜像产物 token/hidden `256/256` bit-exact，
@@ -36,11 +37,13 @@
 - 最终镜像内默认 holder 实际打印
   `program=whole_decode_step3p5`；8-step device smoke hidden 全 finite、
   TP spread `0.0`，除已知 stale oracle step2 外其余 `7/8` token exact；
-- 新镜像 N=256 raw `240/256=93.75%`；与既有 canonical N=256 artifact
+- 已发布 0726 镜像的 N=256 raw `240/256=93.75%`；与既有 canonical N=256 artifact
   token/hidden `256/256` exact、`max_abs_diff=0`、TP spread `0.0`，
   step127/128/255 全通过；
 - 当前只证明 canonical-only Main replacement，不等价于完整 production Main+MTP serving
   已无条件平替。
+
+C/D/G candidate 设备证据：BS1/2/16 单步与 BS1 persistent 4-step 通过；固定 expert lane physical bases 修复 BS1 batch-extension invariance。
 
 构建 spec：
 [`docker/builds/stepfun-develop-20260726-step3p5-only.env`](docker/builds/stepfun-develop-20260726-step3p5-only.env)。

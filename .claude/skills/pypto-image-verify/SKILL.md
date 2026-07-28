@@ -117,7 +117,10 @@ sudo $NC run --rm --net host --ipc host --privileged --security-opt apparmor=unc
       --skip-mtp"
 ```
 
-当前 release（`pypto-lib stepfun/develop@563fe62a`）只保留一个 Main：
+当前 GitHub 代码 release（`pypto-lib stepfun/develop@563fe62a`）只保留一个 Main；
+但下方默认可拉取的 registry 镜像仍是 `stepfun-develop-20260726-step3p5-only`，
+其源码 pin 为 `53eb7212`。0728 C/D/G candidate 尚未推 registry，不能用默认
+`nerdctl pull` 命令得到。
 
 ```text
 models.step3p5.decode_fwd:whole_decode_step3p5
@@ -158,6 +161,22 @@ fail-fast，禁止重新引入第二个 Main 产品入口。
   `0.0`，所以 compatibility removal regression **通过**。不得把前者写成
   vanilla precision PASS，也不得把该 raw 差异归因于删除兼容入口。
 
+
+### 0728 C/D/G candidate（0162 本地，未发布）
+
+```text
+image: hub.i.basemind.com/stepcast/vllm-pypto:step3p5-b404a3c9-ci-final-20260728
+image ID: sha256:06261920cced91dafc585cd5e63622a88f798ad5ef6aeeba6480433049d1544f
+product HEAD: pypto-lib b404a3c9
+CI patch: three dirty test/runner files corresponding to committed 563fe62a
+status: 0162 local only; registry pull unavailable
+```
+
+Candidate evidence: Main 8-step token exact, hidden finite, TP spread `0`; N=256
+teacher-forced hidden finite `256/256`, TP spread `0`, token exact `241/256`.
+Use the host-side mounted candidate only after confirming the image exists locally; do not
+replace the published-image audit hash above until the candidate is rebuilt and pushed.
+
 ### Step 3.1 · 发布镜像内 canonical-only 审计（必做）
 
 发布结论必须来自目标镜像内，不得用裸机 editable checkout 代替：
@@ -167,7 +186,7 @@ sudo $NC run --rm --net host --security-opt apparmor=unconfined \
   -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro \
   "$IMG" bash -lc 'set -e
     test "$(git -C /workspace/pypto-lib rev-parse HEAD)" = \
-      563fe62ac566ab7f8e3c0e94c514468d49d9d439
+      53eb7212c29c9bd015ee060cd9924a13ea781ae0
     test ! -e \
       /workspace/pypto-lib/models/step3p5/decode_layer_single_chip_hidden.py
     test ! -e /workspace/pypto-lib/models/step3p5_opt

@@ -139,7 +139,7 @@ C/D/G 产品修复与最终镜像 Main 验证已收口；N=256 raw vanilla 仍�
 
 - `b404a3c9`：恢复固定 expert-lane physical bases（`expert_recv_max = n_ranks * BATCH`），修复 BS1 batch-extension invariance；BS1/2/16 单步 token `6127→303`、TP spread `0`，BS1 持续 4-step `6127→303→1207→19384→872`，row0 hidden 与 BS2/BS16 bit-identical。
 - `563fe62a`：镜像 CI 清理忽略 zombie-only process group，并增加 `--skip-mtp`；MTP oracle 缺失单独记录为外部依赖，不归因于 C/D/G。
-- 最终镜像 `hub.i.basemind.com/stepcast/vllm-pypto:step3p5-b404a3c9-ci-final-20260728`：smoke PASS，Main 8-step `303,1207,19384,872,428,6127,4231,2636` exact，hidden 全 finite、8 rank active rows nonzero、TP spread `0`。
+- 最终本地 candidate 镜像 `hub.i.basemind.com/stepcast/vllm-pypto:step3p5-b404a3c9-ci-final-20260728`（产品 HEAD `b404a3c9` + 对应 `563fe62a` 的 CI 三文件 patch，未推 registry）：smoke PASS，Main 8-step `303,1207,19384,872,428,6127,4231,2636` exact，hidden 全 finite、8 rank active rows nonzero、TP spread `0`。
 - 镜像内 N=256 teacher-forced 回归：`256/256` hidden finite、`256/256` TP spread `0`，token exact `241/256`；该结果沿用历史 live vanilla oracle 序列，raw 95% gate 不宣称通过。
 - 本地 `stepfun/develop` 已快进到 `563fe62a`；代码已推送至 `csy0225/pypto-lib` 的 `stepfun/develop` 与 `perf/step3p5-bc-20260726`。
 

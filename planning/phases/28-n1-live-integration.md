@@ -1,11 +1,11 @@
 # Phase 28 — N=1 整网 → vLLM live single-handoff 集成
 
-> **2026-07-26 current-release override（优先于下方 2026-07-15/18 历史正文）**
+> **2026-07-28 current-release override（优先于下方 2026-07-15/18 历史正文）**
 >
 > 当前 active release 为：
 >
 > ```text
-> pypto-lib / vllm-pypto 53eb7212 (stepfun/develop)
+> pypto-lib / vllm-pypto 563fe62a (stepfun/develop)
 > pypto                    ca21ab5f
 > simpler/runtime          216e7632
 > pto-isa                  ecb6c303
@@ -14,11 +14,14 @@
 > default Main             models.step3p5.decode_fwd:whole_decode_step3p5
 > ```
 >
-> 当前已完成的是 **canonical-only Main replacement release**：0162 发布镜像内，
-> 清理兼容 package/alias 前后 N=256 token/hidden `256/256` exact、
-> `max_abs_diff=0`、TP spread `0.0`；同一 vanilla oracle raw 为
-> `240/256=93.75%`，低于历史 raw `>=95%` gate。因此 compatibility removal
-> regression PASS，但 vanilla raw gate 未通过。
+> 当前代码已完成 **C/D/G + BS1 dynamic-batch correctness**：`b404a3c9` 恢复固定
+> expert physical lane bases，BS1/2/16 单步 `6127→303`、TP spread `0`，BS1
+> persistent 4-step 通过，row0 batch-extension exact。`563fe62a` 将 image CI
+> cleanup 与 `--skip-mtp` 正式提交。0162 本地 candidate 镜像以产品 HEAD
+> `b404a3c9` 加上述 CI 工作树补丁构建，Main 8-step PASS；N=256 teacher-forced
+> hidden finite `256/256`、TP spread `0`、token exact `241/256`，raw vanilla
+> `>=95%` 仍不宣称通过。已发布 registry 镜像仍是 0726 的 `53eb7212`
+> canonical-only 镜像；0728 candidate 尚未推 registry。
 >
 > 本 phase 尚未关闭：独立 live vLLM front 接管、live paged-KV bridge /
 > dynamic batch、同代 Main→MTP absolute oracle、3-way HBM/redundant weights

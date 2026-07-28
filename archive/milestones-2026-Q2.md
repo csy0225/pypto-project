@@ -1,5 +1,12 @@
 # Milestones —— 2026 Q2
 
+## 2026-07-28 —— C/D/G BS1 收口 + 自包含 candidate 镜像验证 ✅
+
+- `pypto-lib` `perf/step3p5-bc-20260726` 与本地 `stepfun/develop` 已到 `563fe62a`，GitHub fork 两个分支均已推送；`pypto-project/main` 文档同步到 `ebad8e0`（随后状态文档继续更新）。
+- `b404a3c9` 修复 BS1 根因：local experts 动态 prefix slab 改为固定 expert physical lane bases，恢复 batch-extension invariance。BS1/2/16 单步 `6127→303`、TP spread `0`；BS1 persistent 4-step `6127→303→1207→19384→872`；row0 hidden 与 BS2/BS16 bit-identical。
+- 0162 本地 candidate `step3p5-b404a3c9-ci-final-20260728`（image ID `sha256:06261920cced91dafc585cd5e63622a88f798ad5ef6aeeba6480433049d1544f`）smoke/Main 8-step PASS；镜像产品 HEAD=`b404a3c9`，CI cleanup/`--skip-mtp` 三文件为 `563fe62a` 工作树补丁；candidate 尚未推 registry。
+- candidate N=256 teacher-forced：hidden finite `256/256`、TP spread `0`、active rank rows nonzero `256/256`、token exact `241/256`；raw 95% gate 不宣称通过。MTP oracle 缺失由 `--skip-mtp` 明确隔离。
+
 按 session 划分的 milestone 日志，append-only，按日期降序。
 高层 Phase 01-19 总结见
 [`prototype-phase-01-19-summary.md`](prototype-phase-01-19-summary.md)。

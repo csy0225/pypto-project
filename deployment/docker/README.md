@@ -46,6 +46,15 @@ containerd/nerdctl)。**
 >
 > **0724 base digest**: `sha256:2b0dc4612796a34bea6720ccb4bf8fa3af4ea406cdd0f12add34586ca860d7e0`
 
+> **代码/镜像边界（2026-07-28）**：GitHub `pypto-lib stepfun/develop` 当前为
+> `563fe62a`；上面的已发布 tag 仍是 `53eb7212` 的 0726 镜像。C/D/G 修复后生成的
+> `step3p5-b404a3c9-ci-final-20260728` 只在 0162 本地验证；镜像内产品 HEAD 为
+> `b404a3c9`，CI 三文件工作树补丁对应后续 `563fe62a`。image ID 为
+> `sha256:06261920cced91dafc585cd5e63622a88f798ad5ef6aeeba6480433049d1544f`，
+> 尚未推 registry；发布前必须重新构建并更新 spec/tag/digest。
+
+
+
 ---
 
 ## 2. 构建(devbox)

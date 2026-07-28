@@ -3,8 +3,8 @@
 > 每个子任务一张卡片：current-source问题实证 / producer-to-lifetime链路 / 五类差异归属 / capacity与layout / 如何生效 / 参考 / 改法 / 验证 / 落地边界。shape只用于容量和layout说明，不得单独用于架构判断。
 > HLD 见 [`01-system-design.md`](01-system-design.md)，状态见 [`task-tracking.md`](task-tracking.md)。
 >
-> **2026-07-27 active release override**：`P/` 当前必须读
-> `pypto-lib stepfun/develop@53eb7212`。唯一 Main 是
+> **2026-07-28 active release override**：`P/` 当前必须读
+> `pypto-lib stepfun/develop@563fe62a`。唯一 Main 是
 > `P/models/step3p5/decode_fwd.py:whole_decode_step3p5`。0724 unroll source、
 > rollback selector、自定义 Main module/name 参数和旧 opt compatibility
 > package/aliases 已删除。B2 已完成 N=256 replacement regression；
@@ -57,23 +57,23 @@ producer → 数学变换/quant/route-map → transport/window
 
 派生：**MoE 权重/rank/层** BF16 = `36×4096×1280×2B ×3(gate/up/down) ≈ 1.13GB/层`；`×42 ≈ 47.6GB`（= 现状 IPC pool）。INT8 减半 → `≈24GB`。
 
-## 0.2 PERF-B/C/G 当前决策表（2026-07-27）
+## 0.2 PERF-B/C/G 当前决策表（2026-07-28）
 
-> 对照对象：current `models/step3p5/decode_fwd.py@53eb7212` 与
+> 对照对象：current `models/step3p5/decode_fwd.py@563fe62a` 与
 > `origin/main:models/deepseek/v4-flash/{decode_fwd.py,moe.py}`。本表是
 > B3/C1/C2/C3/G1的当前目标合同。先核对current source与工作树diff，再用V4-Flash端到端数据流对账；旧任务描述/历史probe若冲突，以current source和最新合同为准。所有差异必须经过producer→数学变换→transport/window→consumer→rounding/reduction→lifetime核对。
 
 | 项 | v4-flash | step3p5 current | 差异理由 | 决策 |
 |----|----------|-----------------|----------|------|
 | B3 KV 所有权 | `CACHE_POOL_NAMES` + `RESIDENT_CACHE_OUTPUT_NAMES`，KV/state tensor 是 resident InOut | canonical `whole_chip_orch` / `host_orch` 已为 `pl.InOut`；holder 通过一次 `import_kv_all()` + `build_stacked_kv_pool()` 绑定 vLLM-owned IPC K/V section | step3p5 是 45 层 consolidated flat `[45*rows,128]`，v4-flash 是模型自己的多 pool ABI，不能只靠 reshape 互换 | **留 current ABI，补强合同与设备验证**：确认 prepare/import 只做一次、run 不 copy 整池、每层只按 `slot_mapping` 写一行 |
-| C1 数据窗口 | V4-Flash在多层decode中共享一套MoE windows，并用单调`moe_epoch`复用metadata/payload/combine arrival | canonical 已采用 V4-Flash expert-lane push/gather/scatter/reduce；step3p5 只保留 whole-net/allocator/backend 适配 | 共享 window 的复用条件是上一 epoch 最终 semantic consumer 完成；512B 仅适用于 stacked/reused control slot 的本地隔离 | **改造已落源码，证据未闭环**：按真实 metadata/payload/combine arrival DAG 验证 `AtomicAdd + WaitCmp.Ge`、多 epoch liveness 与 slot 物理隔离；不恢复 pull |
+| C1 数据窗口 | V4-Flash在多层decode中共享一套MoE windows，并用单调`moe_epoch`复用metadata/payload/combine arrival | canonical 已采用 V4-Flash expert-lane push/gather/scatter/reduce；step3p5 只保留 whole-net/allocator/backend 适配 | 共享 window 的复用条件是上一 epoch 最终 semantic consumer 完成；512B 仅适用于 stacked/reused control slot 的本地隔离 | **已完成**：V4-Flash shared EP window/epoch lineage 已落地；固定 expert lane base 通过 BS1/2/16 与 row0 batch-extension invariance 验证；不恢复 pull |
 | C1 TP all-reduce 窗口 | v4-flash 的 MoE 窗口不等于 step3p5 attention/shared TP all-reduce scratch | MoE 层同时带 attention/shared 的 `tmp+signal`，其 barrier 固定使用 `expected=1/2` | 这两类窗口不是 EP dispatch/combine 协议；直接压成一套会被上一层残留计数提前放行 | **留 per-layer**：本次只折叠 EP dispatch/combine 的 12 类窗口；attention/shared 的 4 类 scratch 继续逐层隔离 |
 | C1 512B signal stride | V4-Flash 的 control signal 仍是紧凑 `[N_RANKS,1] INT32` + `N_RANKS*4`，且多层复用不等于 512B signal ABI | step3p5 当前 stacked/reused backing 在 backend span/provenance 下需要物理 slot 隔离 | 512B 是 step3p5 当前 backend/profile 适配，不是多层共享本身，也不是 DeepSeek 通用 ABI | **仅 stacked/reused 且参与 notify/wait/AtomicAdd 的 control slot 使用 512B physical stride**，formal/window/slice `[128,1]`，逻辑 loop 只访问前 `n_ranks`；普通 data/MTP 独立 signal 不扩容 |
-| C2/C3 dispatch | expert-lane `pl.spmd(N_LOCAL)` payload push、独立payload arrival、expert-lane gather | current canonical仍是fixed-slot peer-major pull和顺序peer TGET | current实现是迁移前历史基线，不再是目标架构 | **直接迁移**V4-Flash数据流；shape由runtime capacity上界、route上界和consumer ABI推导，不采用probe peer-slab硬约束 |
-| C2/C3 combine | expert-lane scatter/`tensor.put`回source-owned route buffer，独立arrival wait，token reducer按TOPK顺序做FP32累加 | current canonical是staged source + inverse-map TGET + 本地gather | current实现不再作为production目标 | **直接迁移**scatter/wait/token reduce；保留whole-net epoch、runtime active token与既定FP32顺序 |
-| G1 runtime batch/token ABI | V4-Flash传runtime `num_tokens`，attention/MoE按active bound运行；formal storage可有capacity上界 | step3p5需要owner-vector汇总并贯穿whole-net、KV和通信 | holder/IPC接线是step3p5差异；默认`16`不是逻辑batch硬约束 | **改**：runtime active batch/token决定逻辑范围；若frontend需静态formal shape，只能使用可配置`CAPACITY`上界，并确保attention、MoE、combine和KV写入都屏蔽inactive rows |
+| C2/C3 dispatch | expert-lane `pl.spmd(N_LOCAL)` payload push、独立payload arrival、expert-lane gather | current canonical仍是fixed-slot peer-major pull和顺序peer TGET | current实现是迁移前历史基线，不再是目标架构 | **已完成**：直接迁移 V4-Flash expert-lane dispatch/combine 数据流；shape 由 runtime capacity/route 上界与 consumer ABI 推导，不采用 probe peer-slab 硬约束 |
+| C2/C3 combine | expert-lane scatter/`tensor.put`回source-owned route buffer，独立arrival wait，token reducer按TOPK顺序做FP32累加 | current canonical是staged source + inverse-map TGET + 本地gather | current实现不再作为production目标 | **已完成**：scatter/wait/token reduce 已迁移；保留 whole-net epoch、runtime active token 与既定 FP32 顺序 |
+| G1 runtime batch/token ABI | V4-Flash传runtime `num_tokens`，attention/MoE按active bound运行；formal storage可有capacity上界 | step3p5需要owner-vector汇总并贯穿whole-net、KV和通信 | holder/IPC接线是step3p5差异；默认`16`不是逻辑batch硬约束 | **已完成**：runtime active batch/token 决定逻辑范围；若frontend需静态formal shape，只能使用可配置`CAPACITY`上界，并确保attention、MoE、combine和KV写入都屏蔽inactive rows |
 | G1 调度轴 | gate/routed expert 以 experts/intermediate/feature 为主要 core fan-out；token 轴是 runtime sequential bound | routed expert 已 `pl.parallel(36)` + intermediate `pl.spmd`，但gate仍按静态capacity维单块执行，combine 以 batch fan-out | decode 常见 T=1；专家/特征轴稳定且更宽，适合作为设备并行轴；动态 batch fan-out 曾触发 UB/lifetime 编译差异 | **改**：gate expert-column chunk 用 `pl.spmd(288/32=9)`；combine 保持 runtime token 顺序、TOPK=8 write-disjoint fan-out；保留 routed expert 36×feature fan-out |
-| G1 attention/KV | V4-Flash以runtime token bound驱动attention/KV逻辑访问 | current实现仍含以默认capacity实例生成的静态tile与padding/reserve路径 | 这些只能视为当前frontend实现限制，不能固化成产品语义 | **改**：attention和KV写入支持runtime active batch/token；若保留静态tile/formal shape，必须标为可配置capacity实现并用valid shape/predicate屏蔽inactive rows，禁止为padding token写永久reserve槽 |
+| G1 attention/KV | V4-Flash以runtime token bound驱动attention/KV逻辑访问 | current实现仍含以默认capacity实例生成的静态tile与padding/reserve路径 | 这些只能视为当前frontend实现限制，不能固化成产品语义 | **已完成**：attention 和 KV 写入支持 runtime active batch/token；若保留静态tile/formal shape，必须标为可配置capacity实现并用valid shape/predicate屏蔽inactive rows，禁止为padding token写永久reserve槽 |
 
 ---
 
@@ -149,8 +149,8 @@ producer → 数学变换/quant/route-map → transport/window
 - **raw 边界**：canonical-only 发布镜像对同一 vanilla oracle 为
   `240/256=93.75%`，低于历史 raw `>=95%` gate；清理前 canonical 镜像完全复现，
   所以 raw 差异不是 B2 或兼容入口清理引入，但不能写成 vanilla raw PASS。
-- **边界**：当前 B2 采用 per-layer window stack，**不包含 C1 单 window/
-  `moe_epoch`**；C1 仍是独立后续优化。
+- **历史边界**：B2 初始 release 采用 per-layer window stack，不包含 C1；该边界已由
+  2026-07-28 C1 shared window/`moe_epoch` 实现与设备回归关闭。
 
 ### PERF-B3 · KV pool `resident` + in-place
 - **问题**：KV 每 dispatch 可能重传（`P/models/step3p5/attention_full.py:183,211,218` consolidated multi-layer ABI）。
@@ -168,7 +168,8 @@ producer → 数学变换/quant/route-map → transport/window
 
 ## Track C — MoE 通信协议
 
-### PERF-C1 · shared window set + `moe_epoch` + `WaitCmp.Ge`（关键路径）🟦 重新实现
+### PERF-C1 · shared window set + `moe_epoch` + `WaitCmp.Ge`（关键路径）✅ 已完成
+- **完成证据**：`b404a3c9` 固定 expert physical lane base；BS1/2/16 单步 PASS，BS1 persistent 4-step PASS，row0 hidden 对 BS2/BS16 bit-identical。
 - **问题**：historical per-layer communication stacks 让42次MoE调用各自持有一套EP窗口，增加常驻HBM、编译期window记账和whole-net生命周期复杂度。
 - **V4-Flash 基线**：`origin/main:models/deepseek/v4-flash/decode_fwd.py` 在整网decode中只分配一套MoE communication windows；`moe.py` 使用单调 `moe_epoch`、`AtomicAdd` 与 `WaitCmp.Ge` 区分跨层复用的 metadata arrival、payload arrival 和 combine arrival。
 - **如何生效**：step3p5 host只保留一套EP dispatch/combine data/control windows，并让每次MoE调用携带单调epoch。每个signal lineage的notify必须位于其真实producer完成之后，wait必须覆盖远端arrival；window再次被写入前，上一epoch的最终semantic consumer必须结束。
@@ -181,7 +182,8 @@ producer → 数学变换/quant/route-map → transport/window
 - **保护区**：attention/shared TP all-reduce 的 `tmp+signal`、固定peer累加顺序、FP32 accumulator和最终一次BF16 store保持不变。
 - **验证**：source ownership/epoch合同 → canonical compile/lowered DAG → 多epoch设备liveness → batch=1/2/8/16 active-route telemetry → live精度与KV row-diff。低层probe只能证明表达能力。
 
-### PERF-C2 · 迁移 V4-Flash dispatch/combine 数据流 🟦 待代码落地
+### PERF-C2 · 迁移 V4-Flash dispatch/combine 数据流 ✅ 已完成
+- **完成证据**：gate/top-k 前各阶段 row0 bit-identical；修复固定 expert lanes 后 MoE 输出恢复 batch-extension invariance，未回退 V4 dispatch/combine。
 - **目标**：以 `origin/main:models/deepseek/v4-flash/moe.py` 为唯一算法基线，替换current fixed-slot pull目标架构。
 - **dispatch**：metadata统计与发布；metadata arrival wait；`pl.spmd(N_LOCAL)` expert-lane payload push；payload arrival wait；`pl.spmd(N_LOCAL)` expert-lane gather。每个expert block拥有不重叠的lane或由已证明offset划分的输出区间。
 - **combine**：expert-lane scatter把已完成的 routed-expert 输出写回 origin route；arrival wait 观察所有远端写入；token-level reducer 按既定 TOP-K 顺序在 FP32 中累加 routed rows 与 shared-expert结果。
@@ -191,7 +193,8 @@ producer → 数学变换/quant/route-map → transport/window
 - **shape/ABI边界**：不得把V4-Flash示例的 `RECV_MAX`、probe的peer-major slab、`core_num=N_RANKS`、`task_dummy`或任何固定二维shape写成硬约束。实际容量必须证明不会overflow且满足512B storage/alignment和下游consumer ABI。
 - **验证**：route/count/map oracle、write-disjoint ownership、remote arrival DAG、active/inactive route数、combine FP32顺序、multi-rank multi-epoch liveness、live precision。
 
-### PERF-C3 · expert-lane SPMD 与 whole-net 调度适配 🟦 待代码落地
+### PERF-C3 · expert-lane SPMD 与 whole-net 调度适配 ✅ 已完成
+- **完成证据**：最终 candidate 镜像 Main 8-step PASS；N=256 hidden finite `256/256`、TP spread `0`。
 - **目标**：在C2的V4-Flash数据流上完成可编译、可调度的expert-lane fan-out，而不是重新选择是否保留pull。
 - **调度轴**：dispatch push/gather与combine scatter按local-expert lane并行；token reducer按token稳定轴并行或采用语义等价实现。worker只计算，不在InCore中递归submit；不得用`pl.parallel`伪装带状态通信并行。
 - **真实依赖**：payload-arrival wait必须依赖完整scatter/push；gather依赖metadata与payload arrival；token reduce依赖combine arrival。local RAW不能替代远端arrival，fake scalar或`x*0`不能制造依赖。
@@ -204,7 +207,8 @@ producer → 数学变换/quant/route-map → transport/window
 
 ## Track D — INT8-native W8A8 MoE（gap-5）
 
-### PERF-D1 · gate deferred-norm + dispatch-side INT8 量化
+### PERF-D1 · gate deferred-norm + dispatch-side INT8 量化 ✅ 已完成
+- **完成证据**：post-norm/gate/top-k BS1 与 BS2 row0 bit-identical；BS1 根因不在 deferred norm producer，D1 保持不回退。
 - **问题**：当前 step3p5 的 gate/norm/quant 数据流尚未完全按 V4-Flash 的 deferred-norm 语义收敛，不能把“INT8 activation + scale”误写成 step3p5 新能力。
 - **shape**：V4-Flash 基线输出 `x_norm_i8 [CAPACITY,4096]` INT8、`x_norm_scale [CAPACITY,1]` FP32 和 router logits；step3p5 只参数化 `CAPACITY`、router shape、bias 和现有 norm 数学，runtime active rows 有效。
 - **如何生效**：沿 V4-Flash 同一条 producer-to-consumer 链，在一次 norm/amax 过程中形成可复用的 INT8 activation 与 dequant scale，并供 gate、dispatch、shared expert 使用；不得把已有的 INT8+scale transport 重新设计成 step3p5 独有 ABI。
@@ -213,7 +217,8 @@ producer → 数学变换/quant/route-map → transport/window
 - **验证**：gate 输出 vs BF16 参考 `ratio_allclose`（单元级）。
 - **边界**：独立数值 track，与结构线零耦合。
 
-### PERF-D2 · routed expert INT8×INT8 + requant 链
+### PERF-D2 · routed expert INT8×INT8 + requant 链 ✅ 已完成
+- **完成证据**：route weight 仍只在 W2 epilogue 乘一次，combine 仅 FP32 reduce；固定 expert lane 后 BS1/2/16 通过。
 - **问题**：step3p5 当前已经具备部分 INT8×INT8、scale 和 intermediate requant 路径；剩余工作是按 V4-Flash 统一 expert-lane、tile/pipeline、scale 和 W2 epilogue 语义，而不是从 BF16 重新发明 INT8 架构。
 - **shape**：V4-Flash 基线是 per-rank local experts、INT8 activation + per-row dequant scale、INT8 routed weights、INT32 accumulation、intermediate per-row requant 和 BF16 output；step3p5 仅参数化 36 experts、`HIDDEN=4096`、`INTER=1280`、capacity 和下游 ABI。
 - **如何生效**：直接对齐 V4-Flash 的 INT8 cube、pipeline、`QUANT_TILE=512` data-tile 以及 W2 epilogue：`activation_scale × intermediate_scale × route_weight × w2_scale` 在 expert lane 完成，之后 scatter BF16 routed output，combine 只做 FP32 token reduction。
@@ -267,7 +272,8 @@ producer → 数学变换/quant/route-map → transport/window
 
 ## Track G — 调度轴 / 动态 batch
 
-### PERF-G1 · experts/feature 调度轴 + runtime dynamic active batch/token（对齐DeepSeek）🟦 重新实现
+### PERF-G1 · experts/feature 调度轴 + runtime dynamic active batch/token（对齐DeepSeek）✅ 已完成
+- **完成证据**：BS1/2/16 `6127→303`、TP spread `0`；BS1 persistent 4-step 与 row0 batch-extension exact。
 - **问题**：current实现把默认capacity实例（历史配置为`BATCH=16`）同时当作formal shape、调度轴和逻辑batch，并在常见decode batch较小时计算或保留inactive padding rows。该数值是当前配置实例，不是step3p5产品硬约束。
 - **目标语义**：每次调用由runtime active batch/token决定逻辑范围。owner-vector在whole-net入口汇总出一致active count，并传入attention、gate、dispatch、routed/shared expert、combine、residual和KV写入路径。
 - **capacity合同**：若frontend要求静态formal shape，使用可配置`CAPACITY`作为physical storage上界，并满足shape/alignment要求；`CAPACITY`不得被解释为逻辑batch。所有kernel必须通过runtime loop bound、`valid_shape`、predicate或等价机制屏蔽`[active, capacity)`。
