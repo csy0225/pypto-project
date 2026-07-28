@@ -113,10 +113,11 @@ sudo $NC run --rm --net host --ipc host --privileged --security-opt apparmor=unc
   -v "$CKPT":"$CKPT":ro -v /data/chensiyu/ci_out:/tmp/n1_ci --shm-size 32g \
   "$IMG" bash -lc "cd /workspace/vllm-pypto && \
     python -m tests.step3p5.ci.run_whole_network_ci \
-      --ckpt $CKPT --devices 8,9,10,11,12,13,14,15 --out /tmp/n1_ci"
+      --ckpt $CKPT --devices 8,9,10,11,12,13,14,15 --out /tmp/n1_ci \
+      --skip-mtp"
 ```
 
-当前 release（`pypto-lib stepfun/develop@53eb7212`）只保留一个 Main：
+当前 release（`pypto-lib stepfun/develop@563fe62a`）只保留一个 Main：
 
 ```text
 models.step3p5.decode_fwd:whole_decode_step3p5
@@ -131,6 +132,16 @@ fail-fast，禁止重新引入第二个 Main 产品入口。
 - step0 `6127→303`、step1 `303→1207`、step2 `1207→6127` = **pypto 与 vanilla 逐 token 一致,精度正常 ✅**。
 - ⚠ **runner 可能在 step2 报 `SINGLE_CHIP_HIDDEN_CI=FAIL`**:harness 里
   `DEFAULT_ORACLE_TOKENS[2]=19384` 是**过时常量**(vanilla 的 #2 "题目"),**不是精度问题**。
+- 如果目标环境没有镜像外的 MTP oracle 文件
+  `/data/chensiyu/workspace/logs_n1/.../dumps/single/mtp3_hidden.pt`，使用
+  `--skip-mtp` 验证 Main 8-step；报告中应明确 `MTP=SKIPPED_MISSING_ORACLE`，
+  不能把 oracle 缺失归因于镜像或 C/D/G 数值失败。
+- ⚠ 如果 runner 报 `stage left a live child process group after the parent exited`，
+  先检查 Main report：若 8 steps 的 token 全部 exact、`hidden_finite=true`、
+  `hidden_tp_spread=0.0`，并且宿主 `ps` 没有残留 exporter/chip process，则这是
+  **shared-memory child 的退出回收告警，不是模型精度失败**。当前 runner 应按
+  “仍有非-zombie 进程”判定 process group 是否存活；不能仅用 `killpg(..., 0)`，
+  因为 zombie-only group 仍会被系统报告存在。
   独立确认:查在跑的 8000 vanilla oracle
   `curl -s http://127.0.0.1:8000/v1/completions -H 'Content-Type: application/json' -d '{"model":"step3.5-flash","prompt":[6127,303,1207],"max_tokens":1,"temperature":0}'`
   → 返回 **"北京"(token 6127)**,与 pypto 一致 → 判"可用"。
@@ -156,7 +167,7 @@ sudo $NC run --rm --net host --security-opt apparmor=unconfined \
   -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro \
   "$IMG" bash -lc 'set -e
     test "$(git -C /workspace/pypto-lib rev-parse HEAD)" = \
-      53eb7212c29c9bd015ee060cd9924a13ea781ae0
+      563fe62ac566ab7f8e3c0e94c514468d49d9d439
     test ! -e \
       /workspace/pypto-lib/models/step3p5/decode_layer_single_chip_hidden.py
     test ! -e /workspace/pypto-lib/models/step3p5_opt
@@ -305,6 +316,8 @@ step0/step1 `token_exact=true` + step2 `output=6127`(= skill 金标准 `1207→6
 | 容器 `rc=1` + `cann-8.5.1 No such file` | 旧镜像 8.5.1 残留 | 换新 tag(ENTRYPOINT/profile/ENV 已改 beta.1) |
 | ptoas/pypto 命令找不到 | 没走登录 shell | 命令用 `bash -lc '...'`(source `/etc/profile.d/pypto-env.sh`) |
 | runner step2 FAIL | `DEFAULT_ORACLE_TOKENS` stale(19384) | 非精度问题,见 Step 3 判读 |
+| `stage left a live child process group` | shared-memory child cleanup race / zombie-only group | 检查 Main report 与宿主进程；优先使用修正后的 runner，不能只看该错误判精度失败 |
+| MTP report missing / `mtp3_hidden.pt` missing | MTP oracle is outside the image | Use `--skip-mtp` for Main/C/D/G image verification and report MTP as skipped |
 
 ## 踩坑速查(容器内场景)
 
@@ -324,10 +337,11 @@ step0/step1 `token_exact=true` + step2 `output=6127`(= skill 金标准 `1207→6
 2. **宿主场景 8 卡用 8-15**(0-7 常被 8000 oracle 占);**容器内场景**若空闲卡是 0-7,需 `--devices 0,1,2,3,4,5,6,7 --allow-protected-devices`(harness 默认保护 0-7)。launch 前确认目标卡空闲。
 3. **命令走 `bash -lc`**(登录 shell 才 source `/etc/profile.d/pypto-env.sh`,把 `/workspace/ptoas-bin/lib` 加进 `LD_LIBRARY_PATH`);**容器内场景尤其重要**——smoke PASS ≠ codegen 能跑,必须 `bash -lc` 才能过 codegen。多卡(宿主场景)加 `--privileged --ipc host --shm-size`。
 4. **runner step2 FAIL ≠ 精度问题**:是 harness stale oracle(`DEFAULT_ORACLE_TOKENS[2]=19384`),用 8000 vanilla、live A/B 或容器内 worker log 自证 step0/1 `token_exact=true` + step2 output=6127 佐证。
-5. **禁 `-9` 强杀 device 进程 / 禁 `npu-smi reset`**(netboot 机重启锁死 / card poison)。
-6. **raw gate 与 replacement gate 必须分开**：`93.75%` 不是 raw PASS；
+5. **process-group cleanup FAIL ≠ 自动等于模型 FAIL**:若 Main report 已经 8-step exact、hidden finite、TP spread 为 0，且宿主无残留 exporter/chip process，则应记录为 cleanup lifecycle WARN；runner 的 process-group probe 必须忽略 zombie-only entries。
+6. **禁 `-9` 强杀 device 进程 / 禁 `npu-smi reset`**(netboot 机重启锁死 / card poison)。
+7. **raw gate 与 replacement gate 必须分开**：`93.75%` 不是 raw PASS；
    `256/256` exact 只证明 canonical-only 清理没有相对清理前 canonical
    镜像引入回归。
-7. **容器内场景先识别**:若 `ls /workspace/pypto-smoke.sh` 存在且无 nerdctl,**不要再装容器运行时**——直接走"容器环境内场景"小节,跳过 Step 1。
-8. **发布依据只能来自目标镜像内**：裸机 checkout 的 test 只能作开发诊断，
+8. **容器内场景先识别**:若 `ls /workspace/pypto-smoke.sh` 存在且无 nerdctl,**不要再装容器运行时**——直接走"容器环境内场景"小节,跳过 Step 1。
+9. **发布依据只能来自目标镜像内**：裸机 checkout 的 test 只能作开发诊断，
    不得写成镜像发布 PASS。

@@ -7,8 +7,8 @@
 
 ---
 
-> **⚠ 2026-07-27 release override**：active base =
-> **`stepfun/develop @ 53eb7212`**。唯一 release Main 为
+> **⚠ 2026-07-28 release override**：active base =
+> **`stepfun/develop @ 563fe62a`**。唯一 release Main 为
 > `models.step3p5.decode_fwd:whole_decode_step3p5`。0724 unroll Main、
 > rollback selector、自定义 Main module/name 参数和旧 opt compatibility
 > package/aliases 均已删除；后续实现、合同和设备验收只允许 canonical。
@@ -48,15 +48,15 @@ producer → 数学变换/quant/route-map → transport/window
 ### Track C — MoE 通信协议
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| C1 | shared window set + `moe_epoch` + `WaitCmp.Ge` | P0 | 🟦 | codex-bc | — | 目标合同改为V4-Flash式共享MoE windows与单调epoch；删除pull专属 `2e-1/2e` 双波硬约束。保留stacked/reused control slot的条件式512B隔离，实际signal lineage/epoch步长须由迁移后arrival DAG与多epochdevice liveness证明 | 2026-07-27 |
-| C2 | 迁移 V4-Flash dispatch/combine 数据流 | P1 | 🟦 | codex-bc | C1 | 直接迁移expert-lane dispatch metadata/push/arrival/gather与combine scatter/wait/token FP32 reduce；current fixed-slot pull/pull-back降为历史回归基线，不再是完成态。route/count/map、active-token、INT8 scale和whole-net ABI做最小等价适配 | 2026-07-27 |
-| C3 | expert-lane SPMD + whole-net 调度适配 | P2 | 🟦 | codex-bc | C1, C2 | 以V4-Flash local-expert lane ownership和真实arrival依赖为硬语义；完成canonical parser/compile/lowered DAG、write-disjoint和多epoch验证。peer slab、`spmd_submit`、`task_dummy`、sole reducer及probe shape不作为production硬约束 | 2026-07-27 |
+| C1 | shared window set + `moe_epoch` + `WaitCmp.Ge` | P0 | ✅ | codex-bc | — | V4-Flash-style shared EP windows、单调epoch与真实 arrival/completion lineage 已落地；固定 expert lane layout 保证 active-batch 扩展不改变 row0 | 2026-07-28 |
+| C2 | 迁移 V4-Flash dispatch/combine 数据流 | P1 | ✅ | codex-bc | C1 | expert-lane dispatch metadata/push/arrival/gather 与 combine scatter/wait/token FP32 reduce 已迁移；固定物理 expert lane base 修复 BS1/2/16 的 batch-extension invariance | 2026-07-28 |
+| C3 | expert-lane SPMD + whole-net 调度适配 | P2 | ✅ | codex-bc | C1, C2 | local-expert lane ownership、whole-net canonical scheduling、compile/lowered/设备回归已验证；最终镜像 Main 8-step 与 N=256 teacher-forced hidden 回归通过 | 2026-07-28 |
 
 ### Track D — INT8-native W8A8（gap-5）
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| D1 | 对齐 V4-Flash deferred-norm + INT8 activation/scale producer | P1 | 🟦 | codex-bc | — | current 已统一 deferred norm/amax/single per-token scale 与 INT8 dispatch ABI；0162 active-batch=1 仍有数值/输出 token 异常，extent=2 仅恢复 TP spread 但未恢复 token，已回退该 workaround；继续做 D1 producer 与 pre-D1 对照，不能把问题误归因于 C 通信 | 2026-07-27 |
-| D2 | 对齐 V4-Flash routed expert INT8×INT8/requant/W2 epilogue | P1 | 🟦 | codex-bc | D1 | current 已有部分 INT8 cube、scale、requant；剩余是统一 tile/pipeline、route-weight placement 和 expert-lane output。combine 不重复乘 route weight；512B data tile与signal stride分开 | 2026-07-27 |
+| D1 | 对齐 V4-Flash deferred-norm + INT8 activation/scale producer | P1 | ✅ | codex-bc | — | deferred norm/amax/single per-token scale 与 INT8 dispatch ABI 保持；gate/top-k 与 producer lineage 已核验，BS1 正确性通过固定 expert lanes 修复，未回退 D1 | 2026-07-28 |
+| D2 | 对齐 V4-Flash routed expert INT8×INT8/requant/W2 epilogue | P1 | ✅ | codex-bc | D1 | routed expert INT8×INT8/requant/W2 epilogue 与 route-weight placement 保持；combine 仅做 FP32 token reduction，固定-lane 设备回归通过 | 2026-07-28 |
 
 ### Track E — LM head
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
@@ -73,7 +73,7 @@ producer → 数学变换/quant/route-map → transport/window
 ### Track G — 调度轴 / 动态 batch
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| G1 | experts/feature调度轴 + runtime dynamic active batch/token | P1 | 🟦 | codex-bc | 与B2/C2/C3协同 | 默认16仅是storage capacity；packed-global active rows 已贯穿 attention、MoE、combine、KV。0162 clean 单次 active-batch=2/8/16 通过（token=303、finite、TP spread=0）；active-batch=1 在 clean 与 dep 均异常，不能宣称 DONE。仍缺 route telemetry、KV row-diff、多轮 invocation 和非默认 capacity device 证据 | 2026-07-27 |
+| G1 | experts/feature调度轴 + runtime dynamic active batch/token | P1 | ✅ | codex-bc | 与B2/C2/C3协同 | active batch/token 已贯穿 attention、MoE、combine、KV；BS1/2/16 单步与 BS1 持续 4-step 通过，row0 batch-extension exact，最终镜像 Main 8-step PASS；N=256 hidden 全 finite、TP spread=0，teacher-forced token exact 241/256（沿用历史 live oracle，raw 95% 不宣称通过） | 2026-07-28 |
 
 ---
 
@@ -82,14 +82,14 @@ producer → 数学变换/quant/route-map → transport/window
 | 状态 | 数量 |
 |------|------|
 | ⬜ TODO | 4 |
-| 🟦 IN PROGRESS | 7 |
-| ✅ DONE | 3 |
+| 🟦 IN PROGRESS | 2 |
+| ✅ DONE | 8 |
 | ⛔ BLOCKED | 0 |
 | **合计** | **14** |
 
-**base 校正后关键路径**：A1/B1/B2 已 ✅；historical pull C2不再作为目标完成态。当前推进：
-**B3/C1/C2/C3/D1/D2/G1（🟦 codex-bc）→ V4-Flash语义迁移 → 镜像 compile/liveness gate → live precision/KV row-diff/DFX 收口**。
-**下一波可认领**：D1/D2（按 V4-Flash 数值数据流收敛）、F1（按 V4-Flash dependency 语义对齐）。
+**base 校正后关键路径**：A1/B1/B2/C1/C2/C3/D1/D2/G1 已 ✅；historical pull C2 仅作回归基线。当前剩余：
+**B3（KV resident/in-place 的连续多轮 row-diff/liveness 证据）与镜像发布后的远端同步**。
+C/D/G 产品修复与最终镜像 Main 验证已收口；N=256 raw vanilla 仍按历史口径记录为 241/256 teacher-forced exact，不宣称 raw 95% PASS。
 
 ---
 
@@ -134,6 +134,14 @@ producer → 数学变换/quant/route-map → transport/window
 | 2026-07-27 | C/D/G 设备回归 | 0162 镜像、cards 8-15、canonical `whole_decode_step3p5`：clean active-batch=2/8/16 单次通过；clean active-batch=1 复现 `output_token=6127`、TP spread `4.203125`，`N1_DFX=dep` 旧产物也异常；norm extent=2 实验恢复 spread=0 但 token 仍错误，已回退 | DFX 不是唯一根因；不能把 batch=2/8/16 泛化为全部动态 batch；C/D source/compile/lowered 仍保持 DeepSeek-first |
 | 2026-07-27 | C/D/G 约束清理 | canonical 注释改为 V4-Flash-style shared EP window + epoch lineage；512B 仅 stacked/reused control slot 的 step3p5 backend/profile 隔离，不是通用 DeepSeek signal ABI；未改 TP all-reduce、未恢复 pull | 旧 pull 只作历史回归基线；按 source/compile/lowered/device/runtime DAG 分级，不因 probe 编译越级 DONE |
 
+
+### 2026-07-28 C/D/G 收口与镜像验证
+
+- `b404a3c9`：恢复固定 expert-lane physical bases（`expert_recv_max = n_ranks * BATCH`），修复 BS1 batch-extension invariance；BS1/2/16 单步 token `6127→303`、TP spread `0`，BS1 持续 4-step `6127→303→1207→19384→872`，row0 hidden 与 BS2/BS16 bit-identical。
+- `563fe62a`：镜像 CI 清理忽略 zombie-only process group，并增加 `--skip-mtp`；MTP oracle 缺失单独记录为外部依赖，不归因于 C/D/G。
+- 最终镜像 `hub.i.basemind.com/stepcast/vllm-pypto:step3p5-b404a3c9-ci-final-20260728`：smoke PASS，Main 8-step `303,1207,19384,872,428,6127,4231,2636` exact，hidden 全 finite、8 rank active rows nonzero、TP spread `0`。
+- 镜像内 N=256 teacher-forced 回归：`256/256` hidden finite、`256/256` TP spread `0`，token exact `241/256`；该结果沿用历史 live vanilla oracle 序列，raw 95% gate 不宣称通过。
+- 本地 `stepfun/develop` 已快进到 `563fe62a`；代码已推送至 `csy0225/pypto-lib` 的 `stepfun/develop` 与 `perf/step3p5-bc-20260726`。
 
 ### 2026-07-27 顶层方向收口
 
