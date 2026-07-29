@@ -300,6 +300,27 @@ per-kernel 数值 + liveness 定位。**建议先补 ST**，否则 A–E 每步�
 
 ## 6. 落地映射 + 建议顺序
 
+### 收益量化（改哪里 / 好处 / 预计提升）
+
+> **纪律**：显存收益可确切算（scratch shape 账）；**延迟收益一律不预报百分比**——64k 下
+> attention 的 DFX span 份额被插桩放大 5.21×（§5.6），真实延迟贡献要 B 落地后 ctx A/B DFX
+> 相减才知。下表 "预计提升" 分开写"显存（确切）"与"延迟（假说，待测）"。
+
+| 点 | 改哪里 | 好处 | 显存（确切） | 延迟（待实测） | 状态 |
+|----|--------|------|-------------|----------------|------|
+| **A.1** | softmax 删 `exp→BF16→FP32` 回读（`attention_full.py:645`/`swa:624`） | 少 1 次全 tile cast + 分母精度对齐 v4 | 0 | ≈0（2 个小 tile cast） | ✅ 落地 |
+| **A.2** | (Stage3 SV M 16→8) | — | 0 | 0 | ❌ cube 16-fractal 否决 |
+| **A.3a** | 无（现状 spmd guard） | inactive 核已跳过 | 0（已有） | 0（已有） | ✅ 已实现 |
+| **A.3b** | (scratch 首维 runtime) | — | 0 | 0 | ❌ 静态维约束，并入 B/D |
+| **C** | masking → additive −inf bias | 无（standalone），为 B 铺路 | 0 | 0 | ✅ 验证，随 B 进 |
+| **B** | 融合 Stage1+2+3（qk_pv），留 Stage4 | 消 `all_raw_scores`+`all_exp_padded` + 2 次 GM 往返 | **~96 MiB/FULL 层**（64k：161→65 MiB） | 假说：省 softmax GM 往返延迟，magnitude 待 DFX A/B | ⏸ 进行中 |
+| **D** | UB 滚动累加器，partial 不物化 | 连 `all_oi_tmp` 也消，Stage4 并入 | **~161 MiB/FULL 层 → KB 级**（最大显存收益） | 同 B，待测 | ⏸ 待做 |
+
+> 显存收益是**每次 FULL-attn invocation 的静态 shape 账**；峰值随 loop liveness 折算（§2.1）。
+> 12 个 FULL 层受 context 影响，33 个 SWA 层被 `SLIDING_WINDOW=512` cap（§5.5）。落地口径：
+> B/D 的显存收益按 `AllocateMemoryAddr` + ring-heap 峰值实测记入 `perf-baseline.md`；延迟按
+> 同镜像 ctx A/B DFX 相减记入，不空写 %。
+
 | 本专项方案 | 建议 PERF ID | 层（README 第二维度） | 收益类型 | 依赖 | 风险 |
 |-----------|-------------|----------------------|---------|------|------|
 | A.1 V4 FP32-den/BF16-num 顺序 ✅ | PERF-F(new) | L1 kernel 数据流 | 少两次 cast；数值语义变化 | attention ST | 中 · **canonical CI passed，N=128 待补** |
