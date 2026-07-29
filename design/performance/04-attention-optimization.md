@@ -217,8 +217,14 @@ mi/li 存成 `[1,16]` 宽行（Stage4 读前 8），避开 `[N,1]` 列 slice；p
   （任何 per-block 融合都吃 cube 的 16-row 输出；D 同理）。
 - **结论（data-backed）**：attention Stage1+2+3 融合对**延迟是负的且结构性受限**——省的 GM 往返
   比它强制的 16-row softmax 便宜。B 只剩 ~96 MiB 显存价值（不解 bs=16）。**当前 4-stage split
-  实际上对 softmax 延迟已是较优形态**（GM de-box → 8-row softmax）。剩余唯一未测 lever = bias
-  guard（B''，保留 16-row softmax 只省 bias），但即便成功也去不掉 16-row softmax 这个大头。
+  实际上对 softmax 延迟已是较优形态**（GM de-box → 8-row softmax）。
+- ⚠⚠⚠ **B-nobias 计时探针实测（2026-07-29，perf-h1）→ 融合方向判死**。为拆分 +7% 的构成，跑了
+  一个去掉 bias 的计时变体（数值故意错、只计时）：64k p50 = **66.73 ms**（baseline 63.44）。
+  即 +7% = **~+1.8% bias（可 guard）+ ~+5.2% 强制 16-row softmax（cube boxing，去不掉）**。
+  **即便完美 B''（bias 全省）仍 +5.2% @64k，救不回来。** → **B / B'' / D 整个"per-block 融合"
+  方向对延迟都是负的**（任何融合都吃 cube 的 16-row boxed 输出，逃不掉 16-row softmax）。
+  attention kernel 本体**已无可落地的延迟优化**；64k 延迟瓶颈不在 attention（§5.6），下一步应回
+  §5.6 的 ctx A/B 定位真瓶颈，不再在 attention 里抠。
 
 ### C. B 的解锁前提：`fillpad/valid_shape` → V4 的 additive-inf bias
 
@@ -239,6 +245,10 @@ bias 与 fillpad 数值等价、lowering path 干净。
 per-block partial 一个都不物化，Stage4 连带消失，scratch 从 161 MiB 掉到 KB 级。
 反正 block 循环本来就是单核串行，物化 partial 零收益——这才是这段代码本该长的样子。
 **风险最高**（等于重写 kernel）。
+- ⚠ **延迟同 B 判死**：D 仍是 per-block 融合，每 block 的 QK 出 cube 16-row boxed 输出 → 逃不掉
+  16-row softmax（B-nobias 实测 +5.2% @64k 的结构性来源）。D 的价值只剩**显存**（scratch→KB），
+  延迟同样是负的。仅当"显存"成为硬约束（如真要解 bs=16）时才值得，且要先确认省下的显存能跨过
+  OOM 门槛（B 的 ~96 MiB 不够）。**不作为延迟优化立项。**
 
 ### E. `pl.range` + `pl.pipeline(stage=2)`
 
@@ -351,7 +361,7 @@ per-kernel 数值 + liveness 定位。**建议先补 ST**，否则 A–E 每步�
 | **A.3b** | (scratch 首维 runtime) | — | 0 | 0 | ❌ 静态维约束，并入 B/D |
 | **C** | masking → additive −inf bias | 无（standalone），为 B 铺路 | 0 | 0 | ✅ 验证，随 B 进 |
 | **B** | 融合 Stage1+2+3（qk_pv），留 Stage4 | 消 `all_raw_scores`+`all_exp_padded` + 2 次 GM 往返 | **~96 MiB/FULL 层**（64k：161→65 MiB） | **实测 +7% @64k（回退非提升）**：additive-bias 无条件加全 512 block；B' guard partial-block 待做 | ⚠ 回归通过但**不按现状落地** |
-| **D** | UB 滚动累加器，partial 不物化 | 连 `all_oi_tmp` 也消，Stage4 并入 | **~161 MiB/FULL 层 → KB 级**（最大显存收益） | 同 B，待测 | ⏸ 待做 |
+| **D** | UB 滚动累加器，partial 不物化 | 连 `all_oi_tmp` 也消，Stage4 并入 | **~161 MiB/FULL 层 → KB 级**（最大显存收益） | **延迟同 B 判死**（per-block 融合逃不掉 16-row softmax，+5.2% 结构性） | ⚠ 仅显存价值，非延迟优化 |
 
 > 显存收益是**每次 FULL-attn invocation 的静态 shape 账**；峰值随 loop liveness 折算（§2.1）。
 > 12 个 FULL 层受 context 影响，33 个 SWA 层被 `SLIDING_WINDOW=512` cap（§5.5）。落地口径：
