@@ -69,9 +69,18 @@
 
 `dropped=0`、`fatal=false`。与 C4 一致：**ring heap ~20% 余量仍是唯一偏紧资源**（memset 不改任务图，符合预期）。
 
-### 3.3 Swimlane（span 373.878 ms，75054 events，多 iter 累加）
+### 3.3 Swimlane（span 96.109 ms，DFX warmup 已丢弃冷启动 run）
 
-top busy 由 `tp_all_reduce(r2t15)` 独占（2 次 / 636.86 ms / avg 318 ms）—— 这是**第一个 barrier 吸收 rank 启动 skew 的等待条**，非真实计算（见 STATUS 说明，每 run straggler rank 不同）。剔除该 artifact 后，真实 per-kernel busy 由 `*_expert_gate_up_aiv_spmd`（MoE，各 ~0.5–0.67%）与 attention 组成；因本次是 `--itl-iters 2` 多 pass 累加 + 启动 skew，逐 kernel 绝对占比噪声较大，**不作延迟归因**（要干净归因需按 [`2026-07-29-release-image-64k-dfx-itl.md §1.6`](2026-07-29-release-image-64k-dfx-itl.md) 做 ctx=1024 vs 65536 的 DFX A/B 相减）。
+harness 现在**在 ITL warmup 期间关闭 DFX**（`_stage_main_hidden_only._run_itl` pop `N1_DFX`/`N1_PMU`，pypto-lib `80eb8a9e`），只在 warm 稳态 run 上采集，所以 swimlane 不再被冷启动 skew 污染。效果：
+
+| 采集方式 | swim span | top `tp_all_reduce` |
+|---|---|---|
+| warmup=1、采集含冷启动（旧） | 373.878 ms | 636.86 ms（2×318.43，第一个 barrier 吸收 rank 启动 skew） |
+| **warmup=3、DFX 丢弃 warmup（新，本文）** | **96.109 ms** | **81.55 ms（2×40.77，DFX 每 pass re-sync 残留）** |
+
+- 每步真实 `tp_all_reduce` 中位数 **0.051 ms**；顶部 2 条 40.77 ms 是 **DFX 双 pass（dep_gen+timing）每次 instrument run 的首 barrier re-sync 残留**，非 steady-state（un-instrumented ITL p99 仅 66.05 ms 已证实每步无此开销）。
+- 剩余 per-kernel 真实 busy 由 `*_expert_gate_up_aiv_spmd`（MoE，各 ~14–16 ms 累加）与 attention 组成。
+- **口径**：冷启动 skew 是分布式多进程首次同步的一次性成本（干净测约 2.9 ms，见 [`2026-07-29-host-window-memset.md`](2026-07-29-host-window-memset.md) H2），**每 session 一次、非每 token**；serving 侧由 vLLM 启动 warmup 吸收。要干净归因 attention vs floor 仍需 ctx=1024 vs 65536 的 DFX A/B 相减（见 [`2026-07-29-release-image-64k-dfx-itl.md §1.6`](2026-07-29-release-image-64k-dfx-itl.md)）。
 
 ---
 
