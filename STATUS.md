@@ -32,7 +32,22 @@
 > BS1/2/16 单步均为 `6127→303`、TP spread `0`，BS1 row0 hidden 与 BS2/BS16
 > bit-identical；BS1 persistent 4-step 为 `6127→303→1207→19384→872`。
 >
-> 最终自包含镜像
+> **PERF-H1（最新镜像，2026-07-29）**：`hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-perf-h1`
+> （registry digest `sha256:b4e8c8a457a5…`；pin = pypto `1f704616` / pypto-lib `4513007d` /
+> pto-isa `ecb6c303` / PTOAS `fc8c6cae` / simpler `e2efebcb` / ptoas-bin `v0.50`）。
+> 在下方 C4 发布镜像上把 retained CommDomain window 清零从 per-step host H2D reset 改为
+> device `aclrtMemset`（`_CTRL_MEMSET` + 8 卡并行 `broadcast_control_all`，runtime-only，不动 kernel/数值）。
+> 0162 回归：smoke PASS、整网 CI `ok=true`（Main token `303,1207,19384,872,428,6127,4231,2636`
+> 全 exact + MTP single/batch16 `6178,410,303` exact、`hidden_tp_spread=0`）、N=256 H1 vs C4
+> **token 256/256 exact**（step127/128/255 含）全步 finite（raw-hidden run-to-run 抖动 = C4 push
+> all-reduce 归约顺序，H1a-vs-H1b 复跑证实非 H1 回归）。**ITL p50（`--num-blocks 512`）：1024
+> `50.9` / 8192 `52.0` / 32768 `58.0` / 65536 `64.1` ms —— 较下方 C4 同工作点降 23–27%**；
+> PMU/scope 与 C4 逐项一致（cube_int8 `46.35%`、ring heap 峰值 `79.9%`、`dropped=0`）。
+> ⚠ 两点：MTP oracle-wiring 修复 `0f3650c7`(test-only) 为 mount 验证、**未烤进本镜像**；
+> live N=128 vanilla-raw 精度门未跑（token 与 C4 一致 → 等价 `240/256`）。benchmark 见
+> [`benchmark/2026-07-29-perf-h1-image-itl-dfx.md`](benchmark/2026-07-29-perf-h1-image-itl-dfx.md)。
+>
+> 上一发布 / N=256 等价基线镜像（PERF-C4）
 > `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push`
 > （digest `sha256:7924925f4b2816c5645910b90fd2a9fa9469baace2f48f7e0ee41a587bd5d6ba`，
 > config `sha256:5402e07ba0d19b315935bfda1e9f6b445d1a3fdc9067c634a2ce302fd7f2a3dd`；
