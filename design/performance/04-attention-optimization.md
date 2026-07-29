@@ -16,6 +16,16 @@
 
 ## 0. 一句话结论 + 边界
 
+> **⭐ 2026-07-30 全专项实测收口（7 个 device 实验后的定论）**：**attention 不是 64k 延迟瓶颈，
+> attention kernel 内已无可落地的延迟优化。** 证据：A.1 ≈0 / A.2 illegal / A.3b not-viable /
+> B +7% 回退 / B'(8-row) illegal / B-nobias +5.2%(结构性) / **L1(o_proj cast 融合，纯减 GM 往返)
+> = 中性(±1%)**。**去掉 attention 的 GM 往返(L1) 都不动 ITL** → decode 不受 attention MTE/compute
+> 约束。perf-h1 实测：64k ITL = **~50 ms 固定 floor(context 无关, 80%) + ~12.7 ms context 部分**
+> (1024→64k, = attention-over-KV, flash kernel 已近最优)。**~50ms floor(大头)不在 attention**——
+> 是 per-layer 的 MoE 专家 matmul / projection / norm / tp_all_reduce / dense MLP / LM-head / host。
+> **要降 64k 延迟必须打这个 floor（MoE/proj/norm/comm），不是 attention。** 下一步 = §5.6 定位
+> floor 构成后精准打；attention 侧只保留 A.1（清理）+ L1（清理，去 FP32 scratch，token-exact）。
+
 当前 full/SWA 的 **decode** flash 是 **4-stage split** 形态（QK / softmax / SV / online-softmax
 各一个 `pl.spmd(BATCH)`，中间用 GM scratch 串联）。它能跑通、精度对齐（N=256 hidden exact），
 但有**一个真实浪费 + 一个被证伪的假设**：GM scratch 按静态 capacity 与最大 context 预分配
@@ -25,6 +35,15 @@
 bias、qk_pv 融合、FP32 直接 row_sum），不是它的 kernel 结构。它跑通的 shape 是
 `H=64 / HEAD_DIM=512 / H_TILE=16`，与 step3p5 的 `H=8(或12) / HEAD_DIM=128 / pad=16(或24)`
 差很远，**任何搬移都必须过 ST**。
+
+**L1（o_proj FP32→BF16 cast 融合，vs qwen3）实测（2026-07-30，perf-h1，cards 8-15）**：
+canonical CI PASS（token-exact，L1 数值等价）；ITL 1024 `50.73→51.31`、64k `63.44→64.15`——
+**中性（±1%，噪声内）**。删掉 `partial_attn_proj_fp32` [16,4096] FP32 GM scratch + 整个
+`full/swa_out_proj_cast` SPMD pass，token 不变——**纯清理/对齐 qwen3，但不动延迟**（再次证明
+64k 不受 attention GM 往返约束）。patch `workspace/perf-patches/L1-oproj-cast-fuse.patch`
+（branch `perf/step3p5-attn-l1`）。可作为无风险 cleanup 落地，但不宣称 perf 收益。
+
+
 
 **本专项不承诺 latency 数字**。理由见 [§5.6](#56-64k-下-latency-收益暂无实测--主要理由是显存不是延迟)：
 64k DFX 显示 attention 的 span 占比被插桩放大、不可当延迟占比。当前能站住的硬理由是
