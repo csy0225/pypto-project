@@ -58,9 +58,42 @@ producer → 数学变换/quant/route-map → transport/window
 | **PERF-F2** | 按V4-Flash data tile/pipeline做MTE性能调优 | F L1/L0 微调 | P2 | 依perf_hints消MTE停顿；与control signal 512B隔离 | A1 | S (~3d) |
 | **PERF-F3** | 复用V4-Flash deferred-norm/quant producer | F L1/L0 微调 | P2 | 统一norm/amax/scale producer，避免重复fusion架构 | D1 | S (~2d) |
 | **PERF-G1** | experts/feature调度轴 + runtime dynamic active batch/token | G 调度轴/动态batch | **P1** | capacity与逻辑batch解耦；attention/MoE/KV不处理inactive rows | 与B2/C2/C3协同 | L (~2w) |
+| **PERF-H1** | retained window 清零：host 搬零 → device `aclrtMemset` | H host per-step | **P0** | ✅ 清零 `21.50→2.21 ms`、ITL p50 `85.02→65.55 ms`（−22.9%）、每步 H2D `244.7 MiB→0`；语义等价 | A1 | S (~1d) |
+| **PERF-H2** | per-rank 视图重建 hoist 到 `prepare()`（= 跨卡起跑阶梯病根） | H host per-step | P1 | submit 3.49 ms 的大部分；起跑阶梯实测 2.914 ms。**v4-flash 同形状**，属 codegen 通用改进 | H1 | M (~1w) |
+| **PERF-H3** | DFX run 第一 barrier 假长条（观测性，非性能） | H host per-step | P2 | 让 swimlane 可信——该假长条曾把 `tp_all_reduce` 误判成 74.1% wall | A1 | S (~2d) |
 
 优先级：**P0** 零/低风险且解锁其它项，先做；**P1** 收益大的主体；**P2** 微调/收尾。
 工作量：S ≤ 3d，M ≈ 1w，L ≈ 2w，XL 多周。
+
+---
+
+## 第二维度：优化落在栈的哪一层
+
+Track A–H 是**按 workstream 分工**（谁认领）。但同一个 ITL 数字是被不同**层**吃掉的，
+调优手段、度量工具、回归口径都不同层不通用。下表是同一批子任务按**层**重新切一遍。
+层级命名沿用 simpler 的 L0–L6 模型（`simpler/docs/hierarchical_level_runtime.md`）与本仓既有用法
+（Track F 早已叫「intra-kernel L1/L0 微调」）。
+
+| 层 | 是什么 | 谁在这一层被消耗 | 度量工具 | 子任务 |
+|---|---|---|---|---|
+| **L3 · host / CPU** | host 进程的 Python + nanobind + mailbox 往返；`Worker(level=3)` 编排、window 生命周期、per-step 参数打包 | **host CPU 时间**、PCIe H2D | `_dispatch_prepared` / `_reset_persistent_domains` 计时探针；`[STRACE]` | **H1 ✅** · **H2** · H3 |
+| **L2 · AICPU 调度** | 片上 orchestrator/scheduler：task 图形状、依赖链深度、`early_dispatch`、每 task 的 `block_num` | **task 派发/完成延迟**、核空转 | l2_swimlane（`deps.json` + 记录）、scope_stats | F1 · （新）**任务图瘦身**：1086-hop 关键路径、878/1542 个 `block_num=1` task |
+| **cross-chip · 通信** | 跨卡 collective 与 rendezvous：`tp_all_reduce`、EP dispatch/combine、signal window 与 epoch | **等待时间**（非带宽） | swimlane 上 `*_wait` / `tp_all_reduce` 时长分布；per-rank 对比 | C1 ✅ · C2 ✅ · C3 ✅ · C4 ✅ · E1 · （新）**combine_wait 13.4 ms** |
+| **L1 · kernel 内数据流** | 单 task 内的 MTE/tiling/L1-UB 驻留、量化链、norm 融合 | **MTE 停顿**、cube/vec 利用率 | `perf_hints.log`（PH001 tile 粒度）、PMU exec counter | D1 ✅ · D2 ✅ · F2 · F3 |
+| **L0 · 核内流水** | 一个 AICore 内 cube/vector/MTE 的 pipeline 重叠 | **单 task 时长** | l0_swimlane（`simpler_setup.tools.l0_swimlane`） | （暂无立项；`expert_gate_up_aiv` 与 `aic` 同耗时是候选线索） |
+| **结构 / codegen** | program 形态本身：层展开 vs `pl.range`、权重 resident、调度轴、动态 batch | 以上各层的**上界** | 源码体量、编译产物、IR | B1 ✅ · B2 ✅ · B3 · G1 ✅ |
+| **可观测性** | 让上面每一层可测且可信 | —— | —— | A1 ✅ · H3 |
+
+### 当前 ITL 65 ms 按层分账（ctx=64k / bs=16，实测）
+
+| 层 | 时间 | 占比 | 下一步 |
+|---|---|---|---|
+| **L2 + L1 + L0**（device 执行，`drain`） | **59.15 ms** | **91%** | 其中 `combine_wait` 13.4 ms 属 cross-chip；余下是真算力 |
+| L3 · host | 3.49 ms（`submit`）+ 2.20 ms（`clear`） | 8.8% | H2 收 submit；clear 已收完 |
+
+> **H1 之前**这张表是 host 24.9 ms / device 59.9 ms（host 占 29%）。H1 落地后 host 压到 5.7 ms，
+> **device 执行首次成为主导项** —— 这也意味着后续重心从 L3 移到 cross-chip 与 L2/L1。
+
 
 ---
 

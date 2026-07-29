@@ -753,6 +753,109 @@ flowchart LR
 
 ---
 
+## Track H — host 侧 per-step 开销
+
+> Track A–G 的口径都是 device 侧。A1 建完 baseline 后首次做 host/device 分账才发现：ITL 85 ms 里
+> **只有 ~55 ms 是 device 执行**，约 25 ms 花在 host 上，其中一项独占 21.5 ms。本 track 收这部分。
+> 分账方法与全部数据见 [`benchmark/2026-07-29-host-window-memset.md`](../../benchmark/2026-07-29-host-window-memset.md)。
+
+### PERF-H1 · retained window 清零：host 搬零 → device `aclrtMemset` ✅ 已完成
+
+- **完成证据**：simpler `e2efebcb`（over `8459d60f`）+ pypto `1f704616`（over `ce7fcb64`，含 runtime gitlink bump）。
+  同镜像 A/B：`main_hidden_8step` 两边 `rc=0 passed=True`，`main_hidden_only_report.json` **除 `run_sec` 外逐字段相同**
+  （tokens / `token_exact` / `hidden_finite` / `hidden_tp_spread=0.0` / `hidden_row0_abs_max` 元素级相同）；
+  清零 `21.50 → 2.21 ms`，ITL p50 `85.02 → 65.55 ms`（**−22.9%**）；单测 8/8。
+  ⚠ CI 整体 rc=1 但**两边同样**失败在 `mtp_hidden_single`（缺未挂载的 host fixture），与本项无关。
+- **位置**：`pypto/python/pypto/runtime/distributed_runner.py::DistributedWorker._reset_persistent_domains`
+  （`+12/-0`）；`simpler/python/simpler/worker.py` 新增 `_CTRL_MEMSET=19` / `_MEMSET_COUNT`/`_MEMSET_RECORD` codec /
+  `_encode`+`_decode_memset_payload` / `_handle_ctrl_memset` / child dispatch 分支 / `Worker.memset_all` /
+  `Worker.device_memset_available`（`+120/-0`，**纯新增**）。
+- **问题**：`persistent=True` 为省掉每步 domain alloc/free 而**保留**窗口，再手工还原成 fresh-allocation 状态；
+  但还原手段选错了——按 `_PERSISTENT_ZERO_CHUNK_BYTES=1 MiB` 分段 `orch.copy_to`，
+  每段一次**阻塞** `CTRL_COPY_TO` mailbox 往返。step3p5 单 domain `comm_d0` per-rank `30.58 MiB`
+  ⇒ 每步 **31 段 × 8 卡 = 248 次串行往返 + 244.7 MiB H2D**。
+  而 backend 给 fresh window 清零用的是 **device 侧 `aclrtMemset`**（`src/a2a3/platform/onboard/host/comm_hccl.cpp`，
+  `alloc_domain` 尾部），零 PCIe。**同一个仓库里两条路径做同一件事，persistent 那条选了贵的。**
+- **算法步骤**：
+  1. host 用 `handle.workers` 组出 `{worker_id: (local_window_base, actual_window_size)}`，
+     经 `_config["device_ids"]` 映射成 `{device_id: (base, nbytes)}`（child 只知道自己的物理 device id）。
+  2. 保留改前的 provenance 检查 `_child_prov_require_live(worker_id, base, api="memset_all", size=nbytes)`
+     —— 单次 memset 拿 base + 全长，本身就是一条已登记 allocation，不再依赖 interior-pointer 放行。
+  3. `broadcast_control_all(NEXT_LEVEL, _CTRL_MEMSET, payload)`：payload 一次 staged 进 POSIX shm，
+     **每个 child 一个 `std::thread` 并发下发再 join**（`worker_manager.cpp` `broadcast_control_all`）。
+  4. child 内 `ctypes` 调 `aclrtMemset(base, nbytes, 0, nbytes)`。payload 里**没有本 device 记录 = no-op**，
+     以支持只覆盖部分 chip 的 subset domain。
+- **语义等价论证**：地址区间与字节数不变（同 `local_window_base` / `actual_window_size`）、填充值不变、
+  `aclrtMemset` **同步**、`broadcast_control_all` join 全部 child 后才返回 ⇒ 「8 卡清零全部完成才 `entry_fn` 下发」
+  这条 happens-before **不变**。这条很关键：`tp_all_reduce` 的 3 波 barrier 共用一个 signal cell、
+  阈值累积 `Ge 1/2/3`，依赖的正是它（见 [`benchmark/...memset.md`](../../benchmark/2026-07-29-host-window-memset.md) §5 假设 1）。
+- **sim 兼容**：`device_memset_available` 按 `platform.endswith("sim")` 判据；sim 无 `libascendcl`，
+  **仍走改前的 host chunk 路径**，原代码完整保留（`-0` 删除行）。不是 feature flag，是平台能力判定。
+- **顺带消掉的复杂度**：`postmortems/14` 那场事故（0728 三个镜像 dirty 工作树 →
+  `Worker.copy_to: device pointer … is not a live allocation`）的根源就是这条逐块 copy_to——
+  `base + 1MiB` 是 interior pointer，单点 provenance 检查必然拒，因此逼出了 `8459d60f` 的 span-aware 补丁。
+  改成单次 memset 后该压力消失（span-aware 补丁本身仍为 `copy_to` 通用路径保留，不回退）。
+- **保护区 / 未动项**：窗口 ABI（数量/形状/512B stacked stride）、`moe_epoch` 与 EP dispatch/combine 协议、
+  `persistent=True` 语义、`_PERSISTENT_ZERO_CHUNK_BYTES` 及其 host 路径、`CommBufferSpec` 结构均未改动。
+  **特别地：本项不区分 signal / 数据 buffer，仍清整个窗口**，所以不引入任何数值风险。
+- **验证口径**：patch-into-image（只含本改动 hunk，`patch -p1` 进已发布镜像）保证被测对象 = image + delta
+  → 单测 → ITL 四 mode 对比 → 同镜像 `run_whole_network_ci` A/B 逐字段 diff。
+  **不用挂载本地工作树验证**（`postmortems/14`）。
+- **残留**：`clear` 仍有 2.21 ms（30.58 MiB 同步 memset，有效 ~14 GB/s + 广播握手）。要再压只能只清
+  47,616 B 的信号 buffer（实测 0.87 ms），但那是**语义改变**，须先过 N=128 精度门 —— **当前不做**。
+
+### PERF-H2 · per-rank 视图重建 + 跨卡起跑阶梯 ⬜ 待办
+
+- **现象（实测）**：clean run 里 per-rank `_submit_chip` 进入时刻是**完美等距阶梯**，每 rank `+0.412 ms`：
+  `rank0 0.000 … rank7 2.914`（p50，n=20，max 2.986）。submit 阶段合计 3.49 ms。
+- **根因**：生成 `host_orch.py` 把整个 per-rank 体（**53 个常量下标 slice + 38 个 `pl.reshape` +
+  ~92 个 `make_tensor_arg`/`add_tensor` + 9 个 `add_scalar` + 1 个 `_submit_chip`**）包在
+  `for r__idx_v0 in range(0, world_size, 1)` 里，rank-major 串行。
+- **对齐 DeepSeek 的结论（重要）**：v4-flash **完全相同** ——
+  `models/deepseek/v4-flash/decode_fwd.py:774` 也是 `for r in pl.range(pld.world_size())`，
+  循环体内 `weight[r]` 索引 + `decode_fwd(..., device=r)` 交错，同样没有把构造与提交分开；
+  它也**没有** step 开头的 rendezvous，第一个跨卡同步同样是数据驱动的
+  `pld.system.wait(... arrived ... Ge moe_epoch)`（`moe.py:160-164`）。
+  ⇒ **这个阶梯是 pypto codegen 降 `pl.range(world_size)` 的固有形状，不是 step3p5 缺陷，也无上游做法可抄。**
+- **v4-flash 唯一可借的一点**：它的 stacked 权重 shape 天然对齐，`weight[r]` 外**不套 `pl.reshape`**；
+  step3p5 那 38 个 reshape（`decode_fwd.py:3961` 起）是白付的，约占 per-rank ~190 次 host 调用的 20%。
+- **修法与代价（已用红队复核修正过一次）**：
+  - 抹平阶梯（先建全部 8 份 `TaskArgs`、再连续 8 次 submit）的代价**只有 ~0.4 ms**，不是更早估的 1.2–2.9 ms：
+    关键路径是**最后一个** rank，阶梯下 rank7 在 `t=2.914` 起跑、抹平后在 `t≈3.3` 起跑，净差 `3.3−2.914≈0.39 ms`。
+    rank0 那 ~1.2 ms 的 pre-barrier 重叠真实但**不在关键路径上**（它跑完就在 barrier 上等）。
+  - 真正的收益来自**减少 host 工作本身**：53 个 slice 下标全是常量、权重 IPC 常驻 ⇒ 这些视图每步完全一样，
+    应在 `prepare()` 期建好 per-rank `TaskArgs`，每步只覆写会变的槽
+    （`current_hidden`、`seq_lens`/`block_table`/`slot_mapping`/`rope`、KV）。
+- **量级**：~3.4 ms / 65 ms = **5.2%**。属 pypto codegen 改动，收益对所有分布式模型通用。
+
+### PERF-H3 · DFX run 第一 barrier 的假长条 ⬜ 待办（观测性，非性能）
+
+- **现象**：DFX 插桩 run 里 step 的**第一个** `tp_all_reduce`（layer 0）在 7/8 卡上被记成
+  115 ms（pmu run，17× 慢）到 **379.9 ms**（swim run，476× 慢），其余 89 次全是 39–366 µs。
+  straggler 每次换人（pmu 是 rank2，swim 是 rank7）⇒ 非坏卡。
+- **危害**：这正是 [`benchmark/2026-07-24-...-perlayer-dfx.md`](../../benchmark/2026-07-24-step3p5-decode-perlayer-dfx.md)
+  §1b 把 `tp_all_reduce` 误判成 **74.1% wall** 的直接原因（该文自己的 ⚠ caveat 已预警"通信/等待类算子恰是插桩最易放大的"）。
+  clean run 复核后该结论**已被证伪**：steady-state `tp_all_reduce` 只占 device 时间 ~14%。
+- **已排除**：不是 host 下发。`_submit_chip` 在 DFX 下只多一次 `config.output_prefix` 字符串拼接再还原
+  （`distributed_runner.py`），微秒级；clean run 的 8 卡下发实测等距 0.412 ms、总 skew 2.914 ms。
+- **算术上界**：clean run `clear 2.20 + submit 3.49 + drain 59.15 ≈ ITL 64.96`，非 device 时间共 5.7 ms
+  ⇒ **380 ms 的 barrier 等待在 clean run 里不可能存在**。
+- **方向（未验证）**：chip child 侧 per-rank DFX collector 开销（建目录 / record ring / PMU 缓冲，
+  8 卡写同一个 `/out` 挂载）落在被 trace 区间内。注意 `orch._dfx_dispatch_idx` **每 request 重置**
+  （`distributed_runner.py:1297`），所以 `rank{r}/d0` 每步被覆盖、留下的是**最后一步**——
+  **它不是冷启动一次性开销**。
+- **额外理由（分母对账）**：[`benchmark/2026-07-29-release-image-64k-dfx-itl.md`](../../benchmark/2026-07-29-release-image-64k-dfx-itl.md)
+  用 instrumented span `435.205 ms` 做分母，得 `tp_all_reduce` 占 **1.84%**；本 track 用 device 执行
+  `55.3 ms` 做分母，得 **14.4%**。两者 wall union 都是 **7.989 ms**，是同一个数——
+  `435.205 − 379.9 = 55.3`，差的正是 r2t15 那一个 task 的假等待。⇒ **那份报告所有「% span」被同一个
+  5.21× 系数系统性压低**（谈绝对量两边一致，其「C/D/F 系对 64k 低 ROI」的结论不受影响；谈占比必须换分母）。
+  H3 修完后 span ≈ device 执行，两套百分比自动收敛。
+- **候选修法**：① 把 collector init/导出挪出被 trace 区间（production 零影响，首选）；
+  ② step 开头加显式 rendezvous，仅在 DFX 开启时启用（复用现有 `enable_l2_swimlane` 开关，不新增 env gate）——
+  但两个模型都没有这个模式，属新发明，且要付 PERF-H2 里那 ~0.4 ms。
+
+---
+
 ## 通用落地规范
 
 1. **精度验收 = 多步 decode 逐 token** vs live vanilla vLLM W8A8 oracle，seed=6127 / N=128 →

@@ -76,6 +76,13 @@ producer → 数学变换/quant/route-map → transport/window
 |----|--------|--------|------|-------|------|------|----------|
 | G1 | experts/feature调度轴 + runtime dynamic active batch/token | P1 | ✅ | codex-bc | 与B2/C2/C3协同 | active batch/token 已贯穿 attention、MoE、combine、KV；BS1/2/16 单步与 BS1 持续 4-step 通过，row0 batch-extension exact，最终镜像 Main 8-step PASS；N=256 hidden 全 finite、TP spread=0，teacher-forced token exact 241/256（沿用历史 live oracle，raw 95% 不宣称通过） | 2026-07-28 |
 
+### Track H — host 侧 per-step 开销（L3 层）
+| ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
+|----|--------|--------|------|-------|------|------|----------|
+| H1 | retained window 清零：host 搬零 → device `aclrtMemset` | P0 | ✅ | claude | A1 | simpler `e2efebcb` + pypto `1f704616`（含 gitlink bump）。清零 `21.50→2.21 ms`、ITL p50 `85.02→65.55 ms`（−22.9%）、每步 H2D `244.7 MiB→0`、mailbox 往返 `248 串行→1 次广播`。同镜像 A/B `main_hidden_8step` 两边 `passed=True`，`main_hidden_only_report.json` 除 `run_sec` 外逐字段相同；单测 8/8。⚠ live N=128 精度门未跑（需 vanilla oracle 占 cards 0-7）；CI 整体 rc=1 但两边同样缺 MTP fixture，与本项无关。数据见 [`benchmark/2026-07-29-host-window-memset.md`](../../benchmark/2026-07-29-host-window-memset.md) | 2026-07-29 |
+| H2 | per-rank 视图重建 hoist 到 `prepare()`（= 跨卡起跑阶梯病根） | P1 | ⬜ | — | H1 | 已量化未修：起跑阶梯 clean run 实测 **2.914 ms**（每 rank 等距 +0.412 ms，n=20），submit 阶段 3.49 ms。根因 = 生成 `host_orch.py` 把 per-rank 体（53 常量 slice + 38 `pl.reshape` + ~92 `make_tensor_arg`/`add_tensor` + 1 `_submit_chip`）包在 `for r__idx_v0 in range(0, world_size, 1)`。**v4-flash `decode_fwd.py:774` 完全同形状** → 属 pypto codegen 通用改进而非 step3p5 缺陷。红队复核修正：抹平阶梯只值 ~0.4 ms（关键路径是最后一个 rank），真收益来自减少 host 工作本身 | 2026-07-29 |
+| H3 | DFX run 第一 barrier 假长条（观测性，非性能） | P2 | ⬜ | — | A1 | DFX run 里第一个 `tp_all_reduce` 被记成 115 ms(pmu)–379.9 ms(swim)，其余 89 次 39–366 µs，straggler 每次换人。**已排除 host 下发**（`_submit_chip` 在 DFX 下只多一次字符串拼接；clean run 下发等距 0.412 ms）。clean run 算术上界：非 device 时间共 5.7 ms → 380 ms 不可能存在。方向 = chip child 侧 collector 开销落在被 trace 区间内（注意 `orch._dfx_dispatch_idx` 每 request 重置，留下的是**最后一步**，非冷启动）。危害：曾使 `tp_all_reduce` 被误判成 74.1% wall | 2026-07-29 |
+
 ---
 
 ## 进度汇总
@@ -137,6 +144,28 @@ C/D/G 产品修复与最终镜像 Main 验证已收口；N=256 raw vanilla 仍�
 | 2026-07-29 | A1/C4 | ✅ 发布镜像 64k 实测落档：ITL 曲线(1024→65536 只涨 18.8%，64k p50 83.3ms) + active_batch 扫描(bs≤8 OK，bs=16 撞 device HBM) + DFX 拆解。**优化方向修正**：0724 的「C 系通信优先」只适用 ctx≈1（那次 `--steps 1`，KV 池开到 64k 但 decode 位置在 ctx≈1）；64k 实测 `tp_all_reduce` 1.84% span、routed expert busy 0.99%，C 与 D/F 系对 64k 延迟均已低 ROI。**但下一个目标尚未确定**：ITL 曲线约束住 context-dependent 部分 ≤16%，≈70ms 固定 floor 的构成被插桩掩盖（span 膨胀 5.21×，attention 占 56% task 数被放大） | benchmark/2026-07-29-release-image-64k-dfx-itl.md + data/2026-07-29_release_image_64k/；下一步 = 同镜像 ctx=1024 vs 65536 的 DFX A/B 相减，拆开 70ms floor 后再定优化目标 |
 | 2026-07-27 | C/D/G 约束清理 | canonical 注释改为 V4-Flash-style shared EP window + epoch lineage；512B 仅 stacked/reused control slot 的 step3p5 backend/profile 隔离，不是通用 DeepSeek signal ABI；未改 TP all-reduce、未恢复 pull | 旧 pull 只作历史回归基线；按 source/compile/lowered/device/runtime DAG 分级，不因 probe 编译越级 DONE |
 
+
+### 2026-07-29 首次 host/device 分账：新增 Track H，H1 落地
+
+A1 建完 baseline 后第一次把 ITL 拆成 host vs device，发现 **85 ms 里只有 ~55 ms 是 device 执行**，
+约 25 ms 在 host，其中 `_reset_persistent_domains` 一项独占 **21.5 ms**（每步 248 次串行阻塞 mailbox
+往返 + 244.7 MiB H2D，而其中只有 47,616 B 是语义上必须清零的信号计数器）。
+
+- **H1 ✅**：改走 backend 给 fresh window 用的同一条 device 侧 `aclrtMemset`（新增 `_CTRL_MEMSET` 控制 op，
+  `broadcast_control_all` 8 卡并行）。清零 `21.50→2.21 ms`，ITL p50 `85.02→65.55 ms`（**−22.9%**），
+  每步 H2D 归零。语义等价：区间/填充值/「清完才下发」的 happens-before 全不变，sim 平台仍走原 host 路径，
+  改动对镜像是纯新增（`+120/-0` + `+12/-0`）。commit：simpler `e2efebcb`、pypto `1f704616`（含 gitlink bump）。
+- **证伪 4 条**（勿重复走）：① 「3 波 barrier 共用 signal cell + 每步清零 ⇒ notify 被抹 ⇒ 挂死」——清零是
+  忙等同步的，8 卡清完才下发；② 「step3p5 关掉 `persistent=True` 就行」——实测 ITL **276.2 ms**，
+  domain churn ≈ 212.7 ms，是它能省下的 10 倍；③ 「每步 12336 次串行 `_submit_chip`」——B2 之后只有 **8** 次；
+  ④ 运行时**没有** multi-step/resident/replay 接口。
+- **H2 / H3 立项**：跨卡起跑阶梯 clean run 实测 **2.914 ms**（每 rank +0.412 ms 等距），根因是生成
+  `host_orch` 的 rank-major 循环；**v4-flash 同形状**，故列为 pypto codegen 通用改进。DFX run 的
+  115–764 ms 假长条另立 H3（观测性），它曾使 `tp_all_reduce` 被误判成 74.1% wall。
+- **README 新增第二维度**：把 A–H 按「优化落在栈的哪一层」（L3/host · L2/AICPU 调度 · cross-chip 通信 ·
+  L1/kernel 内数据流 · L0/核内流水 · 结构 codegen · 可观测性）重切一遍，并给出 ITL 65 ms 的分层分账。
+  H1 之后 host 从 29% 压到 8.8%，**device 执行首次成为主导项（91%）**，后续重心从 L3 移到 cross-chip 与 L2/L1。
+- **待办**：live N=128 精度门（需 vanilla oracle 占 cards 0-7）。
 
 ### 2026-07-28 C/D/G 收口与镜像验证
 
