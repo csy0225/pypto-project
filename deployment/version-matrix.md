@@ -31,7 +31,9 @@
   全 true，token `303,1207,19384,872,428,6127,4231,2636`；`hidden_tp_spread` 在
   ci/main + rep1/rep2/rep3 共 4×8 = 32 步全 `0.0`（PERF-C4 的准出指标）；
   ITL p50 `65.942 ms`(ctx=1024) / `66.455 ms`(ctx=4096)。
-- GitHub 当前代码（`pypto-lib cfbdcce8`）默认入口为 `whole_decode_step3p5`，与镜像内 pin 一致；
+- GitHub 当前代码（`pypto-lib cfbdcce8`）默认入口为 `whole_decode_step3p5`，与镜像内 pin 一致。
+  `stepfun/develop` 在镜像之后各多一个**纯测试**提交（`pypto ce7fcb64` all-reduce 微基准、
+  `pypto-lib cc850ee5` ITL `--active-batch`），产品代码无差异，无需重建镜像；
   下面 `563fe62a` / `53eb7212` 相关结论属于 0726/0728 阶段的历史记录；
 - N=256 canonical-only 与清理前镜像 token/hidden `256/256` exact，`max_abs_diff=0`，
   TP spread `0.0`，compatibility removal regression PASS；

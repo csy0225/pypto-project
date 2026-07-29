@@ -44,7 +44,9 @@ vs `stepfun-develop-20260729-allreduce-push`（pypto-lib `cfbdcce8`）。
 ## 2c. ctx=65536 的 active-batch 扫描（发布镜像单侧实测，非 A/B）
 
 `_stage_main_hidden_only --itl-context-lens 65536 --active-batch N --num-blocks <128*N>`，
-iters=20 / warmup=3，cards 8–15，`--shm-size 400g`。**这一节只是发布镜像自身的 batch 标定，
+iters=20 / warmup=3，cards 8–15，`--shm-size 400g`。ITL 的 `--active-batch` 支持已入库
+（`csy0225/pypto-lib stepfun/develop@cc850ee5`，纯测试改动，在发布镜像之后）——
+本节数据是把该 harness 挂载进发布镜像跑出来的。**这一节只是发布镜像自身的 batch 标定，
 不是与 baseline 的对比**（baseline 侧 64k 数据未采）。
 
 | active_batch | scheduler blocks | dummy KV (K+V) / rank | p50 | mean | p99 |

@@ -55,7 +55,8 @@
 > KV bridge、动态 batch 映射与同代 MTP absolute gate 仍属于 Phase 20/28 后续。
 > **push 状态（2026-07-29）**：GitHub `csy0225/pypto-lib:stepfun/develop` = `cfbdcce8`、
 > `csy0225/simpler:stepfun/develop` = `8459d60f`、`csy0225/pypto:stepfun/develop` = `6933b1aa`
-> （runtime gitlink → simpler `8459d60f`）；
+> （runtime gitlink → simpler `8459d60f`）—— 三者即镜像 pin。之后各多一个纯测试提交
+> （`pypto ce7fcb64` / `pypto-lib cc850ee5`），不改产品代码；
 > GitHub `csy0225/pypto-project:main` 已同步本轮 C/D/G 状态文档；GitLab
 > `sys/stepcast/vllm:csy/pypto-tail-mtp-integration` 保持 `1b3e538c`。
 

@@ -738,7 +738,7 @@ flowchart TD
 
 **前提**：能 SSH 到 0162（`infra@gpu-a910x-0162.host.platform.shaipower.com`），0726 镜像已在 containerd 里。
 
-**微基准文件**：`pypto/tests/st/distributed/collectives/allreduce_bench.py`
+**微基准文件**：`pypto/tests/st/distributed/collectives/allreduce_bench.py`（已入库：`csy0225/pypto stepfun/develop@ce7fcb64`）
 （支持 `--mode {onephase,onephase_par,twophase,twophase_par,ring,pld_mesh,pld_ring}`、`-d <卡范围>`、`--iters`、`--warmup`）。
 
 ```bash

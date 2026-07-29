@@ -46,9 +46,12 @@ containerd/nerdctl)。**
 >
 > **0724 base digest**: `sha256:2b0dc4612796a34bea6720ccb4bf8fa3af4ea406cdd0f12add34586ca860d7e0`
 
-> **代码/镜像边界（2026-07-29）**：GitHub `pypto-lib stepfun/develop` = `cfbdcce8`、
-> `pypto stepfun/develop` = `6933b1aa`、`simpler stepfun/develop` = `8459d60f`，
-> 与镜像内 pin **全部一致**，且五个仓工作树全 clean（`IMAGE_WORKTREE_CLEAN_AUDIT=PASS`）。
+> **代码/镜像边界（2026-07-29）**：镜像内 pin = `pypto 6933b1aa` / `pypto-lib cfbdcce8` /
+> `pto-isa ecb6c303` / `PTOAS fc8c6cae` / `simpler 8459d60f`，五个仓工作树全 clean
+> （`IMAGE_WORKTREE_CLEAN_AUDIT=PASS`）。**产品代码与镜像完全一致**；`stepfun/develop`
+> 在镜像之后各多一个**纯测试**提交（`pypto ce7fcb64` = all-reduce 微基准、
+> `pypto-lib cc850ee5` = ITL `--active-batch`），不影响镜像内 kernel/runtime 行为，
+> 也不需要重建镜像。
 > `stepfun-develop-20260726-step3p5-only`(`53eb7212`) 为上一个已发布 tag，保留作回退。
 > 本 tag 的验证记录见 [`benchmark/2026-07-28-tp-allreduce-push.md`](../../benchmark/2026-07-28-tp-allreduce-push.md)，
 > all-reduce 算法与 race 根因见 [`postmortems/13`](../../postmortems/13-tp-allreduce-pull-notify-race.md)。
