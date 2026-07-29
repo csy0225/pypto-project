@@ -44,6 +44,11 @@ containerd/nerdctl)。**
 > 已将 GitHub remote/submodule URL scrub 为无凭据公开 URL，并在 0162
 > 验证 `IMAGE_GIT_CREDENTIAL_AUDIT=PASS`。
 >
+> **⚠ 该 tag 被重写过一次，早于 2026-07-29 07:00 拉过它的机器必须重新 `pull`。**
+> 本机/节点如果缓存了旧 digest，`nerdctl images --digests` 会显示成
+> `sha256:8bf62b29…`（旧内容，整网 CI 跑不通）；重新 `pull` 后应变成
+> `sha256:7924925f…`。**部署前请先核对 digest，不要只看 tag。**
+>
 > **0724 base digest**: `sha256:2b0dc4612796a34bea6720ccb4bf8fa3af4ea406cdd0f12add34586ca860d7e0`
 
 > **代码/镜像边界（2026-07-29）**：镜像内 pin = `pypto 6933b1aa` / `pypto-lib cfbdcce8` /

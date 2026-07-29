@@ -20,7 +20,7 @@
 | ptoas-bin | `v0.50` | binary sha256 `ba93fabeff6dc7fdcd2278a72fd1d4fd92cb2949faedbc83fa58e801bd5ff23b` |
 | vLLM overlay | `csy/pypto-tail-mtp-integration@1b3e538c35999e62b6d24e0651b3a85b7d16c826` | build 时按 commit checkout，不能只依赖可变 branch |
 | Python | `3.11.14` | 镜像内 `/usr/local/python3.11.14/bin/python3` |
-| **当前已发布镜像（代码 pin 全部与 `stepfun/develop` 一致）** | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push@sha256:7924925f4b2816c5645910b90fd2a9fa9469baace2f48f7e0ee41a587bd5d6ba` | config `sha256:5402e07ba0d19b315935bfda1e9f6b445d1a3fdc9067c634a2ce302fd7f2a3dd`；含 PERF-C4 TP all-reduce reduce-scatter + push all-gather 与 simpler span-aware provenance；0162 immutable-image 回归见 benchmark/2026-07-28-tp-allreduce-push.md（4×8 步 `hidden_tp_spread` 全 `0.0`，`IMAGE_WORKTREE_CLEAN_AUDIT=PASS`） |
+| **当前已发布镜像（代码 pin 全部与 `stepfun/develop` 一致）** | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push@sha256:7924925f4b2816c5645910b90fd2a9fa9469baace2f48f7e0ee41a587bd5d6ba` | config `sha256:5402e07ba0d19b315935bfda1e9f6b445d1a3fdc9067c634a2ce302fd7f2a3dd`；含 PERF-C4 TP all-reduce reduce-scatter + push all-gather 与 simpler span-aware provenance；0162 immutable-image 回归见 benchmark/2026-07-28-tp-allreduce-push.md（4×8 步 `hidden_tp_spread` 全 `0.0`，`IMAGE_WORKTREE_CLEAN_AUDIT=PASS`）。⚠ 该 tag 曾指向一份不可用镜像，**早期拉过的机器须重新 pull 并核对 digest** |
 | 上一个已发布镜像（代码 pin 53eb7212，保留回退） | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5-only@sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81` | config `sha256:d296461051559e6ea0e22d04a4cc44f749c82f19a50418fe6db75387f1f067e9` |
 
 验证结论：
