@@ -205,8 +205,20 @@ mi/li 存成 `[1,16]` 宽行（Stage4 读前 8），避开 `[N,1]` 列 slice；p
   （arange/sub/max/min/mul/col_expand/add ~10 VEC op）**无条件**加在全部 512 blocks 上，但只有
   最后 1 个 partial block（`valid_len<128`）需要 mask——511 个 full block 的 bias 是纯浪费，
   盖过了省下的 GM 往返。**B 不按现状落地**（净负：+7% 延迟换 ~96 MiB 显存，且该显存不足以解
-  bs=16 OOM）。**修法 B'**：把 bias 构造/应用 guard 到 `valid_len < BLOCK_SIZE` 只在 partial
-  block 执行 → 预期恢复延迟、保留显存收益（待验证 pypto 是否允许 per-block runtime `if`）。
+  bs=16 OOM）。
+- ⚠⚠ **B' 已实测（2026-07-29，perf-h1）：8-row softmax 不可行——cube boxing**。想把融合里的
+  softmax 从 16 行降到 8 行（`pl.slice(raw_scores, [8,128])`）→ ptoas 拒
+  `'pto.alloc_tile' boxed tile rows must be multiple of innerRows(16), got 8`。根因：`raw_scores`
+  是 QK matmul 输出 = **boxed（cube-fractal）tile**，切 8 行非法（同 A.2 §5.2）。
+  **关键结构洞察**：split 形态能做 8-row softmax，正因为它先把 raw_scores 落 **GM**
+  （`all_raw_scores`），从 GM 切 8 行合法——**split 的 GM 往返不是纯浪费，它把 cube 输出
+  "de-box" 成普通 tensor，换来更便宜的 8-row softmax**。融合把它 re-box 回 16 行 → 强制
+  16-row softmax（2× exp/row_max VEC），这正是 B +7% 的结构性来源，且**融合形态无法规避**
+  （任何 per-block 融合都吃 cube 的 16-row 输出；D 同理）。
+- **结论（data-backed）**：attention Stage1+2+3 融合对**延迟是负的且结构性受限**——省的 GM 往返
+  比它强制的 16-row softmax 便宜。B 只剩 ~96 MiB 显存价值（不解 bs=16）。**当前 4-stage split
+  实际上对 softmax 延迟已是较优形态**（GM de-box → 8-row softmax）。剩余唯一未测 lever = bias
+  guard（B''，保留 16-row softmax 只省 bias），但即便成功也去不掉 16-row softmax 这个大头。
 
 ### C. B 的解锁前提：`fillpad/valid_shape` → V4 的 additive-inf bias
 
