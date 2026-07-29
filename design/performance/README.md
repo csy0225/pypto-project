@@ -32,6 +32,8 @@ producer → 数学变换/quant/route-map → transport/window
 |------|------|------|
 | [`01-system-design.md`](01-system-design.md) | HLD | 现状瓶颈实证 + mega-kernel 目标架构 + 四条并行主线 + 收益模型 |
 | [`02-detailed-design.md`](02-detailed-design.md) | LLD | 每个子任务的 file:line、接口、算法步骤、验证口径、落地边界 |
+| [`03-tp-allreduce-algorithm-comparison.md`](03-tp-allreduce-algorithm-comparison.md) | 专项 | TP all-reduce 算法对比（C4 落地依据 + §5 就地修正记录） |
+| [`04-attention-optimization.md`](04-attention-optimization.md) | 专项 | full/SWA flash decode kernel 重写路线（scratch 膨胀 + SV over-compute + A–E 方案 + 补充/待解） |
 | [`task-tracking.md`](task-tracking.md) | 跟踪 | 看板式任务跟踪记录（状态 / owner / 更新时间 / 阻塞） |
 | [`user_prompt.md`](user_prompt.md) | 提示词 | 复制即用的推进/回归提示词（以 skill + 本目录为单一入口） |
 
