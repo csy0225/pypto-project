@@ -180,12 +180,22 @@ but got 8`）；且 16 行是 cube fractal 的最小处理单位，M=8 与 M=16 
 ### B. 主菜：融合 Stage 1+2+3（V4 的 qk_pv 形态），Stage4 保留归并
 
 `all_raw_scores` + `all_exp_padded` 整个消失（nb=512 时省 ~100 MiB/层），两次 GM 往返消失。
-**风险**：这接近当年撞 507018 的形态（Phase 15 正是为了绕开它才拆成 4-stage）。依赖 C。
+**风险**：这接近当年撞 507018 的形态（Phase 15 正是为了绕开它才拆成 4-stage）。依赖 C
+（✅ 2026-07-29 已 device 验证 additive-bias masking 可 lower + token-exact，见下）。
 
 ### C. B 的解锁前提：`fillpad/valid_shape` → V4 的 additive-inf bias
 
-走另一条 VEC lowering——**这是 V4 从没撞那个坑的可疑原因（推测，需复现验证）**。
-是否真能绕开 507018/UB-align，必须先隔离复现。
+走另一条 VEC lowering。✅ **已 device 验证（2026-07-29，image `…20260729-allreduce-push`，
+cards 0-7，isolated FULL-Stage2 probe）**：把 `pl.slice(valid_shape=)+fillpad(min)` 换成 v4 式
+`col_bias[1,128]`（`arange`→`sub(col_idx, valid_len)`→`neg/max(0)/min(1)`→`mul(·,1e20)` 得
+0/−1e20）+ `col_expand` 广播到 8 行再 `add`——**在 step3p5 `[8,128]` shape 下能 lower，且
+`main_hidden_8step rc=0 passed=True`（8-step token 不变、tp_spread=0、无 stall）**。即 additive
+bias 与 fillpad 数值等价、lowering path 干净。
+- **踩坑**：`valid_len` 是 INDEX，`pl.cast(valid_len, FP32)` 报 `Cast between float and index
+  types is not supported`；须两步 `pl.cast(pl.cast(valid_len, INT32), FP32)`。
+- **不单独落地**：C 在 split 形态下只是多几个 VEC op、无收益——**其价值是证明 B 的 masking
+  机制可行**，随 B 一起进（B 用 additive bias 才能融合 Stage1+2+3）。probe patch:
+  `workspace/perf-patches/C-additive-bias.patch`（branch `perf/step3p5-attn-c`，未推）。
 
 ### D. 终局：经典 flash-attention（UB 内单 `(m,l,o)` 累加器跨 KV-block 滚动）
 
