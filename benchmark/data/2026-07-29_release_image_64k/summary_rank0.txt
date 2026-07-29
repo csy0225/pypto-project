@@ -1,0 +1,7 @@
+clock_mhz 50
+cores 72 (aic 24 aiv 48)
+aicore_tasks 31568
+instrumented_span_ms 435.205
+total_busy_ms 1065.575
+busy_aic_ms 217.491
+busy_aiv_ms 848.084

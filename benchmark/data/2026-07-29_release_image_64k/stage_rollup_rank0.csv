@@ -1,0 +1,10 @@
+stage,count,busy_ms,busy_pct,wall_union_ms,wall_pct_of_span
+attention core,17697,746.607,70.07,426.038,97.89
+attention o_proj/resid,8244,174.666,16.39,17.162,3.94
+dense MLP,1602,34.198,3.21,10.133,2.33
+other,838,29.281,2.75,9.811,2.25
+TP all-reduce,1547,24.879,2.33,7.989,1.84
+MoE gate/quant,1085,35.474,3.33,7.43,1.71
+MoE routed expert,323,10.533,0.99,1.955,0.45
+MoE EP comm,162,7.928,0.74,1.457,0.33
+rmsnorm,70,2.008,0.19,1.371,0.32

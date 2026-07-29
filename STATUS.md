@@ -47,7 +47,15 @@
 > 95% gate **仍不宣称通过**（0726 镜像为 `240/256=93.75%`）；MTP oracle 在镜像外，
 > 本轮 `--skip-mtp`，其缺失不作为 Main 失败。
 >
+> 该镜像在 ctx=65536 的实测：ITL p50 **83.349 ms**（active_batch=1，`--num-blocks 512`；
+> 1024→65536 只涨 18.8%），active_batch 扫描 bs≤8 可跑（bs=8 p50 145 ms ≈ 4.6× 吞吐）、
+> **bs=16 撞 device HBM**。DFX 拆解给出一个**改变优化方向**的结论：64k 下
+> `full_softmax` 占 device span **93.9%**，而 `tp_all_reduce` 只占 **1.84%**、routed expert
+> busy 仅 0.99% —— 与 0724 那份 ctx≈1 采集的结论（通信 74% wall）相反。ring heap 峰值
+> 79.9% 是唯一偏紧的 runtime 资源。
+>
 > 详见 [`deployment/docker/README.md`](deployment/docker/README.md)、
+> [`benchmark/2026-07-29-release-image-64k-dfx-itl.md`](benchmark/2026-07-29-release-image-64k-dfx-itl.md)、
 > [`benchmark/2026-07-28-tp-allreduce-push.md`](benchmark/2026-07-28-tp-allreduce-push.md)、
 > [`postmortems/13-tp-allreduce-pull-notify-race.md`](postmortems/13-tp-allreduce-pull-notify-race.md)。
 >

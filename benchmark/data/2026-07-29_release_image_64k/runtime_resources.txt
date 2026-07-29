@@ -1,0 +1,7 @@
+resource,capacity,peak_used,pct
+ring_heap_bytes,4294967296,3431359488,79.9%
+task_window,131072,1285,0.98%
+dep_pool,131072,1508,1.15%
+tensormap,65536,173,0.26%
+dropped,0
+fatal,False

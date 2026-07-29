@@ -1,0 +1,9 @@
+rows(event_type=1) 31568
+pmu_total_cycles_sum 1349160264
+cube_fp16_exec 8765810 25.60%
+cube_int8_exec 15875200 46.36%
+vec_fp32_exec 8795341 25.68%
+vec_fp16_128lane_exec 47744 0.14%
+vec_fp16_64lane_exec 0 0.00%
+vec_int32_exec 69290 0.20%
+vec_misc_exec 691612 2.02%

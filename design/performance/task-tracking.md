@@ -36,7 +36,7 @@ producer → 数学变换/quant/route-map → transport/window
 ### Track A — 可观测性
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| A1 | whole-net baseline + DFX 采集 | P0 | ✅ | claude | — | 新增多步 report/per-layer hidden/TP spread/finite 检查；逐层 DFX：routed-expert 占 90.7%（PMU cube_int8 88.6%）；见 benchmark/2026-07-24 | 2026-07-26 |
+| A1 | whole-net baseline + DFX 采集 | P0 | ✅ | claude | — | 新增多步 report/per-layer hidden/TP spread/finite 检查；逐层 DFX：ctx≈1 下 routed-expert 占 90.7%（PMU cube_int8 88.6%）；⚠ **该占比只适用短 context** —— ctx=65536 实测为 attention 占 span 97.9%（`full_softmax` 93.9%）、`tp_all_reduce` 1.84%、routed expert busy 0.99%，见 benchmark/2026-07-24 与 benchmark/2026-07-29 | 2026-07-26 |
 
 ### Track B — Mega-kernel 结构
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
@@ -51,7 +51,7 @@ producer → 数学变换/quant/route-map → transport/window
 | C1 | shared window set + `moe_epoch` + `WaitCmp.Ge` | P0 | ✅ | codex-bc | — | V4-Flash-style shared EP windows、单调epoch与真实 arrival/completion lineage 已落地；固定 expert lane layout 保证 active-batch 扩展不改变 row0 | 2026-07-28 |
 | C2 | 迁移 V4-Flash dispatch/combine 数据流 | P1 | ✅ | codex-bc | C1 | expert-lane dispatch metadata/push/arrival/gather 与 combine scatter/wait/token FP32 reduce 已迁移；固定物理 expert lane base 修复 BS1/2/16 的 batch-extension invariance | 2026-07-28 |
 | C3 | expert-lane SPMD + whole-net 调度适配 | P2 | ✅ | codex-bc | C1, C2 | local-expert lane ownership、whole-net canonical scheduling、compile/lowered/设备回归已验证；最终镜像 Main 8-step 与 N=256 teacher-forced hidden 回归通过 | 2026-07-28 |
-| C4 | TP all-reduce: onephase mesh → reduce-scatter + **push** all-gather | P0 | ✅ | claude | — | 按 [`03-tp-allreduce-algorithm-comparison.md`](03-tp-allreduce-algorithm-comparison.md) 落地，但**该文 §5 原方案（pull 形式 all-gather）落整网即 8 卡不一致**，已就地修正。根因 = pull-after-remote-notify 跨方向握手无序，见 [`postmortems/13`](../../postmortems/13-tp-allreduce-pull-notify-race.md)。每卡远程传输 56→14、远程字节 896KB→224KB；数值 bit-identical（canonical peer order + 单 FP32 累加器 + 每元素一次 BF16 store）。回归：whole-network CI `PASS` + 3 次独立重复共 32 step，token 全对、`hidden_tp_spread` 全 `0.0`；ITL p50 −3.6%(ctx1024) / −3.9%(ctx4096)，见 [`benchmark/2026-07-28-tp-allreduce-push.md`](../../benchmark/2026-07-28-tp-allreduce-push.md) | 2026-07-28 |
+| C4 | TP all-reduce: onephase mesh → reduce-scatter + **push** all-gather | P0 | ✅ | claude | — | 按 [`03-tp-allreduce-algorithm-comparison.md`](03-tp-allreduce-algorithm-comparison.md) 落地，但**该文 §5 原方案（pull 形式 all-gather）落整网即 8 卡不一致**，已就地修正。根因 = pull-after-remote-notify 跨方向握手无序，见 [`postmortems/13`](../../postmortems/13-tp-allreduce-pull-notify-race.md)。每卡远程传输 56→14、远程字节 896KB→224KB；数值 bit-identical（canonical peer order + 单 FP32 累加器 + 每元素一次 BF16 store）。回归：whole-network CI `PASS` + 3 次独立重复共 32 step，token 全对、`hidden_tp_spread` 全 `0.0`；ITL p50 −3.6%(ctx1024) / −3.9%(ctx4096)，见 [`benchmark/2026-07-28-tp-allreduce-push.md`](../../benchmark/2026-07-28-tp-allreduce-push.md)。⚠ 收益仅适用 ctx ≤ 4096：64k DFX 显示 `tp_all_reduce` 只占 span 1.84%，见 [`benchmark/2026-07-29-release-image-64k-dfx-itl.md`](../../benchmark/2026-07-29-release-image-64k-dfx-itl.md) | 2026-07-28 |
 
 ### Track D — INT8-native W8A8（gap-5）
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
@@ -134,6 +134,7 @@ C/D/G 产品修复与最终镜像 Main 验证已收口；N=256 raw vanilla 仍�
 | 2026-07-27 | 方法论 | 禁止局部shape/name比较；所有“step3p5独有/必须保留”判断改为producer→数学变换→transport/window→consumer→rounding/reduction→lifetime端到端审计 | 差异统一分为能力/算法、数学语义、layout/shape、host/allocator集成、backend/profile workaround；任务描述先与current source对账 |
 | 2026-07-27 | C/D/G 设备回归 | 0162 镜像、cards 8-15、canonical `whole_decode_step3p5`：clean active-batch=2/8/16 单次通过；clean active-batch=1 复现 `output_token=6127`、TP spread `4.203125`，`N1_DFX=dep` 旧产物也异常；norm extent=2 实验恢复 spread=0 但 token 仍错误，已回退 | DFX 不是唯一根因；不能把 batch=2/8/16 泛化为全部动态 batch；C/D source/compile/lowered 仍保持 DeepSeek-first |
 | 2026-07-28 | C4 | ✅ TP all-reduce 换 reduce-scatter + **push** all-gather。**修正 03 文档 §5**：其 twophase_par 结论来自独立微基准，pull 形式 all-gather 落整网导致 8 卡 `hidden_tp_spread` 2~58；根因=pull-after-remote-notify 跨方向握手无序（与 §5 判 ring 死刑同一上游缺口），改 push 后归零 | 回归=whole-network CI PASS + 3×8 step 全 `0.0`；顺带修掉 `dense_mlp.py` 与 2 处 MoE shared-expert 丢弃 `tp_all_reduce` 返回值（违反 dev-constraints §1.1 alias/ownership）|
+| 2026-07-29 | A1/C4 | ✅ 发布镜像 64k 实测落档：ITL 曲线(1024→65536 只涨 18.8%，64k p50 83.3ms) + active_batch 扫描(bs≤8 OK，bs=16 撞 device HBM) + DFX 拆解。**优化方向修正**：64k 下 `full_softmax` 占 span 93.9%，`tp_all_reduce` 仅 1.84%、routed expert busy 0.99% —— 0724 的「C 系通信优先」结论只适用 ctx≈1（那次 `--steps 1`，KV 池开到 64k 但 decode 位置在 ctx≈1） | benchmark/2026-07-29-release-image-64k-dfx-itl.md + data/2026-07-29_release_image_64k/；下一个 64k 优化目标 = full_softmax，非 all-reduce/expert |
 | 2026-07-27 | C/D/G 约束清理 | canonical 注释改为 V4-Flash-style shared EP window + epoch lineage；512B 仅 stacked/reused control slot 的 step3p5 backend/profile 隔离，不是通用 DeepSeek signal ABI；未改 TP all-reduce、未恢复 pull | 旧 pull 只作历史回归基线；按 source/compile/lowered/device/runtime DAG 分级，不因 probe 编译越级 DONE |
 
 

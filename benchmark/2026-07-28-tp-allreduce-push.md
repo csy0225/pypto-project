@@ -11,11 +11,10 @@
 ## 1. 结论
 
 > **⚠ 适用范围（2026-07-29 更正）**：下面 §2 的 −3.6%/−3.9% 是 **ctx ≤ 4096** 工作点的数字
-> （`--num-blocks 32` 上限 4096）。项目的**权威 ITL 工作点是 64k**
-> （`--num-blocks 512`，见 [`2026-07-24-…-perlayer-dfx.md`](2026-07-24-step3p5-decode-perlayer-dfx.md)
-> 引用的 `≈590 ms/step`）。all-reduce 的绝对开销基本不随 context 变化（只搬 `[16,4096]` hidden），
-> 而 64k 下单步分母大 8~9 倍，因此 **64k 的相对收益必然显著小于 −3.8%**。§2 的数字不得直接
-> 当作发布收益引用；64k 曲线见 §2b。
+> （`--num-blocks 32` 上限 4096）。项目的**权威 ITL 工作点是 64k**（`--num-blocks 512`）。
+> all-reduce 的绝对开销基本不随 context 变化（只搬 `[16,4096]` hidden），而 64k 下单步分母更大，
+> 因此 **64k 的相对收益必然显著小于 −3.8%**。已由 64k DFX 坐实：`tp_all_reduce` 在 ctx=65536
+> 只占 device span **1.84%**（见 §2c 指向的文档），**所以 §2 的数字不得当作发布收益引用**。
 
 整网单步 decode 延迟：**ctx ≤ 4096 降低约 3.6–3.9%**；64k 见 §2b。无精度回归
 （bit-identical 设计 + 设备验证）。
@@ -35,38 +34,21 @@
 
 ## 2b. ITL @ 权威工作点（`--num-blocks 512`，ctx 1024/8192/32768/65536）
 
-对比双方均为 **已发布 immutable 镜像**（无挂载 overlay）：
+**仍未采集。** 计划对比双方均为已发布 immutable 镜像（无挂载 overlay）：
 `stepfun-develop-20260726-step3p5-only`（pypto-lib `53eb7212`，无本改动）
 vs `stepfun-develop-20260729-allreduce-push`（pypto-lib `cfbdcce8`）。
 
-<!-- PENDING: 待 64k A/B 实测数据 -->
+发布镜像单侧的 64k 数据已有（见 §2c），缺的是 baseline 侧。
+按 §2c 的 DFX 拆解，`tp_all_reduce` 在 64k 只占 span 1.84%，
+所以这个 A/B 的预期收益是**小于 1%**，优先级不高。
 
-## 2c. ctx=65536 的 active-batch 扫描（发布镜像单侧实测，非 A/B）
+## 2c. 64k 的单侧实测与 DFX 拆解
 
-`_stage_main_hidden_only --itl-context-lens 65536 --active-batch N --num-blocks <128*N>`，
-iters=20 / warmup=3，cards 8–15，`--shm-size 400g`。ITL 的 `--active-batch` 支持已入库
-（`csy0225/pypto-lib stepfun/develop@cc850ee5`，纯测试改动，在发布镜像之后）——
-本节数据是把该 harness 挂载进发布镜像跑出来的。**这一节只是发布镜像自身的 batch 标定，
-不是与 baseline 的对比**（baseline 侧 64k 数据未采）。
-
-| active_batch | scheduler blocks | dummy KV (K+V) / rank | p50 | mean | p99 |
-|---|---|---|---|---|---|
-| 1 | 512 | 1.45 GiB | 84.141 ms | 84.125 ms | 84.327 ms |
-| 2 | 1024 | 2.85 GiB | 87.754 ms | 87.565 ms | 87.818 ms |
-| 4 | 2048 | 5.67 GiB | 104.023 ms | 104.505 ms | 106.760 ms |
-| 8 | 4096 | 11.29 GiB | 145.073 ms | 144.812 ms | 145.963 ms |
-| 16 | 8192 | 22.54 GiB | — | — | — （device HBM OOM，见下） |
-
-- **bs=16 @ 64k 在本配置下跑不起来**：`out of memory` → `simpler_init failed with code -1`。
-  峰值 HBM/rank 在 bs=8 已到 `≈36 GiB`，bs=16 的 KV 再涨 `≈11 GiB`，超出单卡可用。
-  **不是** host shm 不足（已把 `--shm-size` 从 32g 提到 400g，行为不变）。
-- **口径提醒**：harness 里的 `BATCH=16` 是 **batch_capacity**（padding 容量），
-  `active_batch` 才是真正参与计算的行数。历史报告里出现的 `"batch": 16` 字段
-  只表示 capacity，不代表跑了 16 个活跃 row —— 该字段已改名为
-  `batch_capacity` / `active_batch` 两项以消除歧义。
-- **未对齐项**：本节 bs=1 的 `84 ms` 与 [`2026-07-24-step3p5-decode-perlayer-dfx.md`](2026-07-24-step3p5-decode-perlayer-dfx.md)
-  引用的 64k `≈590 ms/step` 相差约 7 倍，两者测量基准（KV 来源 / 是否含 host glue /
-  是否 raw `rt.run`）尚未对齐。**在对齐之前两个数字都不得互相当作 before/after 引用。**
+发布镜像在 ctx=65536 的 ITL 曲线、active_batch 扫描（bs≤8 可跑、bs=16 撞 device HBM）
+和 DFX 逐 kernel 拆解，见独立文档
+[`2026-07-29-release-image-64k-dfx-itl.md`](2026-07-29-release-image-64k-dfx-itl.md)。
+**那些是单侧实测，不是本文的 A/B。** 关键一条：64k 下 `full_softmax` 占 span 93.9%，
+而本项优化的 `tp_all_reduce` 只占 1.84% —— C4 在 64k 的天花板本就很低。
 
 ## 3. 8-step 真实 decode 的 per-step wallclock（旁证，step 1–7 均值）
 

@@ -8,8 +8,31 @@ TP=8、W8A8、active batch=1、`--num-blocks 512`、`--steps 1`。
 **采集**：`_stage_main_hidden_only --dfx swim` / `--dfx pmu`（PERF-A1 新接线，见文末代码）。
 运行健康：rc=0、`MAIN_HIDDEN_ONLY_..._TOKEN_EXACT`、`hidden_finite=true`、TP `spread=0.0`。
 
+> ## ⚠ 适用范围更正（2026-07-29 补）
+>
+> **本文所有占比只适用于短 context（ctx≈1），不适用 64k。**
+> 本次采集用的是 `--steps 1`；`--num-blocks 512` 只是把 KV **池容量**开到 64k，
+> **实际 decode 位置在 ctx≈1**，所以 attention 几乎不干活（本文自己也写了
+> 「attention wall+busy 均 <1%」），MoE 与通信才显得占满。
+>
+> 在真实 ctx=65536 下重测，结论**是反过来的**：
+>
+> | | 本文（ctx≈1） | ctx=65536 实测 |
+> |---|---|---|
+> | `tp_all_reduce` wall | 74.1% | **1.84%** |
+> | attention wall | <1% | **97.89%**（`full_softmax` 单个 93.94%） |
+> | routed expert busy | 90.7% | 0.99% |
+>
+> 因此下面 §6 的「降延迟先攻 C 系通信、attention 低 ROI」**不能用于 64k 工作点**。
+> 64k 的实测拆解见 [`2026-07-29-release-image-64k-dfx-itl.md`](2026-07-29-release-image-64k-dfx-itl.md)。
+>
+> 另：本文开头把这些占比当成「那 590 ms 摊到哪些 kernel」，这个归因也不成立——
+> 590 ms 是 64k 的数字，而本文的 kernel 分布是 ctx≈1 的。
+
 > 绝对单步延迟以权威 benchmark 为准：[`2026-07-23-step3p5-decode-64k-itl.md`](2026-07-23-step3p5-decode-64k-itl.md)
-> （64k device-KV **≈590 ms/step** raw `rt.run`，含 lm_head）。本文补的是**那 590ms 摊到哪些 kernel**。
+> （64k device-KV **≈590 ms/step** raw `rt.run`，含 lm_head）。⚠ 该文档在本仓中**不存在**，
+> 只有其他文档对它的引用；且 `590 ms` 与 2026-07-29 实测的 `83 ms`(hidden-only + dummy KV)
+> 相差约 7 倍、基准未对齐 —— 溯源与对齐都是待补项。
 
 ---
 
