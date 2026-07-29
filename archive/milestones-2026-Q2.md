@@ -1,5 +1,16 @@
 # Milestones —— 2026 Q2
 
+## 2026-07-29 —— PERF-H1 自包含镜像 build + 回归 + MTP CI 修复 + DFX benchmark ✅
+
+- **镜像**：build + push `vllm-pypto:stepfun-develop-20260729-perf-h1`（registry digest `sha256:b4e8c8a457a5…`）。pin = pypto `1f704616` / pypto-lib `4513007d` / pto-isa `ecb6c303` / PTOAS `fc8c6cae` / simpler `e2efebcb` / ptoas-bin `v0.50`。本地核对 5 pin 一致 + 工作树全 clean + smoke PASS 后才 push。H1 源码 commit（pypto `1f704616` / simpler `e2efebcb`）此前已在 fork `stepfun/develop`。
+- **MTP CI hardcode 修复**（pypto-lib `perf/step3p5-bc-20260726`，已推 fork）：
+  - `4513007d`：MTP oracle 路径可配置化——`_run_mtp` 透传 `--mtp-oracle-dir`/`STEP3P5_MTP_ORACLE_DIR`，去掉 harness 里镜像外的 username 硬路径（`.../logs_n1/live_mtp3_patch_...20260718`），无 oracle 时干净 skip；seed/expected token 去重为常量。**烤进本镜像**。
+  - `0f3650c7`：`_run_mtp` 改喂 oracle 配对输入（`P42_nh_row0.pt`）而非本次 Main hidden。真因=旧 wiring 用本次 Main hidden 当 MTP 输入却比 0718 配对 golden（喂配对输入 device 实测 pass_rate=1.0 / token `6178,410,303` exact，证 MTP kernel 无回归）。**test-only，mount 验证未 rebuild**。
+- **整网 CI（H1 镜像，cards 8-15）**：`ok=true`——Main 45 层 8 步 token `303,1207,19384,872,428,6127,4231,2636` exact + MTP single/batch16 token `6178,410,303` exact，`hidden_tp_spread=0`。
+- **N=256 回归**：H1 vs C4 发布镜像 teacher-forced 256 步 **token 256/256 exact**（含跨 block 边界 step127/128/255），全步 finite。raw-hidden run-to-run 抖动（H1-vs-C4 44、H1a-vs-H1b 34 同量级）经复跑证实 = C4 push all-reduce 浮点归约顺序，**非 H1 回归**；token 不受影响。
+- **DFX benchmark**（→ `/mnt/persist/chensiyu/workspace/benchmark/2026-07-29-perf-h1/`）：**ITL p50（`--num-blocks 512`）1024 `50.9` / 8192 `52.0` / 32768 `58.0` / 65536 `64.1` ms，较 C4 同工作点降 23–27%**（device-memset 消掉 per-step host reset 21.5→2.2 ms）。PMU `cube_int8 46.35%`、scope ring heap 峰值 79.9%、`dropped=0` 与 C4 逐项一致（memset 不改任务图/计算）。swim top 为 `tp_all_reduce(r2t15)` 启动 skew 等待条（非计算）。详见 [`benchmark/2026-07-29-perf-h1-image-itl-dfx.md`](../benchmark/2026-07-29-perf-h1-image-itl-dfx.md)。
+- **边界**：live N=128 vanilla-raw 精度门本轮未跑（oracle 未起；H1 与 C4 token 一致 → 等价 `240/256`）；`0f3650c7` 未烤进镜像。
+
 ## 2026-07-28 —— C/D/G BS1 收口 + 自包含 candidate 镜像验证 ✅
 
 - `pypto-lib` `perf/step3p5-bc-20260726` 与本地 `stepfun/develop` 已到 `563fe62a`，GitHub fork 两个分支均已推送；`pypto-project/main` 文档同步到 `ebad8e0`（随后状态文档继续更新）。

@@ -1,0 +1,46 @@
+{
+  "kind": "decode_itl",
+  "num_blocks": 512,
+  "block_size": 128,
+  "batch_capacity": 16,
+  "active_batch": 1,
+  "warmup": 3,
+  "results": [
+    {
+      "context_len": 1024,
+      "iters": 20,
+      "itl_ms_min": 50.501,
+      "itl_ms_mean": 50.984,
+      "itl_ms_p50": 50.919,
+      "itl_ms_p99": 51.61,
+      "itl_ms_max": 51.61
+    },
+    {
+      "context_len": 8192,
+      "iters": 20,
+      "itl_ms_min": 51.607,
+      "itl_ms_mean": 51.995,
+      "itl_ms_p50": 51.98,
+      "itl_ms_p99": 52.519,
+      "itl_ms_max": 52.519
+    },
+    {
+      "context_len": 32768,
+      "iters": 20,
+      "itl_ms_min": 57.478,
+      "itl_ms_mean": 58.272,
+      "itl_ms_p50": 58.034,
+      "itl_ms_p99": 62.279,
+      "itl_ms_max": 62.279
+    },
+    {
+      "context_len": 65536,
+      "iters": 20,
+      "itl_ms_min": 63.62,
+      "itl_ms_mean": 64.215,
+      "itl_ms_p50": 64.105,
+      "itl_ms_p99": 66.05,
+      "itl_ms_max": 66.05
+    }
+  ]
+}
