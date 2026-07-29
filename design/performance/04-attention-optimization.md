@@ -179,9 +179,34 @@ but got 8`）；且 16 行是 cube fractal 的最小处理单位，M=8 与 M=16 
 
 ### B. 主菜：融合 Stage 1+2+3（V4 的 qk_pv 形态），Stage4 保留归并
 
-`all_raw_scores` + `all_exp_padded` 整个消失（nb=512 时省 ~100 MiB/层），两次 GM 往返消失。
-**风险**：这接近当年撞 507018 的形态（Phase 15 正是为了绕开它才拆成 4-stage）。依赖 C
-（✅ 2026-07-29 已 device 验证 additive-bias masking 可 lower + token-exact，见下）。
+`all_raw_scores` + `all_exp_padded` 整个消失（nb=512 时省 ~96 MiB/FULL 层），两次 GM 往返消失。
+依赖 C（✅ 已验证 additive-bias masking）。**风险**：这接近当年撞 507018 的形态（Phase 15 正是
+为了绕开它才拆成 4-stage）。
+
+✅ **FULL 已落地并过 canonical CI（2026-07-29，image `…20260729-perf-h1`，cards 8-15，
+`--skip-mtp`）**：3 个 `pl.spmd` 合成一个 `full_qkv_fused`（QK→additive-bias softmax→PV 在
+in-kernel tile 上完成，只把 `all_oi_tmp`/`all_cur_mi`/`all_cur_li` 写 GM），删掉
+`all_raw_scores`+`all_exp_padded`。`SINGLE_CHIP_HIDDEN_CI=PASS`、`main_hidden_8step rc=0
+passed=True`（204s）——**编译过（UB 压力 OK）、运行无 507018/stall、8-step token 不变**。
+关键结论：**C 的 additive-bias 正是让融合绕开历史 507018 的原因**（valid_shape+fillpad 融合会撞，
+additive-bias 不撞）。实现要点：PV matmul 保 M=`Q_HEAD_PAD_FULL`=16（cube 16-fractal）；
+mi/li 存成 `[1,16]` 宽行（Stage4 读前 8），避开 `[N,1]` 列 slice；per-block partial 与 split
+形态逐 bit 一致 → Stage4 未改。patch `workspace/perf-patches/B-fuse-full.patch`（branch
+`perf/step3p5-attn-b`，未推）。
+- **遗留**：SWA 仍是 split 形态（`SLIDING_WINDOW=512` window-capped，scratch 小、非峰值，
+  故 SWA 融合的显存收益小）；FULL 融合已拿到峰值显存收益（峰值层 = 64k FULL 层）。SWA 融合
+  作为一致性 cleanup 可后补。
+- **待测（perf）**：64k 下 `AllocateMemoryAddr` scratch 实际下降 + ring-heap 峰值 + ITL delta
+  vs perf-h1 baseline（64k p50 64.1 ms）——按 `--num-blocks 512` DFX 采集记入 perf-baseline。
+- ⚠ **ITL 实测（2026-07-29，同环境 A/B，perf-h1 镜像，cards 8-15，`_stage_main_hidden_only
+  --itl-iters 20`）：B 是延迟回退，不是提升**。ctx=1024 `50.73→52.21 ms`（+2.9%）、
+  ctx=65536 `63.44→67.89 ms`（**+4.45 ms / +7.0%**）。同环境 baseline 63.44 ≈ 记录的未插桩
+  64.1，故 STRACE 噪声仅 ~0.7 ms、可忽略，+7% 是真实回退。**根因假说**：additive-bias
+  （arange/sub/max/min/mul/col_expand/add ~10 VEC op）**无条件**加在全部 512 blocks 上，但只有
+  最后 1 个 partial block（`valid_len<128`）需要 mask——511 个 full block 的 bias 是纯浪费，
+  盖过了省下的 GM 往返。**B 不按现状落地**（净负：+7% 延迟换 ~96 MiB 显存，且该显存不足以解
+  bs=16 OOM）。**修法 B'**：把 bias 构造/应用 guard 到 `valid_len < BLOCK_SIZE` 只在 partial
+  block 执行 → 预期恢复延迟、保留显存收益（待验证 pypto 是否允许 per-block runtime `if`）。
 
 ### C. B 的解锁前提：`fillpad/valid_shape` → V4 的 additive-inf bias
 
@@ -313,7 +338,7 @@ per-kernel 数值 + liveness 定位。**建议先补 ST**，否则 A–E 每步�
 | **A.3a** | 无（现状 spmd guard） | inactive 核已跳过 | 0（已有） | 0（已有） | ✅ 已实现 |
 | **A.3b** | (scratch 首维 runtime) | — | 0 | 0 | ❌ 静态维约束，并入 B/D |
 | **C** | masking → additive −inf bias | 无（standalone），为 B 铺路 | 0 | 0 | ✅ 验证，随 B 进 |
-| **B** | 融合 Stage1+2+3（qk_pv），留 Stage4 | 消 `all_raw_scores`+`all_exp_padded` + 2 次 GM 往返 | **~96 MiB/FULL 层**（64k：161→65 MiB） | 假说：省 softmax GM 往返延迟，magnitude 待 DFX A/B | ⏸ 进行中 |
+| **B** | 融合 Stage1+2+3（qk_pv），留 Stage4 | 消 `all_raw_scores`+`all_exp_padded` + 2 次 GM 往返 | **~96 MiB/FULL 层**（64k：161→65 MiB） | **实测 +7% @64k（回退非提升）**：additive-bias 无条件加全 512 block；B' guard partial-block 待做 | ⚠ 回归通过但**不按现状落地** |
 | **D** | UB 滚动累加器，partial 不物化 | 连 `all_oi_tmp` 也消，Stage4 并入 | **~161 MiB/FULL 层 → KB 级**（最大显存收益） | 同 B，待测 | ⏸ 待做 |
 
 > 显存收益是**每次 FULL-attn invocation 的静态 shape 账**；峰值随 loop liveness 折算（§2.1）。
