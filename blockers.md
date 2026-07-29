@@ -10,7 +10,40 @@
 如 507899/507018、co-tenancy(G4)、tmov Vec-LHS、gate_topk、多程序 co-prepare 死锁、
 gap-5、scheduler-timeout、attention 乱码、G5b import_ipc、swa_moe const-fold 等均已归档。
 
-**最后检视**：2026-07-28。
+**最后检视**：2026-07-29。
+
+---
+
+## 🟡 ACTIVE — DEPLOY-REPRO：镜像内 git 工作树 dirty，pin 集不足以复现验证环境（部分已解）
+
+**症状**：按 `deployment/docker/build.sh` + 记录 pin 全新构建的镜像，整网 CI 在
+`_reset_persistent_domains → orch.copy_to` 报
+`device pointer 0x… is not a live allocation on worker 0 (… or an interior pointer)`；
+而 0728 的 candidate 镜像同样 pin 却能跑。
+
+**根因**：0728 三个 candidate 镜像
+（`step3p5-b404a3c9-{,ci-cleanup-,ci-final-}20260728`）都带一份**未提交**的 simpler
+补丁（span-aware child provenance，`worker.py +133/−19` + `orchestrator.py +2/−2`），
+`build.sh` 严格按 pin clone 拿不到。已发布的 0726 镜像不含该补丁。
+详见 [`postmortems/14`](postmortems/14-image-dirty-worktree-unreproducible-pins.md)。
+
+**已解部分**：补丁已逐字节入库为 `csy0225/simpler@8459d60f`（`stepfun/develop`），并由
+`csy0225/pypto@6933b1aa` 的 `runtime` submodule gitlink 固定（Dockerfile 的显式 checkout
+会被 `git submodule update` 覆盖，只改 spec 无效）；`img_regress.sh` 已增加
+`IMAGE_WORKTREE_CLEAN_AUDIT`（五仓逐个查 dirty）；已发布镜像
+`stepfun-develop-20260729-allreduce-push` 在该基线上回归全绿。
+
+**仍 open 的部分**：
+1. 本地 `workspace/pypto/runtime` 工作树里还有一版**更新的** WIP（`worker.py +222/−47`，
+   给 `exact_malloc_live` 加 `malloc_size` 上界，另带 119 行单测），**设备上从未验证**，
+   未入库。需独立验证后再决定是否前进 pin，否则它会重复制造同类不可复现状态。
+2. 0728 三个 candidate 的既有验证结论（C/D/G 的 BS1/2/16、N=256、Main 8-step）
+   都建立在未入库补丁上，需在 `8459d60f` 基线上复核后才能作为可复现证据引用。
+3. 其余四仓（pypto / pto-isa / PTOAS / pypto-lib）是否也曾以 dirty 工作树参与过
+   历史镜像构建，尚未回溯核查。
+
+**解除条件**：① 本地 WIP 增量完成设备验证并入库或明确废弃；② 0728 的 C/D/G 结论在
+`8459d60f` 基线上复现；③ 历史镜像的 dirty 回溯完成。
 
 ---
 

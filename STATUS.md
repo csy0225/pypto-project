@@ -4,7 +4,7 @@
 > 每日流水在 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)；
 > 整体规划在 [`planning/roadmap.md`](planning/roadmap.md)；接力面在
 > [`planning/handoff.md`](planning/handoff.md)。
-> **最后更新：2026-07-28。**
+> **最后更新：2026-07-29。**
 
 ## 两条线（项目结构）
 
@@ -19,7 +19,7 @@
      `PyPtoMetadataOnlyStep3p5DecoderLayer` + MTP-proposer 挂点 + MTP3 `hf_overrides` boot fix，
      commit `1b3e538c`）+ `vllm-ascend/` fork。
 
-> **2026-07-28 集成现状快照**：唯一 release Main 仍为
+> **2026-07-29 集成现状快照**：唯一 release Main 仍为
 > `models.step3p5.decode_fwd:whole_decode_step3p5`；retired unroll、rollback
 > selector、自定义 Main module/name 参数和 `models/step3p5_opt` 均保持删除。
 > `stepfun/develop@563fe62a` 已完成 C1/C2/C3/D1/D2/G1：V4-Flash-style
@@ -33,20 +33,29 @@
 > bit-identical；BS1 persistent 4-step 为 `6127→303→1207→19384→872`。
 >
 > 最终自包含镜像
-> `hub.i.basemind.com/stepcast/vllm-pypto:step3p5-b404a3c9-ci-final-20260728`
-> （0162 本地 image ID `sha256:06261920cced91dafc585cd5e63622a88f798ad5ef6aeeba6480433049d1544f`，
-> 产品 HEAD `b404a3c9`，CI 三文件以工作树补丁包含后续 `563fe62a` 的 cleanup/skip-MTP
-> 逻辑，**尚未推送 registry**）smoke PASS；canonical Main 8-step token
-> `303,1207,19384,872,428,6127,4231,2636` 全 exact，hidden 全 finite、8 个
-> active rank rows nonzero、TP spread `0`。镜像内 N=256 teacher-forced 回归为
-> hidden finite `256/256`、TP spread `0`、token exact `241/256=94.14%`；因此
-> raw vanilla 95% gate **不宣称通过**。MTP oracle 位于镜像外，本轮使用
-> `--skip-mtp`，其缺失不作为 C/D/G 或 Main 失败。
+> `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push`
+> （digest `sha256:7924925f4b2816c5645910b90fd2a9fa9469baace2f48f7e0ee41a587bd5d6ba`，
+> config `sha256:5402e07ba0d19b315935bfda1e9f6b445d1a3fdc9067c634a2ce302fd7f2a3dd`；
+> 代码 pin = pypto `6933b1aa` / pypto-lib `cfbdcce8` / pto-isa `ecb6c303` /
+> PTOAS `fc8c6cae` / simpler `8459d60f` / ptoas-bin `v0.50`）已推 registry，
+> 含 PERF-C4 TP all-reduce reduce-scatter + push all-gather。0162 immutable-image
+> 回归：5 pin 与 spec 逐字一致、五仓工作树全 clean、credential / canonical-only /
+> allreduce-push audit 全 PASS、smoke PASS；整网 CI `rc=0`（198.3 s）6 项 check 全
+> true，token `303,1207,19384,872,428,6127,4231,2636` 全 exact；`hidden_tp_spread`
+> 在 ci/main + rep1/rep2/rep3 共 **32 步全 `0.0`**（PERF-C4 准出指标）；ITL p50
+> `65.942 ms`(ctx=1024) / `66.455 ms`(ctx=4096)。N=256 teacher-forced raw vanilla
+> 95% gate **仍不宣称通过**（0726 镜像为 `240/256=93.75%`）；MTP oracle 在镜像外，
+> 本轮 `--skip-mtp`，其缺失不作为 Main 失败。
+>
+> 详见 [`deployment/docker/README.md`](deployment/docker/README.md)、
+> [`benchmark/2026-07-28-tp-allreduce-push.md`](benchmark/2026-07-28-tp-allreduce-push.md)、
+> [`postmortems/13-tp-allreduce-pull-notify-race.md`](postmortems/13-tp-allreduce-pull-notify-race.md)。
 >
 > vLLM 侧 tail-only + MTP proposer 挂点仍在 `1b3e538c`；真实在线请求接管、
 > KV bridge、动态 batch 映射与同代 MTP absolute gate 仍属于 Phase 20/28 后续。
-> **push 状态（2026-07-28）**：GitHub `csy0225/pypto-lib` 的
-> `stepfun/develop` 与 `perf/step3p5-bc-20260726` 均已推至 `563fe62a`；
+> **push 状态（2026-07-29）**：GitHub `csy0225/pypto-lib:stepfun/develop` = `cfbdcce8`、
+> `csy0225/simpler:stepfun/develop` = `8459d60f`、`csy0225/pypto:stepfun/develop` = `6933b1aa`
+> （runtime gitlink → simpler `8459d60f`）；
 > GitHub `csy0225/pypto-project:main` 已同步本轮 C/D/G 状态文档；GitLab
 > `sys/stepcast/vllm:csy/pypto-tail-mtp-integration` 保持 `1b3e538c`。
 
@@ -84,7 +93,7 @@
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS(src) | simpler | ptoas-bin |
 |------|------|-------|-----------|---------|-----------|---------|-----------|
-| 2026-07-28 | PERF-C4 TP all-reduce → reduce-scatter + **push** all-gather（`perf/step3p5-bc-20260726@cfbdcce8`，未推 develop）；根因=pull-after-remote-notify 跨方向握手无序（postmortems/13），修正 design/performance/03 §5；回归 whole-network CI PASS + 40 个 decode step token 全对且 `hidden_tp_spread` 全 0.0；ITL p50 −3.6%/−3.9% | `ca21ab5f` | `cfbdcce8` | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |
+| 2026-07-29 | PERF-C4 TP all-reduce → reduce-scatter + **push** all-gather 发布。根因=pull-after-remote-notify 跨方向握手无序（postmortems/13），修正 design/performance/03 §5。pypto-lib `cfbdcce8` 已推 `stepfun/develop`；simpler span-aware child provenance 入库为 `8459d60f`，并由 pypto `6933b1aa` 的 runtime gitlink 固定（postmortems/14）。镜像 `vllm-pypto:stepfun-develop-20260729-allreduce-push`（digest `sha256:7924925f…`）已推 registry：audit/smoke/整网 CI PASS，`hidden_tp_spread` 32 步全 `0.0`，ITL p50 65.942/66.455 ms | `6933b1aa` | `cfbdcce8` | `ecb6c303` | `fc8c6cae` | `8459d60f` | v0.50 |
 | 2026-07-28 | C/D/G + BS1 收口；`stepfun/develop@563fe62a`；固定 expert physical lanes；最终自包含镜像 smoke/Main 8-step PASS，N=256 hidden finite/TP spread=0、token exact 241/256 | `ca21ab5f` | `563fe62a` | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |
 | 2026-07-24 | PERF-A1 逐层 DFX 接线（holder N1_DFX→swim/pmu + harness `--dfx`）；在镜像 20260724(cards 8-15) 采集 → routed-expert 占 90.7% / PMU cube_int8 88.6%（benchmark/2026-07-24-perlayer-dfx） | `ca21ab5f` | `bc5eecb1`(+DFX over `fd26b1be`) | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |
 | 2026-07-24 | 合并 origin/main 到 stepfun/develop（全 FF，保留 fork ITL harness `7cb2a6b3`）+ IPC 权重 interior 指针 provenance 修复（解 `submit_next_level child_memory` 卡点）；镜像 `vllm-pypto:stepfun-develop-20260724`(ptoas v0.50) 冒烟 PASS + 整网 8 步 `6127→303→1207→6127` 与 live vanilla 逐 token 一致 | `ca21ab5f` | `fd26b1be` | `ecb6c303` | `fc8c6cae` | `216e7632` | v0.50 |

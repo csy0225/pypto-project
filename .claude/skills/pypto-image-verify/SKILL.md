@@ -62,7 +62,7 @@ ls -d /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp  # W8A8 ck
 ## Step 1 · 拉镜像
 
 ```bash
-IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5-only
+IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push
 # 发布 manifest digest:
 # sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81
 sudo $NC pull "$IMG"        # base blob 已在 content store, 只下增量
@@ -117,10 +117,9 @@ sudo $NC run --rm --net host --ipc host --privileged --security-opt apparmor=unc
       --skip-mtp"
 ```
 
-当前 GitHub 代码 release（`pypto-lib stepfun/develop@563fe62a`）只保留一个 Main；
-但下方默认可拉取的 registry 镜像仍是 `stepfun-develop-20260726-step3p5-only`，
-其源码 pin 为 `53eb7212`。0728 C/D/G candidate 尚未推 registry，不能用默认
-`nerdctl pull` 命令得到。
+当前 GitHub 代码 release（`pypto-lib stepfun/develop@cfbdcce8`）只保留一个 Main；
+默认可拉取的 registry 镜像 `stepfun-develop-20260729-allreduce-push`
+（digest `sha256:7924925f…`）的源码 pin 与之一致。
 
 ```text
 models.step3p5.decode_fwd:whole_decode_step3p5
@@ -165,7 +164,7 @@ fail-fast，禁止重新引入第二个 Main 产品入口。
 ### 0728 C/D/G candidate（0162 本地，未发布）
 
 ```text
-image: hub.i.basemind.com/stepcast/vllm-pypto:step3p5-b404a3c9-ci-final-20260728
+image: hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push
 image ID: sha256:06261920cced91dafc585cd5e63622a88f798ad5ef6aeeba6480433049d1544f
 product HEAD: pypto-lib b404a3c9
 CI patch: three dirty test/runner files corresponding to committed 563fe62a

@@ -67,7 +67,7 @@ producer → 数学变换/quant/route-map → transport/window
 |----|----------|-----------------|----------|------|
 | B3 KV 所有权 | `CACHE_POOL_NAMES` + `RESIDENT_CACHE_OUTPUT_NAMES`，KV/state tensor 是 resident InOut | canonical `whole_chip_orch` / `host_orch` 已为 `pl.InOut`；holder 通过一次 `import_kv_all()` + `build_stacked_kv_pool()` 绑定 vLLM-owned IPC K/V section | step3p5 是 45 层 consolidated flat `[45*rows,128]`，v4-flash 是模型自己的多 pool ABI，不能只靠 reshape 互换 | **留 current ABI，补强合同与设备验证**：确认 prepare/import 只做一次、run 不 copy 整池、每层只按 `slot_mapping` 写一行 |
 | C1 数据窗口 | V4-Flash在多层decode中共享一套MoE windows，并用单调`moe_epoch`复用metadata/payload/combine arrival | canonical 已采用 V4-Flash expert-lane push/gather/scatter/reduce；step3p5 只保留 whole-net/allocator/backend 适配 | 共享 window 的复用条件是上一 epoch 最终 semantic consumer 完成；512B 仅适用于 stacked/reused control slot 的本地隔离 | **已完成**：V4-Flash shared EP window/epoch lineage 已落地；固定 expert lane base 通过 BS1/2/16 与 row0 batch-extension invariance 验证；不恢复 pull |
-| C1 TP all-reduce 窗口 | v4-flash 的 MoE 窗口不等于 step3p5 attention/shared TP all-reduce scratch | MoE 层同时带 attention/shared 的 `tmp+signal`，其 barrier 固定使用 `expected=1/2` | 这两类窗口不是 EP dispatch/combine 协议；直接压成一套会被上一层残留计数提前放行 | **留 per-layer**：本次只折叠 EP dispatch/combine 的 12 类窗口；attention/shared 的 4 类 scratch 继续逐层隔离 |
+| C1 TP all-reduce 窗口 | v4-flash 的 MoE 窗口不等于 step3p5 attention/shared TP all-reduce scratch | MoE 层同时带 attention/shared 的 `tmp+signal`，barrier 使用固定阈值（C4 后为 `expected=1/2/3` 三波，C4 前为 `1/2`） | 这两类窗口不是 EP dispatch/combine 协议；直接压成一套会被上一层残留计数提前放行 | **留 per-layer**：只折叠 EP dispatch/combine 的 12 类窗口；attention/shared 的 4 类 scratch 继续逐层隔离。C4 只换了 scratch 内部的算法与通信方向，窗口形状/数量/per-layer 隔离均未变 |
 | C1 512B signal stride | V4-Flash 的 control signal 仍是紧凑 `[N_RANKS,1] INT32` + `N_RANKS*4`，且多层复用不等于 512B signal ABI | step3p5 当前 stacked/reused backing 在 backend span/provenance 下需要物理 slot 隔离 | 512B 是 step3p5 当前 backend/profile 适配，不是多层共享本身，也不是 DeepSeek 通用 ABI | **仅 stacked/reused 且参与 notify/wait/AtomicAdd 的 control slot 使用 512B physical stride**，formal/window/slice `[128,1]`，逻辑 loop 只访问前 `n_ranks`；普通 data/MTP 独立 signal 不扩容 |
 | C2/C3 dispatch | expert-lane `pl.spmd(N_LOCAL)` payload push、独立payload arrival、expert-lane gather | current canonical仍是fixed-slot peer-major pull和顺序peer TGET | current实现是迁移前历史基线，不再是目标架构 | **已完成**：直接迁移 V4-Flash expert-lane dispatch/combine 数据流；shape 由 runtime capacity/route 上界与 consumer ABI 推导，不采用 probe peer-slab 硬约束 |
 | C2/C3 combine | expert-lane scatter/`tensor.put`回source-owned route buffer，独立arrival wait，token reducer按TOPK顺序做FP32累加 | current canonical是staged source + inverse-map TGET + 本地gather | current实现不再作为production目标 | **已完成**：scatter/wait/token reduce 已迁移；保留 whole-net epoch、runtime active token 与既定 FP32 顺序 |
@@ -207,7 +207,7 @@ flowchart LR
   - V4-Flash control signal可保持逻辑 `[N_RANKS,1] INT32`；512B不是通用signal ABI；
   - step3p5仅对同backing中stacked/reused且参与`notify`/`wait`/`AtomicAdd`的control slot使用512B物理隔离；
   - 逻辑访问仍只覆盖实际rank行；普通data window、独立compact signal和probe tensor不得机械扩成512B。
-- **保护区**：attention/shared TP all-reduce 的 `tmp+signal`、固定peer累加顺序、FP32 accumulator和最终一次BF16 store保持不变。
+- **保护区**：attention/shared TP all-reduce 的 `tmp+signal` 窗口形状/数量/per-layer 隔离、固定peer累加顺序、FP32 accumulator和最终一次BF16 store保持不变。（**C4 更新**：collective 内部算法已由 full-mesh 换成 reduce-scatter + push all-gather，barrier 由 2 波变 3 波；上述四项不变量全部保留，故 C1 的窗口决策不受影响。）
 - **验证**：source ownership/epoch合同 → canonical compile/lowered DAG → 多epoch设备liveness → batch=1/2/8/16 active-route telemetry → live精度与KV row-diff。低层probe只能证明表达能力。
 
 #### 改造脉络、问题与经验（2026-07-28）
@@ -270,7 +270,7 @@ flowchart LR
 | `COMM_SIGNAL_STRIDE_I32` | control slot 物理隔离 | 只改变 backing stride，不改变逻辑 rank 数 |
 
 - **之前是什么样**：历史实现按 MoE 层堆叠 dispatch/combine data window 和 signal window，42 次调用各自拥有一套 EP storage；通信协议还带有 pull 时代的 ready/read-complete 双波语义。物理隔离直观，但常驻 HBM、编译期 window 记账和 whole-net 生命周期都被展开。
-- **遇到的问题**：不能把“共享 window”简单理解成所有 signal 共用一个 counter，也不能把所有 512B signal 统一扩大。metadata arrival、payload arrival、combine arrival 是三条不同 producer→consumer lineage；attention/shared TP all-reduce 的 per-layer `expected=1/2` scratch 也不能和 EP 协议混用。只看 signal shape 或 probe 编译通过，也不能证明上一 epoch 的最终 consumer 已经结束。
+- **遇到的问题**：不能把“共享 window”简单理解成所有 signal 共用一个 counter，也不能把所有 512B signal 统一扩大。metadata arrival、payload arrival、combine arrival 是三条不同 producer→consumer lineage；attention/shared TP all-reduce 的 per-layer 固定阈值 scratch（C4 后为 `expected=1/2/3`）也不能和 EP 协议混用。只看 signal shape 或 probe 编译通过，也不能证明上一 epoch 的最终 consumer 已经结束。
 - **之后是什么样**：whole-net 只为 EP dispatch/combine 保留一套共享的 `recv_meta/recv_x/recv_aux/recv_route/routed_y` backing 和 arrival signal。40 层 runtime loop 使用 `moe_epoch = layer_idx + 1`，specialized layer 使用后续 epoch，形成 1..42 的单调序列。dispatch 的 metadata wait 使用 `expected=moe_epoch`；payload/combine arrival 按 local-expert fan-out 使用 `expected=moe_epoch * n_local_experts`。C1 删除 pull 专属 `2*epoch-1/2*epoch` 合同，但没有删除阶段边界。
 - **代码逻辑约束**：metadata notify 必须发生在 route count 发布后；payload notify 必须发生在所有远端 `tensor.put` 完成后；combine notify 必须发生在 routed output scatter 完成后。下一 epoch 只有在本 epoch 的最终 semantic consumer 完成后才能覆盖 backing。512B 只用于同 backing 中反复参与 `AtomicAdd/TWAIT` 的 control slot 物理隔离；逻辑 signal 仍是 rank 行，普通 data、MTP signal 和 attention/shared signal 不机械扩展。
 - **经验**：通信优化必须先画出 `producer → remote put/notify → arrival wait → consumer → reuse` DAG，再折叠 storage；每新增阶段都要写清 epoch、expected 增长规则和最终 consumer。多 rank 不 hang 或单个 wait dump 正确，都不足以证明多 epoch liveness。
@@ -386,7 +386,7 @@ valid rows(expert e)    = local_expert_count[e]
 - **真实依赖**：payload-arrival wait必须依赖完整scatter/push；gather依赖metadata与payload arrival；token reduce依赖combine arrival。local RAW不能替代远端arrival，fake scalar或`x*0`不能制造依赖。
 - **whole-net适配**：与C1共享window/epoch、G1 active-token、42次MoE调用和现有expert/shared路径闭合；最终consumer完成前不得复用window。
 - **非约束项**：`pl.spmd`与captured TaskId是V4-Flash参考表达；若当前frontend需要等价submit形式，只能做最小ABI适配。peer slab、`spmd_submit`、`task_dummy`、sole reducer及probe tensor shape都不是验收硬门槛。
-- **保护区**：不改canonical入口、KV ownership、TP/all-reduce、top-k FP32累加顺序和最终BF16 store。
+- **保护区**：不改canonical入口、KV ownership、TP all-reduce、top-k FP32累加顺序和最终BF16 store。（TP all-reduce 的算法替换由 C4 单独承担，不在 C3 范围内。）
 - **验证**：source/alias合同 → parser/compile → lowered TaskId/DAG → 2-rank/8-rank write-disjoint与多epochliveness → batch=1/2/8/16 DFX → live精度与性能。
 
 #### 改造脉络、问题与经验（2026-07-28）
@@ -448,8 +448,29 @@ flowchart LR
 - **之前是什么样**：pull 路径按 peer 顺序组织通信，设备并行围绕固定 batch/peer 展开。迁移后若只把循环机械改成 `pl.spmd`，可能有并行却没有远端 arrival 依赖；若加入 fake scalar、`x*0` 或 `task_dummy`，又只是制造假依赖。
 - **之后的阶段顺序**：metadata publish → metadata wait → payload push → payload wait → expert-lane gather → routed expert → combine scatter → combine wait → token reduce。worker 只计算，不在 InCore 中递归 submit；local RAW 不能替代远端 `tensor.put` 完成通知。
 - **代码 ownership**：dispatch push/gather 和 combine scatter 以 local expert 为 lane；每个 expert 区域是 `[e*expert_recv_max,(e+1)*expert_recv_max)`，互不重叠。routed expert 以 `RECV_TILE` 分块并用 `tile_valid/valid_shape` 屏蔽尾部；combine 依据 source/route provenance 写回 source-owned route buffer，sender/expert 的 put 必须 write-disjoint。
-- **whole-net 问题**：40 层 MoE 在 runtime `pl.range` 内，另有 L43/L44 specialization；所有调用点必须保持 dispatch/expert/combine 参数和 epoch 语义一致。EP window epoch 为 1..42，attention/shared TP scratch 仍保持 per-layer `expected=1/2`，不能因为共处 mega-kernel 就混为一类。
+- **whole-net 问题**：40 层 MoE 在 runtime `pl.range` 内，另有 L43/L44 specialization；所有调用点必须保持 dispatch/expert/combine 参数和 epoch 语义一致。EP window epoch 为 1..42，attention/shared TP scratch 仍保持 per-layer 固定阈值（C4 后 `expected=1/2/3`），不能因为共处 mega-kernel 就混为一类。
 - **经验**：`pl.spmd`、captured TaskId、peer slab、`spmd_submit`、`task_dummy` 和 probe shape 都不是 production 架构判据。真正硬约束是 lane key、写入地址、notify、wait、最终 consumer、write-disjoint 和 reduction 顺序；无法回答这五类问题的并行化不应合入 whole-net。
+
+---
+
+### PERF-C4 · TP all-reduce：full-mesh → reduce-scatter + push all-gather ✅ 已完成
+- **完成证据**：pypto-lib `cfbdcce8`（配 pypto `6933b1aa` / simpler `8459d60f`）；已发布镜像 `stepfun-develop-20260729-allreduce-push`（digest `sha256:7924925f…`）。整网 CI PASS，`hidden_tp_spread` 在 ci/main + 3 次 repeat 共 32 步全 `0.0`；ITL p50 −3.64%(ctx=1024) / −3.88%(ctx=4096)。⚠ 该收益属 ctx ≤ 4096 工作点；64k 相对收益必然更小，见 [`../../benchmark/2026-07-28-tp-allreduce-push.md`](../../benchmark/2026-07-28-tp-allreduce-push.md) §1/§2b。
+- **位置**：`models/step3p5/decode_fwd.py::WholeDecodeStep3p5.tp_all_reduce`（`@pl.function(type=pl.FunctionType.InCore)`）。调用点 5 处：`attention_full.py:819`、`attention_swa.py:828`、`dense_mlp.py:240`、`decode_fwd.py` 两处 `expert_shared_step`；共 45 层 × 2 = 90 次调用。
+- **设计依据边界**：[`03-tp-allreduce-algorithm-comparison.md`](03-tp-allreduce-algorithm-comparison.md) 给出算法选型与 device 侧耗时，但其 §5 原方案（pull 形式 all-gather）**落整网即 8 卡不一致**，已在该文 §5 首就地修正。V4-Flash **没有** TP all-reduce（其 TP seam 是 all-gather hidden + 复算），因此本项没有可直接照搬的 DeepSeek 实现，只沿用其 collective 写法约定（push-then-notify、loop-constant offset、window write-once 语义）。
+- **算法步骤**（`shard = HIDDEN/tp_size = 512`，`P=8`）：
+  1. **stage-in**：把**其它** rank 拥有的 shard 写进我的 `tmp_window`（跳过自己那段，使每列在整次调用内只有单一 writer）。`pl.parallel`。
+  2. **wave 1**：notify 全 peer + wait 全 peer `Ge 1`。`pl.parallel` 扇出。
+  3. **reduce-scatter**：只归约我拥有的那一段——`own_tile` 从 `local` 读，其余 7 份从 peer 的 `tmp_window` `remote_load`，按 canonical peer order `0..P-1` 用**单个 FP32 accumulator** 累加，只做**一次** BF16 cast；结果写进 `local`，并 `pld.tile.remote_store` **push** 给每个 peer。累加循环保持 `pl.range`（有 carried 依赖，且避免并发重读打满 HCCS）。
+  4. **wave 2**：notify + wait `Ge 2`。
+  5. **all-gather**：**纯本地** `pl.load` 读回各 owner 已推来的 shard → 写 `local`。barrier 之后**零远端访问**。
+  6. **wave 3**：completion barrier `Ge 3`，沿用改前"返回前所有 peer 已用完本窗口"的合同。
+- **为什么 all-gather 必须是 push**：`本地 store → 远端 notify → peer 远端 remote_load` 是**跨方向**握手，payload 落我方 HBM、notify 落对方 HBM，本地 `V→MTE3` fence（codegen 已确认存在）管不到对方的读。mesh 每次调用只有 **1 个**带数据依赖的 pull barrier，pull 形式 twophase 有 **2 个**，暴露翻倍 → 由"侥幸不中"变"几乎必中"。与 03 文档 §5 判 ring 不可用是同一上游缺口。根因链与 12 个被证伪假设见 [`postmortems/13`](../../postmortems/13-tp-allreduce-pull-notify-race.md)。
+- **通信量**：每卡远程传输 `56 → 14`（7 pull + 7 push），每卡远程字节 `7×N=896KB → 1.75×N=224KB`；barrier `2 → 3`。窗口形状/数量/per-layer 隔离**不变**（`[BATCH,HIDDEN]` BF16 + `[128,1]` INT32 × 4 类 stack）。
+- **数值合同**：与 mesh **bit-identical**——canonical peer order `0..P-1`、单一 FP32 accumulator、每元素恰好一次 BF16 cast/store 全部保留；且一个 shard 只由一个 rank 归约后广播，rank 相关 rounding 在结构上被消除。
+- **顺带修复**：`dense_mlp.py:240` 与两处 `expert_shared_step` 原本写成 `self.tp_all_reduce(...)` 丢弃返回值，依赖对普通 `pl.Tensor` 入参的原地副作用。`local` 非 `Out`/`InOut`，只有 `x = f(x)` 才强制 must-alias——违反 dev-constraints §1.1，已全部改为赋值。
+- **保护区 / 未动项**：canonical 入口、窗口 ABI（形状/数量/512B stacked stride）、EP dispatch/combine 协议与 `moe_epoch`、KV ownership、MTP 的 compact signal 均未改动。
+- **残留与后续**：wave 1 的 stage-in **仍是 pull**，同类弱序依赖仍在，但**暴露量与改前 mesh 相同（各 1 个）**，不构成回归。要彻底消除需 stage-in 也改 push：不新增窗口时（rank r 把对 shard s 的贡献推到 peer s 窗口第 `r*shard` 列，8 来源 × 512 列 = HIDDEN 刚好装下）会因"推 reduced shard 会覆盖 peer 尚未消费的 stage-in 数据"而需要第 4 个 wave；要避免则需第二个窗口（host ABI 改动）。**记为独立后续项。**
+- **验证口径**：compile → 站点二分（mesh/twophase 并存，一次只切一类调用点）→ 重复采样的 `hidden_tp_spread`（race 必须重复，单次绿不算）→ 整网 CI → ITL。数据见 [`benchmark/2026-07-28-tp-allreduce-push.md`](../../benchmark/2026-07-28-tp-allreduce-push.md)。
 
 ---
 

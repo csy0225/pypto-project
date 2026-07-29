@@ -5,27 +5,34 @@
 
 ## 已验证组合
 
-### 当前代码与已验证镜像（2026-07-28）
+### 当前代码与已验证镜像（2026-07-29）
 
 | 槽位 | Pin | 备注 |
 |------|-----|------|
 | Driver | `25.5.2` | 0162 device verified |
 | Firmware | `7.8.0.7.220` | 与 driver 成对 |
 | CANN | `9.0.0-beta.1` | NOT GA |
-| pypto | `ca21ab5fcfd8203165928428302d273c377db5c6` | 与 0724 镜像一致 |
-| pypto-lib / vllm-pypto | `563fe62ac566ab7f8e3c0e94c514468d49d9d439` | GitHub `stepfun/develop`；唯一 Main=`models.step3p5.decode_fwd:whole_decode_step3p5`；`step3p5_opt` package/aliases 已删除 |
+| pypto | `6933b1aa838ebc81643166eb2cf686af894d543c` | 0724 pin(`ca21ab5f`) + `runtime` submodule gitlink bump → simpler `8459d60f` |
+| pypto-lib / vllm-pypto | `cfbdcce858e63b9fb3775111dff1b20e97b24808` | GitHub `stepfun/develop`；C/D/G 收口(`563fe62a`) + PERF-C4 TP all-reduce reduce-scatter + push all-gather；唯一 Main=`models.step3p5.decode_fwd:whole_decode_step3p5` |
 | pto-isa | `ecb6c303f797749f811a494742c3c08156aacabb` | 与 0724 镜像一致 |
 | PTOAS | `fc8c6caee561914b4fb991dfc8427bb63194269e` | 与 0724 镜像一致 |
-| simpler | `216e7632267ae815c484cdeba7991c87fabf3086` | pypto `runtime` gitlink；与 0724 镜像一致 |
+| simpler | `8459d60f04b64b74322e965e0dd038ab26165124` | pypto `runtime` gitlink；0724 pin(`216e7632`) + span-aware child provenance（入库 0728 candidate 里未提交的 152 行补丁） |
 | ptoas-bin | `v0.50` | binary sha256 `ba93fabeff6dc7fdcd2278a72fd1d4fd92cb2949faedbc83fa58e801bd5ff23b` |
 | vLLM overlay | `csy/pypto-tail-mtp-integration@1b3e538c35999e62b6d24e0651b3a85b7d16c826` | build 时按 commit checkout，不能只依赖可变 branch |
 | Python | `3.11.14` | 镜像内 `/usr/local/python3.11.14/bin/python3` |
-| 已发布镜像（代码 pin 53eb7212） | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5-only@sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81` | config `sha256:d296461051559e6ea0e22d04a4cc44f749c82f19a50418fe6db75387f1f067e9`；0162 credential/symbol/ldd audit + smoke + unit/contract/device regression PASS；不是 563fe62a 镜像 |
-| 本地 candidate（未推 registry） | `step3p5-b404a3c9-ci-final-20260728` / image ID `sha256:06261920cced91dafc585cd5e63622a88f798ad5ef6aeeba6480433049d1544f` | 镜像内 HEAD=`b404a3c9`，CI 三文件 dirty patch 对应后续 `563fe62a`；0162 smoke + Main 8-step PASS；N=256 hidden finite `256/256`、TP spread `0`、token exact `241/256`；不得用于 `nerdctl pull` |
+| **当前已发布镜像（代码 pin 全部与 `stepfun/develop` 一致）** | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push@sha256:7924925f4b2816c5645910b90fd2a9fa9469baace2f48f7e0ee41a587bd5d6ba` | config `sha256:5402e07ba0d19b315935bfda1e9f6b445d1a3fdc9067c634a2ce302fd7f2a3dd`；含 PERF-C4 TP all-reduce reduce-scatter + push all-gather 与 simpler span-aware provenance；0162 immutable-image 回归见 benchmark/2026-07-28-tp-allreduce-push.md（4×8 步 `hidden_tp_spread` 全 `0.0`，`IMAGE_WORKTREE_CLEAN_AUDIT=PASS`） |
+| 上一个已发布镜像（代码 pin 53eb7212，保留回退） | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5-only@sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81` | config `sha256:d296461051559e6ea0e22d04a4cc44f749c82f19a50418fe6db75387f1f067e9` |
 
 验证结论：
 
-- GitHub 当前代码 `563fe62a` 默认入口为 `whole_decode_step3p5`；已发布 registry 镜像仍固定为 `53eb7212`，本地 candidate 才包含 `563fe62a`；
+- **当前发布镜像 0162 immutable-image 回归**：5 个 pin 与 spec 逐字一致；
+  `IMAGE_GIT_CREDENTIAL_AUDIT` / `IMAGE_WORKTREE_CLEAN_AUDIT` / `CANONICAL_ONLY_AUDIT` /
+  `ALLREDUCE_PUSH_PRESENT` 全 PASS；smoke PASS；整网 CI `rc=0`（198.3 s）6 项 check
+  全 true，token `303,1207,19384,872,428,6127,4231,2636`；`hidden_tp_spread` 在
+  ci/main + rep1/rep2/rep3 共 4×8 = 32 步全 `0.0`（PERF-C4 的准出指标）；
+  ITL p50 `65.942 ms`(ctx=1024) / `66.455 ms`(ctx=4096)。
+- GitHub 当前代码（`pypto-lib cfbdcce8`）默认入口为 `whole_decode_step3p5`，与镜像内 pin 一致；
+  下面 `563fe62a` / `53eb7212` 相关结论属于 0726/0728 阶段的历史记录；
 - N=256 canonical-only 与清理前镜像 token/hidden `256/256` exact，`max_abs_diff=0`，
   TP spread `0.0`，compatibility removal regression PASS；
 - 与清理前 canonical 镜像产物 token/hidden `256/256` bit-exact，
@@ -41,12 +48,15 @@
   token/hidden `256/256` exact、`max_abs_diff=0`、TP spread `0.0`，
   step127/128/255 全通过；
 - 当前只证明 canonical-only Main replacement，不等价于完整 production Main+MTP serving
-  已无条件平替。
+  已无条件平替；
+- 0728 阶段的 C/D/G 结论（BS1/2/16、N=256、Main 8-step）产自工作树 dirty 的本地 candidate，
+  需在 `8459d60f` 基线上复核，跟踪见 [`../blockers.md`](../blockers.md) 与
+  [`../postmortems/14-image-dirty-worktree-unreproducible-pins.md`](../postmortems/14-image-dirty-worktree-unreproducible-pins.md)。
 
 C/D/G candidate 设备证据：BS1/2/16 单步与 BS1 persistent 4-step 通过；固定 expert lane physical bases 修复 BS1 batch-extension invariance。
 
 构建 spec：
-[`docker/builds/stepfun-develop-20260726-step3p5-only.env`](docker/builds/stepfun-develop-20260726-step3p5-only.env)。
+[`docker/builds/stepfun-develop-20260729-allreduce-push.env`](docker/builds/stepfun-develop-20260729-allreduce-push.env)。
 
 ### 历史生产目标（2026-06-22，禁止作为当前 pin）
 
@@ -86,8 +96,10 @@ simpler 是 pypto 的 git submodule，在 `pypto/runtime/`。`pypto` 仓的
 pin 决定编哪个 simpler commit。更新 simpler 时必须
 `git submodule update` 并 commit pypto 侧的 submodule pin。
 
-当前 release 的 simpler pin 是 `216e7632`，并由 pypto `ca21ab5f`
-的 `runtime` gitlink固定。下方 `a6e06406` 仅属于 2026-06-22 历史组合。
+当前 release 的 simpler pin 是 `8459d60f`，并由 pypto `6933b1aa` 的 `runtime`
+gitlink 固定。**Dockerfile 里的显式 checkout 不算**——`pip install -e pypto` 期间的
+`git submodule update` 会把它切回 gitlink，所以换 simpler 必须同时 bump pypto。
+下方 `a6e06406` 仅属于 2026-06-22 历史组合。
 
 ### CANN
 

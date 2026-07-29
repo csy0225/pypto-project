@@ -24,18 +24,18 @@ containerd/nerdctl)。**
 
 | 仓库 | pin | 说明 |
 |------|-----|------|
-| pypto | `ca21ab5f` | 0724 镜像 pin |
-| pypto-lib | `53eb7212` | canonical-only B2 loop-form replacement；旧 package/aliases 已删除 |
+| pypto | `6933b1aa` | 0724 pin(`ca21ab5f`) + 一个 **submodule gitlink bump**：`runtime` → simpler `8459d60f`（见 §2(b)，simpler 换版只能走 gitlink） |
+| pypto-lib | `cfbdcce8` | `stepfun/develop`：C/D/G 收口(`563fe62a`) + PERF-C4 TP all-reduce reduce-scatter + push all-gather |
 | pto-isa | `ecb6c303` | 0724 镜像 pin |
 | PTOAS(src) | `fc8c6cae` | 0724 镜像 pin |
-| simpler(pypto/runtime submodule) | `216e7632` | 0724 镜像 pin，含 IPC child-region provenance 修复 |
+| simpler(pypto/runtime submodule) | `8459d60f` | 0724 pin(`216e7632`) + span-aware child provenance（`worker.py`/`orchestrator.py`，把 0728 candidate 里未提交的 152 行补丁入库；缺它整网 CI 在 `copy_to` interior pointer 处失败） |
 | ptoas-bin | `v0.50` | 0724 验证二进制 |
 
-> **新镜像 tag**: `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5-only`
+> **镜像 tag**: `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push`
 >
-> **新镜像 digest**: `sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81`
+> **digest**: `sha256:7924925f4b2816c5645910b90fd2a9fa9469baace2f48f7e0ee41a587bd5d6ba`
 >
-> **image config**: `sha256:d296461051559e6ea0e22d04a4cc44f749c82f19a50418fe6db75387f1f067e9`
+> **image config**: `sha256:5402e07ba0d19b315935bfda1e9f6b445d1a3fdc9067c634a2ce302fd7f2a3dd`
 >
 > **安全说明**：最终镜像已在 0162 验证 immutable pins、Git credential
 > audit、canonical-only symbol audit 和 smoke。旧 digest
@@ -46,25 +46,50 @@ containerd/nerdctl)。**
 >
 > **0724 base digest**: `sha256:2b0dc4612796a34bea6720ccb4bf8fa3af4ea406cdd0f12add34586ca860d7e0`
 
-> **代码/镜像边界（2026-07-28）**：GitHub `pypto-lib stepfun/develop` 当前为
-> `563fe62a`；上面的已发布 tag 仍是 `53eb7212` 的 0726 镜像。C/D/G 修复后生成的
-> `step3p5-b404a3c9-ci-final-20260728` 只在 0162 本地验证；镜像内产品 HEAD 为
-> `b404a3c9`，CI 三文件工作树补丁对应后续 `563fe62a`。image ID 为
-> `sha256:06261920cced91dafc585cd5e63622a88f798ad5ef6aeeba6480433049d1544f`，
-> 尚未推 registry；发布前必须重新构建并更新 spec/tag/digest。
-
-
+> **代码/镜像边界（2026-07-29）**：GitHub `pypto-lib stepfun/develop` = `cfbdcce8`、
+> `pypto stepfun/develop` = `6933b1aa`、`simpler stepfun/develop` = `8459d60f`，
+> 与镜像内 pin **全部一致**，且五个仓工作树全 clean（`IMAGE_WORKTREE_CLEAN_AUDIT=PASS`）。
+> `stepfun-develop-20260726-step3p5-only`(`53eb7212`) 为上一个已发布 tag，保留作回退。
+> 本 tag 的验证记录见 [`benchmark/2026-07-28-tp-allreduce-push.md`](../../benchmark/2026-07-28-tp-allreduce-push.md)，
+> all-reduce 算法与 race 根因见 [`postmortems/13`](../../postmortems/13-tp-allreduce-pull-notify-race.md)。
 
 ---
 
 ## 2. 构建(devbox)
 
+> ### ⚠ 两条硬性流程要求（均为踩过的坑，见 [`postmortems/14`](../../postmortems/14-image-dirty-worktree-unreproducible-pins.md)）
+>
+> **(a) 推 registry 前必须先在本地验证镜像内容。** 顺序是 build → 本地 `docker run` 核对
+> → 才 `docker push`。最小核对集：
+>
+> ```bash
+> IMG=hub.i.basemind.com/stepcast/vllm-pypto:<tag>
+> docker run --rm --entrypoint bash "$IMG" -lc '
+>   for r in pypto pypto-lib pto-isa PTOAS; do printf "PIN %-10s %s\n" $r $(git -C /workspace/$r rev-parse --short=10 HEAD); done
+>   printf "PIN %-10s %s\n" simpler $(git -C /workspace/pypto/runtime rev-parse --short=10 HEAD)
+>   d=0; for g in /workspace/pypto /workspace/pypto-lib /workspace/pto-isa /workspace/PTOAS /workspace/pypto/runtime; do
+>     n=$(git -C $g status --porcelain | wc -l); [ "$n" != 0 ] && { echo "  DIRTY $g ($n)"; d=1; }; done
+>   [ $d = 0 ] && echo WORKTREE_CLEAN=PASS || echo WORKTREE_CLEAN=FAIL'
+> ```
+>
+> 五个 pin 必须与 spec 逐字一致，**且每个仓的工作树必须 clean**——工作树带未提交改动会造成
+> "pin 相同但内容不同"，验证结论无法按 pin 复现。`img_regress.sh` 已加
+> `IMAGE_WORKTREE_CLEAN_AUDIT` 把这两项固化成 gate。
+>
+> **(b) simpler(runtime) 的 pin 只能靠 pypto 的 submodule gitlink，不能靠 Dockerfile 里
+> 显式 checkout。** Dockerfile 里的 `git fetch + checkout ${SIMPLER_COMMIT}` 在更早的 layer；
+> 后面 `pip install -e ${WS}/pypto` / `build_runtimes` 会跑 `git submodule update`，把 runtime
+> **切回 gitlink**（镜像内 reflog 可见 `216e7632 → 8459d60f → 216e7632`）。所以要换 simpler
+> 版本，**必须在 `csy0225/pypto` 提一个 gitlink bump**（`git update-index --cacheinfo
+> 160000,<sha>,runtime`）并把 `PYPTO_COMMIT` 一起前进；spec 里的 `SIMPLER_COMMIT` 只作断言与文档用途。
+
 ```bash
 cd deployment/docker
 # 每次构建的 pins+tag 在一个 spec 文件里(builds/<tag>.env),配方共用单一 Dockerfile。
 GH=/data/chensiyu/secrets/github.env GL=/data/chensiyu/secrets/gitlab.env \
-bash build.sh builds/stepfun-develop-20260726-step3p5-only.env
-docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5-only
+bash build.sh builds/stepfun-develop-20260729-allreduce-push.env
+# ⚠ 先做 §2(a) 的本地核对，PASS 之后才 push
+docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push
 ```
 
 - `build.sh <spec>` 读 spec 里的 pins,以 `--build-arg` 传进 Dockerfile,`-t` 用 `IMAGE_TAG`。
@@ -88,7 +113,7 @@ docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step
 
 ```bash
 NC=/mnt/persist/k8s-install/containerd/bin/nerdctl
-IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5-only
+IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push
 CKPT=/data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp   # W8A8 ckpt
 
 # 拉取(base blob 已在 containerd content store, 只下增量)
@@ -318,6 +343,7 @@ deployment/docker/
 |-----------|------|----------------------------------------------------------|-------------|
 | `stepfun-develop-20260723` | 2026-07-23 | `8af501fc` / `4c48215b` / `ecb6c303` / `72ada0a1` / `36957c6b` / `v0.45` | 冒烟 PASS + 整网 decode `6127→303` / step2→`6127`(与 vanilla 逐 token 一致)✅ |
 | `stepfun-develop-20260724` | 2026-07-24 | `ca21ab5f` / `fd26b1be` / `ecb6c303` / `fc8c6cae` / `216e7632` / `v0.50` | 合并 origin/main + IPC 权重 interior 指针 provenance 修复（解 `submit_next_level child_memory` 卡点）。冒烟 PASS(ptoas 0.50) + 整网 8 步 decode `6127→303→1207→6127`(与 live vanilla 逐 token 一致)✅ |
+| `stepfun-develop-20260729-allreduce-push` | 2026-07-29 | `6933b1aa` / `cfbdcce8` / `ecb6c303` / `fc8c6cae` / `8459d60f` / `v0.50` | **当前发布**。registry digest `sha256:7924925f4b281…`（config `sha256:5402e07ba0d19…`）；PERF-C4 TP all-reduce → reduce-scatter + push all-gather，simpler span-aware provenance 入库。0162 immutable-image 回归：audit 5 pin 一致 + `IMAGE_GIT_CREDENTIAL_AUDIT` / `IMAGE_WORKTREE_CLEAN_AUDIT` / `CANONICAL_ONLY_AUDIT` / `ALLREDUCE_PUSH_PRESENT` 全 PASS；smoke PASS；整网 CI `rc=0` 198.3 s，6 项 check 全 true（`tokens_exact` / `eight_steps` / `result_clean` / `pypto_hidden_only` / `step0_hidden_saved` / `process_rc_zero`），token `303,1207,19384,872,428,6127,4231,2636`；`hidden_tp_spread` 在 ci/main + rep1/rep2/rep3 共 **4×8 = 32 步全 `0.0`**；ITL p50 `65.942 ms`(ctx=1024) / `66.455 ms`(ctx=4096) |
 | `stepfun-develop-20260726-step3p5-only` | 2026-07-26 | `ca21ab5f` / `53eb7212` / `ecb6c303` / `fc8c6cae` / `216e7632` / `v0.50` | registry digest `sha256:99b2b971…`（config `sha256:d2964610…`）；0162 credential/symbol/ldd audit、smoke、unit `136 passed/4 skipped`、contract `15 passed`；唯一 program=`whole_decode_step3p5`；N=256 raw `240/256=93.75%`，与清理前 canonical token/hidden `256/256` exact、`max_abs_diff=0`、TP spread `0`，step127/128/255 PASS |
 
 ## Pin 依据
