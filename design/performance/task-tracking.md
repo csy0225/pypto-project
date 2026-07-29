@@ -36,7 +36,7 @@ producer → 数学变换/quant/route-map → transport/window
 ### Track A — 可观测性
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| A1 | whole-net baseline + DFX 采集 | P0 | ✅ | claude | — | 新增多步 report/per-layer hidden/TP spread/finite 检查；逐层 DFX：ctx≈1 下 routed-expert 占 90.7%（PMU cube_int8 88.6%）；⚠ **该占比只适用短 context** —— ctx=65536 实测为 attention 占 span 97.9%（`full_softmax` 93.9%）、`tp_all_reduce` 1.84%、routed expert busy 0.99%，见 benchmark/2026-07-24 与 benchmark/2026-07-29 | 2026-07-26 |
+| A1 | whole-net baseline + DFX 采集 | P0 | ✅ | claude | — | 新增多步 report/per-layer hidden/TP spread/finite 检查；逐层 DFX：ctx≈1 下 routed-expert 占 90.7%（PMU cube_int8 88.6%）；⚠ **该占比只适用短 context** —— ctx=65536 实测 `tp_all_reduce` 仅占 span 1.84%、routed expert busy 0.99%（C/D/F 系对 64k 延迟均低 ROI）；attention 的 97.9% 含插桩放大不可当延迟占比，见 benchmark/2026-07-24 与 benchmark/2026-07-29 §1.6 | 2026-07-26 |
 
 ### Track B — Mega-kernel 结构
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
@@ -134,7 +134,7 @@ C/D/G 产品修复与最终镜像 Main 验证已收口；N=256 raw vanilla 仍�
 | 2026-07-27 | 方法论 | 禁止局部shape/name比较；所有“step3p5独有/必须保留”判断改为producer→数学变换→transport/window→consumer→rounding/reduction→lifetime端到端审计 | 差异统一分为能力/算法、数学语义、layout/shape、host/allocator集成、backend/profile workaround；任务描述先与current source对账 |
 | 2026-07-27 | C/D/G 设备回归 | 0162 镜像、cards 8-15、canonical `whole_decode_step3p5`：clean active-batch=2/8/16 单次通过；clean active-batch=1 复现 `output_token=6127`、TP spread `4.203125`，`N1_DFX=dep` 旧产物也异常；norm extent=2 实验恢复 spread=0 但 token 仍错误，已回退 | DFX 不是唯一根因；不能把 batch=2/8/16 泛化为全部动态 batch；C/D source/compile/lowered 仍保持 DeepSeek-first |
 | 2026-07-28 | C4 | ✅ TP all-reduce 换 reduce-scatter + **push** all-gather。**修正 03 文档 §5**：其 twophase_par 结论来自独立微基准，pull 形式 all-gather 落整网导致 8 卡 `hidden_tp_spread` 2~58；根因=pull-after-remote-notify 跨方向握手无序（与 §5 判 ring 死刑同一上游缺口），改 push 后归零 | 回归=whole-network CI PASS + 3×8 step 全 `0.0`；顺带修掉 `dense_mlp.py` 与 2 处 MoE shared-expert 丢弃 `tp_all_reduce` 返回值（违反 dev-constraints §1.1 alias/ownership）|
-| 2026-07-29 | A1/C4 | ✅ 发布镜像 64k 实测落档：ITL 曲线(1024→65536 只涨 18.8%，64k p50 83.3ms) + active_batch 扫描(bs≤8 OK，bs=16 撞 device HBM) + DFX 拆解。**优化方向修正**：64k 下 `full_softmax` 占 span 93.9%，`tp_all_reduce` 仅 1.84%、routed expert busy 0.99% —— 0724 的「C 系通信优先」结论只适用 ctx≈1（那次 `--steps 1`，KV 池开到 64k 但 decode 位置在 ctx≈1） | benchmark/2026-07-29-release-image-64k-dfx-itl.md + data/2026-07-29_release_image_64k/；下一个 64k 优化目标 = full_softmax，非 all-reduce/expert |
+| 2026-07-29 | A1/C4 | ✅ 发布镜像 64k 实测落档：ITL 曲线(1024→65536 只涨 18.8%，64k p50 83.3ms) + active_batch 扫描(bs≤8 OK，bs=16 撞 device HBM) + DFX 拆解。**优化方向修正**：0724 的「C 系通信优先」只适用 ctx≈1（那次 `--steps 1`，KV 池开到 64k 但 decode 位置在 ctx≈1）；64k 实测 `tp_all_reduce` 1.84% span、routed expert busy 0.99%，C 与 D/F 系对 64k 延迟均已低 ROI。**但下一个目标尚未确定**：ITL 曲线约束住 context-dependent 部分 ≤16%，≈70ms 固定 floor 的构成被插桩掩盖（span 膨胀 5.21×，attention 占 56% task 数被放大） | benchmark/2026-07-29-release-image-64k-dfx-itl.md + data/2026-07-29_release_image_64k/；下一步 = 同镜像 ctx=1024 vs 65536 的 DFX A/B 相减，拆开 70ms floor 后再定优化目标 |
 | 2026-07-27 | C/D/G 约束清理 | canonical 注释改为 V4-Flash-style shared EP window + epoch lineage；512B 仅 stacked/reused control slot 的 step3p5 backend/profile 隔离，不是通用 DeepSeek signal ABI；未改 TP all-reduce、未恢复 pull | 旧 pull 只作历史回归基线；按 source/compile/lowered/device/runtime DAG 分级，不因 probe 编译越级 DONE |
 
 

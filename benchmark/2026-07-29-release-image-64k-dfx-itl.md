@@ -7,7 +7,7 @@
 | **机器** | gpu-a910x-0162，cards 8–15（0–7 为 vanilla oracle，未动） |
 | **被测** | `models.step3p5.decode_fwd:whole_decode_step3p5`（45 层 → hidden，**无 lm_head**），TP=8、W8A8 |
 | **工作点** | `--num-blocks 512`、ctx=65536、active_batch=1（另有 batch 扫描见 §2.2） |
-| **KV** | harness 的 **dummy KV**（非 vLLM device-KV）——见 §3 口径边界 |
+| **KV** | `WholeDecodeHolder(kv_ipc=True)` —— **真 device KV via IPC**，`block_table` 在 `--num-blocks 512` 下寻址满 64k，attention 真实遍历 64k KV；**KV 内容未 prefill**（attention 计算量与 KV 内容无关） |
 | **artifacts** | 0162 `/mnt/persist/chensiyu/workspace/benchmark/2026-07-29-v3-64k/`（1.3 GB，含 8 rank swimlane/pmu/scope）；rollup CSV 在 [`data/2026-07-29_release_image_64k/`](data/2026-07-29_release_image_64k) |
 
 ---
@@ -30,7 +30,7 @@
 > 并额外落盘，所以 instrumented span ≈ 真实单步的 5 倍。**同一工作点未插桩的真实 ITL 是
 > `83.3 ms`（见第二部分）**。DFX 只用来看**占比**，绝对值一律以第二部分为准。
 
-## 1.2 按 stage 拆（**两个口径结论一致**）
+## 1.2 按 stage 拆（⚠ 占比读法见 §1.6，**不能直接当延迟占比**）
 
 `wall` = union-of-intervals（时间轴被占用的比例，映射延迟）；`busy` = 各核 busy 求和（映射算力）。
 
@@ -46,7 +46,7 @@
 | MoE EP comm | 1.457 | 0.33% | 7.928 | 0.74% | 162 |
 | rmsnorm | 1.371 | 0.32% | 2.008 | 0.19% | 70 |
 
-（wall 列相加 > 100%：不同 stage 在不同核上并发，各自的 union 会重叠。）
+（wall 列相加 > 100%：不同 stage 在不同核上并发，各自的 union 会重叠。**attention 的份额被插桩放大**，见 §1.6(b)。）
 
 ## 1.3 Top kernel
 
@@ -88,30 +88,59 @@
 `dropped=0`、`fatal=false`。**ring heap 只剩约 20% 余量**是本次唯一偏紧的资源；
 task window / dep pool / tensormap 都在 1% 量级，不是瓶颈。
 
-## 1.6 结论：64k 下的优化优先级与 0724 相反
+## 1.6 怎么读上面的占比（**不能直接当延迟占比**）
+
+### (a) 0724 的占比是 ctx≈1 的，不适用 64k
 
 [`2026-07-24-step3p5-decode-perlayer-dfx.md`](2026-07-24-step3p5-decode-perlayer-dfx.md) 的结论是
 「wall 口径 `tp_all_reduce` 占 74.1%、attention wall+busy 均 <1%、优先攻 C 系通信」。
-**本次在真实 ctx=65536 下测得的是反过来的**：
+在真实 ctx=65536 下重测，**顺序完全反过来**：
 
 | | 0724（`--steps 1`，实际 ctx≈1） | 本次（ctx=65536） |
 |---|---|---|
 | `tp_all_reduce` wall | **74.1%** | **1.84%** |
-| attention wall | **<1%** | **97.89%**（`full_softmax` 单个 93.94%） |
+| attention wall | **<1%** | 97.89% |
 | routed expert busy | **90.7%** | 0.99% |
 
-**原因**：0724 那次用 `--steps 1`，`--num-blocks 512` 只是把 KV 池开到 64k 容量，
+**原因**：0724 用 `--steps 1`，`--num-blocks 512` 只把 KV **池容量**开到 64k，
 **实际 decode 位置在 ctx≈1**，attention 几乎不干活，于是 MoE/通信显得占满。
-attention 的工作量随 context 线性增长，到 64k 就压倒一切。
-所以 0724 的「C 系优先、attention 低 ROI」**只适用于短 context**，不能当作 64k 的指导。
+所以 0724 的「C 系优先、attention 低 ROI」**只适用短 context**。
+这一条与插桩无关（两边都是插桩后的 span 占比），可以放心引用。
 
-> **次要混淆项**：两次采集镜像不同（`20260724` vs 本发布镜像），中间落了 C/D/G + C4。
-> 但 attention 随 context 线性增长是结构性的，ctx 是主因；要彻底坐实，可在**同一镜像**上
-> 做 `ctx=1` vs `ctx=65536` 的 A/B。
+### (b) ⚠ 但 attention 的 97.89% 被插桩放大了，**不等于占延迟 97.89%**
 
-**因此 64k 的下一个优化目标是 `full_softmax`**（占 span 93.9%、5281 次、平均 93 µs），
-而不是 all-reduce 或 routed expert。C4 已经把 all-reduce 从 mesh 降到 reduce-scatter+push，
-但它在 64k 只值 1.84% span —— 天花板已经很低。
+拿 §2.1 的 ITL 曲线做一致性检查，会发现矛盾：
+
+- 若 attention 真占 64k 实际延迟的 97.89%（= 81.8 ms），那 ctx=1024 时 attention 只剩
+  ≈1.28 ms，整步应当 ≈3 ms；
+- 但 ctx=1024 实测是 **70.2 ms**。**差 23 倍，说明 97.89% 不能当延迟占比读。**
+
+原因是 instrumented span `435.205 ms` 是真实单步的 **5.21×**，而 **attention 占了全部 task 数的
+56.1%（17697/31568）**——per-task 的打点开销按 task 数分摊，task 最多的 stage 吃到的插桩放大
+也最多。所以插桩后的 span 占比对 attention 系统性偏高。
+
+### (c) 现在能确定和不能确定的
+
+**能确定**：
+- 64k 单步 `83.5 ms` 中，**随 context 变化的部分 ≤13.3 ms（16%）**，其余 **≈70 ms（84%）
+  与 context 无关**（§2.1 的硬约束）。
+- `tp_all_reduce` 在 64k 已经很小（span 1.84% / busy 2.33%），**C 系继续优化的天花板很低**。
+- routed expert 在 64k 也很小（busy 0.99%）——**D/F 系对 64k 单 token 延迟同样低 ROI**。
+- `full_softmax` 是**单个 kernel 里 busy 最大的**（46.11%，5281 次 × 93 µs）；busy 对 span
+  膨胀不敏感（是各核 busy 求和），所以它确实是最大的单点消耗者，只是**份额没到 93.9%**。
+
+**不能确定**：那 **≈70 ms 的固定 floor 由什么构成**。当前这份 DFX 回答不了——插桩开销
+本身就占了 span 的 4/5，把真实结构盖住了。
+
+**下一步该怎么测**（而不是直接开工优化）：
+1. **同一镜像做 `ctx=1024` vs `ctx=65536` 的 DFX A/B**：两次插桩开销相当，**相减**即可把
+   context-dependent 部分（attention）与固定 floor 分离，不受插桩污染。
+2. 固定 floor 若确认是 host↔device glue（`holder.run()` 含 `[8,16,4096]` D2H + metadata/python），
+   那它属于集成层而非 kernel，优化路径完全不同。§3.1 显示这个 floor 从 0723 的 ≈635 ms 塌到
+   ≈70 ms，**说明它历史上就是主项、且是可以被压下去的**。
+
+> 结论一句话：**先把那 70 ms 的 floor 拆开，再决定动谁**。
+> 「下一步优化 `full_softmax`」是当前数据下最强的候选，但**尚未被证明**是延迟主项。
 
 ---
 
@@ -129,14 +158,17 @@ attention 的工作量随 context 线性增长，到 64k 就压倒一切。
 | **65536** | **83.349 ms** | 83.529 ms | 84.658 ms | 82.902 ms |
 
 数据：[`itl_curve_bs1.csv`](data/2026-07-29_release_image_64k/itl_curve_bs1.csv)。
-1024→65536（context ×64）只涨 **18.8%** —— 单步仍由 context 无关的固定开销主导，
-与 §1.5 的低核占用一致（延迟/依赖受限，不是算力受限）。
+
+**这条曲线给出一个硬约束**：context ×64（1024→65536）只涨 `+13.3 ms`（mean 70.196→83.529，
++18.8%）。attention 的工作量随 context 线性增长，所以**随 context 变化的那部分最多只占 64k
+单步的 16.0%**；剩下 **≈70 ms（84%）是与 context 无关的固定开销**。
+这一条会在 §1.6 用来校正 DFX 的占比读数。
 
 ## 2.2 active_batch 扫描（ctx=65536）
 
 每行各占自己的 paged sequence，所以 `--num-blocks = 128 × active_batch`。
 
-| active_batch | num_blocks | dummy KV(K+V)/rank | p50 | mean | p99 |
+| active_batch | num_blocks | KV pool(K+V)/rank | p50 | mean | p99 |
 |---|---|---|---|---|---|
 | 1 | 512 | 1.45 GiB | 84.141 ms | 84.125 ms | 84.327 ms |
 | 2 | 1024 | 2.85 GiB | 87.754 ms | 87.565 ms | 87.818 ms |
@@ -160,17 +192,46 @@ attention 的工作量随 context 线性增长，到 64k 就压倒一切。
 ## 3. 口径边界（引用本文数字前必读）
 
 1. **无 lm_head**：被测是 45 层 → hidden。
-2. **dummy KV，非 vLLM device-KV**：KV 由 harness 零填充构造，不是在线 paged KV。
-3. **与 0723 的 `≈590 ms/step` 差约 7 倍且基准未对齐**。0723 记的是
-   「64k device-KV ≈590 ms raw `rt.run`，含 lm_head」，本文是 83 ms hidden-only + dummy KV。
-   候选差异（**均未验证**）：device-KV vs dummy-KV、含/不含 lm_head、
-   期间落地的 C/D/G + C4。**在对齐之前，两个数字不得互为 before/after 引用。**
-   注：0723 那份 benchmark 文档（`2026-07-23-step3p5-decode-64k-itl.md`）在本仓中不存在，
-   只有其他文档对它的引用 —— 这条溯源本身也是待补项。
-4. **DFX 的 435 ms 不是延迟**，见 §1.1。
-5. 本文全部数据为**单侧实测**，不是与 baseline 镜像的 A/B。C4 的 A/B 只在
+2. **KV 内容未 prefill**：KV 内存是真的（`kv_ipc=True`，block_table 寻址满 64k），
+   但内容不是真实 prefill 出来的。attention 计算量与 KV 内容无关，所以对计时无影响；
+   但**不能**据此声称在线 serving 精度。
+3. **与 0723 记录的 `654 ms/step` 是同口径可比的**（见 §3.1）。
+4. **与 `≈590 ms raw rt.run` 不同口径**：那个数是 `..._single_chip`（**含 lm_head**）+
+   只计 raw `rt.run()`，与本文 hidden-only + `holder.run()`（含 host glue）不可直接比。
+   且其来源文档 `2026-07-23-step3p5-decode-64k-itl.md` **在本仓中不存在**，
+   只有其他文档对它的引用 —— 溯源是待补项。
+5. **DFX 的 435 ms 不是延迟**，见 §1.1；**DFX 的占比也不能直接当延迟占比**，见 §1.6。
+6. 本文全部数据为**单侧实测**，不是与 baseline 镜像的 A/B。C4 的 A/B 只在
    ctx ≤ 4096 做过（[`2026-07-28-tp-allreduce-push.md`](2026-07-28-tp-allreduce-push.md) §2），
-   **64k A/B 仍未采**。
+   **64k A/B 仍未采** —— 但 §3.1 说明为什么现在很值得采。
+
+## 3.1 与 0723 记录的 `654 ms/step` 对比：**同口径，floor 塌了 7.9×**
+
+[`deployment/docker/README.md`](../deployment/docker/README.md) §6 记录的 2026-07-23 实测与本文
+**用的是同一个 harness、同一批 flag、同一台机器、同样 8 卡**：
+`_stage_main_hidden_only --num-blocks 512 --itl-context-lens … --itl-iters 20 --itl-warmup 3`，
+holder 都是 `kv_ipc=True` + hidden-only，计时都是 `holder.run()`。**唯一变量是代码。**
+
+| context | 2026-07-23 (mean) | 本次 (mean) | 倍数 |
+|---|---|---|---|
+| 1024 | 635.3 ms | 70.196 ms | 9.05× |
+| 32768 | 646.7 ms | 77.459 ms | 8.35× |
+| **65536** | **654.0 ms** | **83.529 ms** | **7.83×** |
+| 1k→64k 增量 | **+18.7 ms** | **+13.3 ms** | 相当 |
+
+**关键观察：随 context 增长的那部分（+18.7 vs +13.3 ms）两次差不多，塌掉的是与 context
+无关的固定 floor（约 635 → 70 ms）。** 所以这 7.9× 不是 attention/KV 变快，而是**每步的固定
+开销消失了** —— 与期间落地的 B2 loop-form Main、C/D/G、C4 这类结构性改动相符。
+
+⚠ **这是两次不同代码的观测，不是受控 A/B**，不能把 7.9× 归给某一个具体 commit。
+要归因就跑 §2b：拿 `stepfun-develop-20260726-step3p5-only` 镜像用同一条 ITL 命令测一遍。
+**（因此把 §2b 的预期从"C4 收益 <1%"上调 —— 那条只说 C4 自己；0726→本发布之间还含
+C/D/G，A/B 会一并显现，值得采。）**
+
+同时，0723 那份数据得出的「1k→64k 仅 +19 ms → 整网 decode **计算受限**，非 attention/KV 受限」
+在**结论层面已被本次 DFX 推翻**：64k 下 attention 占 device span 97.9%。
+「近平坦」是对的（+13 ms），但把平坦解释成"计算受限、attention 不重要"是错的 ——
+真实原因是当时有一个巨大的、与 context 无关的固定开销把 attention 的增长淹没了。
 
 ## 4. 复现
 

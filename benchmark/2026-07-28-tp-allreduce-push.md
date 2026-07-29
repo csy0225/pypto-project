@@ -47,8 +47,8 @@ vs `stepfun-develop-20260729-allreduce-push`（pypto-lib `cfbdcce8`）。
 发布镜像在 ctx=65536 的 ITL 曲线、active_batch 扫描（bs≤8 可跑、bs=16 撞 device HBM）
 和 DFX 逐 kernel 拆解，见独立文档
 [`2026-07-29-release-image-64k-dfx-itl.md`](2026-07-29-release-image-64k-dfx-itl.md)。
-**那些是单侧实测，不是本文的 A/B。** 关键一条：64k 下 `full_softmax` 占 span 93.9%，
-而本项优化的 `tp_all_reduce` 只占 1.84% —— C4 在 64k 的天花板本就很低。
+**那些是单侧实测，不是本文的 A/B。** 与本项相关的一条：`tp_all_reduce` 在 ctx=65536
+只占 device span **1.84%**（busy 2.33%）—— **C4 在 64k 的天花板本就很低**。
 
 ## 3. 8-step 真实 decode 的 per-step wallclock（旁证，step 1–7 均值）
 

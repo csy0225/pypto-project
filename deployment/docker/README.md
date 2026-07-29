@@ -190,110 +190,37 @@ sudo $NC run --rm --net host --security-opt apparmor=unconfined \
 
 **canonical 金标准**:token `6127` → argmax `303`。
 
-**2026-07-23 0162 实测**(整网 decode 逐步):
+**实测（本发布镜像，2026-07-29，45 层 hidden-only decode，W8A8，TP=8，active_batch=1）**：
 
-| step | input | pypto 输出 | 说明 |
-|------|-------|-----------|------|
-| 0 | 6127 | **303** | canonical 金标准 ✅ |
-| 1 | 303 | 1207 | ✅ |
-| 2 | 1207 | **6127** | 与**在跑的 8000 vanilla vLLM** 逐 token 一致(见下) |
-
-`hidden_finite=true`、TP `spread=0.0`(确定性)。**结论:镜像内 pypto 整网 decode 与
-vanilla vLLM 逐 token 对齐,精度正常。**
-
-> ⚠ **run_whole_network_ci 会在 step2 报 FAIL**:harness 里 `DEFAULT_ORACLE_TOKENS[2]=19384`
-> 是**过时常量**(vanilla 的 #2 "题目")。直接查在跑的 8000 vanilla oracle:
-> `curl .../v1/completions -d '{"prompt":[6127,303,1207],"max_tokens":1,"temperature":0}'`
-> → 返回 **"北京"(token 6127)**,与 pypto 一致。即 FAIL 是 stale-oracle,不是精度问题。
-> 真正的门禁是下面的 live A/B。
-
-**live 逐 token A/B(历史 vanilla raw ≥95% 门禁, 替代 stale 常量)**:`tests/step3p5/ci/run_live_precision_ab.sh`
-(见 `tests/step3p5/ci/LIVE_PRECISION_AB.md`)。两段式:
-oracle-gen 在 vanilla 容器里跑(pypto `.venv311` 无 transformers),pypto teacher-forced 在本镜像跑。
-
-### 5.1 当前 B2 的 256-step 判定（历史 baseline 对照）
-
-0162 在固定 0724 镜像、相同 checkpoint、vanilla cards 0-7 和 current
-cards 8-15 上完成了历史 `N=256` teacher-forced A/B：
-
-| 指标 | 结果 |
-|------|------|
-| historical opt vs baseline token | `256/256` exact |
-| historical opt vs baseline hidden | `256/256` exact |
-| historical opt/baseline max hidden diff | `0.0` |
-| historical opt/baseline TP spread | `0.0` |
-| 两者对同一 vanilla oracle | 各 `240/256 = 93.75%` |
-
-因此历史 **B2 replacement regression 通过**，但历史 vanilla raw `>=95%`
-门禁仍未通过；不得把 `93.75%` 写成无条件 vanilla precision PASS。
-canonical-only 发布镜像的当前收口结果见上方 pin、登记表和
-`pypto-image-verify` skill：清理前后 token/hidden `256/256` exact。
-这两个 gate 必须在发布报告中分开。
-
----
-
-## 6. vLLM serving(Track-B 后端 + MTP3)
-
-镜像已把 vLLM 侧 Track-B 补丁覆盖到 base 的 `/vllm-workspace/vllm`。启动 MTP3 speculative
-serving(接受率从 `/metrics` 读):
-
-```bash
-sudo $NC run -d --name vllm-pypto-serve --net host --ipc host --privileged \
-  --security-opt apparmor=unconfined \
-  $DEVS --device /dev/davinci_manager --device /dev/hisi_hdc --device /dev/devmm_svm \
-  -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro -v "$CKPT":"$CKPT":ro \
-  --shm-size 32g "$IMG" bash -lc "
-    vllm serve $CKPT \
-      --speculative-config '{\"method\":\"step3p5_mtp\",\"num_speculative_tokens\":3,\"enable_multi_layers_mtp\":true}' \
-      --enforce-eager --port 8001"
-# 接受率: curl -s http://127.0.0.1:8001/metrics | grep -i spec_decode
-```
-
-> `--enforce-eager` 必需(pypto kernel 与 vLLM aclgraph 互斥)。`--speculative-config` 用连字符。
-> 注:pypto 作为 live 主网 backend(KV bridge + 动态 batch 映射)仍是 Phase 20 在建项;
-> 当前镜像 serving 走 vanilla + MTP3 路径,pypto 整网 decode 走 §5 的 offline canonical。
-
----
-
-## 6.5 decode ITL 性能(64k context)
-
-harness 的 perf-only 模式(pypto-lib ≥ `7cb2a6b3`):固定 context 长度 pin metadata 到
-`seq_len=L`,计每步 `holder.run()` 耗时。attention 计算/带宽与 KV *内容* 无关,故无需
-prefill 即可测大 context 的稳态 ITL;**KV-IPC 全程开启**(holder `kv_ipc=True`,`block_table`
-在 `--num-blocks 512` 下可寻址到 512 块 → 64k),所以 attention 真实遍历 64k KV。
-
-```bash
-# 当前镜像 bake 的 pypto-lib `53eb7212` 已包含 ITL harness。
-sudo $NC run --rm --net host --ipc host --privileged --security-opt apparmor=unconfined \
-  $DEVS --device /dev/davinci_manager --device /dev/hisi_hdc --device /dev/devmm_svm \
-  -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro -v "$CKPT":"$CKPT":ro \
-  -v /data/chensiyu/itl_out:/tmp/itl --shm-size 32g \
-  "$IMG" bash -lc "cd /workspace/vllm-pypto && python -m tests.step3p5.harnesses._stage_main_hidden_only \
-    --device 8,9,10,11,12,13,14,15 --ckpt $CKPT --out /tmp/itl --num-blocks 512 \
-    --itl-context-lens 1024,4096,16384,32768,65536 --itl-iters 20 --itl-warmup 3"
-```
-
-**2026-07-23 0162 实测**(整网 45 层 hidden-only decode,W8A8,TP=8,active batch=1):
-
-| context | ITL mean (ms) | p50 | min | max |
+| context | ITL p50 | mean | p99 | min |
 |--------:|:-:|:-:|:-:|:-:|
-| 1024 | 635.3 | 644.4 | 617.4 | 648.6 |
-| 4096 | 639.3 | 645.3 | 617.5 | 652.3 |
-| 16384 | 640.0 | 640.3 | 620.7 | 658.2 |
-| 32768 | 646.7 | 651.2 | 624.5 | 688.7 |
-| **65536** | **654.0** | 658.9 | 632.1 | 677.6 |
+| 1024 | 70.177 | 70.196 | 70.597 | 69.898 |
+| 8192 | 71.450 | 71.549 | 72.699 | 71.167 |
+| 32768 | 77.522 | 77.459 | 78.116 | 77.043 |
+| **65536** | **83.349** | 83.529 | 84.658 | 82.902 |
 
-**结论:64k decode ITL ≈ 654 ms/step;1k→64k 仅 +19ms,整网 decode 计算受限
-(45 层 W8A8 MLP/MoE),非 attention/KV 受限。** 报告 `itl_report.json`。
-> 注:这是**未做性能调优**的整网 baseline(Phase 22 才做 tuning),数值仅作当前参考。
+**64k decode ITL ≈ 83 ms/step；1k→64k 只涨 13.3 ms（+18.8%）。**
+active_batch 扫描（同工作点）：bs2 `87.8` / bs4 `104.0` / bs8 `145.1` ms，**bs16 撞 device HBM**。
 
-> **与权威 benchmark 的口径差异**(见 [`../../benchmark/2026-07-23-step3p5-decode-64k-itl.md`](../../benchmark/2026-07-23-step3p5-decode-64k-itl.md),64k device-KV ≈ **590 ms/step**):
-> 二者都是 device-KV / TP=8 / 64k,但**被测程序与计时口径不同**,故本表偏高 ~60ms:
-> - **程序**:本表 = `..._hidden_only`(45 层→hidden,**无 lm_head**);benchmark = `..._single_chip`(**含 lm_head→logits**)。
-> - **计时**:本表用 `_stage_main_hidden_only` 的 `holder.run()`(含每步 host↔device glue:`[8,16,4096]` hidden 的 D2H + metadata/python 开销);benchmark 的 `dt` **只包 raw `rt.run()`**(纯 device 前向)。
-> - **步数**:本表 20 步(3 warmup);benchmark 255 步。floor 差(本 min 632 vs bench min 500)证实是系统性口径差,非噪声。
-> **绝对基线以 benchmark 的 590 ms(raw `rt.run`)为准**;本表的价值是**相对 context 缩放**(近平坦→计算受限),
-> 以及贴近集成层的 `holder.run()` 口径(vLLM 走 holder/sidecar 时会付这部分 host glue)。
+> **⚠ `--shm-size` 要跟着 batch 调**：dummy KV 池按 host 共享内存分配，`--num-blocks`
+> 与 active_batch 同步放大（bs=8/nb=4096 时 11.29 GiB/rank × 8 卡 ≈ **90 GiB**）。
+> 上面示例的 `--shm-size 32g` 只够 bs=1（≈11.6 GiB）；跑 bs≥2 的 64k 要显式加大
+> （实测用 `--shm-size 400g`）。bs=16 即使 shm 给够也会在 device HBM 上 OOM。
+
+> **完整数据 + DFX 逐 kernel 拆解见
+> [`../../benchmark/2026-07-29-release-image-64k-dfx-itl.md`](../../benchmark/2026-07-29-release-image-64k-dfx-itl.md)。**
+> 那里也给出了占比的正确读法（DFX 插桩 span 是真实单步的 5.21×，份额不能直接当延迟占比）。
+
+> **⚠ 历史数据已作废**：本节此前记录的 2026-07-23 实测（64k ≈ **654 ms/step**）以及由它得出的
+> 「1k→64k 仅 +19 ms → 整网 decode **计算受限**，非 attention/KV 受限」两条都不再适用：
+> - 绝对值：同一 harness、同一批 flag、同一台机器，654 → 83.5 ms（**7.8×**）。
+>   塌掉的是与 context 无关的固定 floor（≈635 → ≈70 ms），随 context 增长的那部分两次相当
+>   （+18.7 vs +13.3 ms）。归因需要拿旧镜像跑同一条命令做受控 A/B，尚未做。
+> - 结论：「计算受限、attention 不重要」是把"近平坦"误读的结果 —— 真实原因是当时有个巨大的
+>   context 无关开销把 attention 的增长淹没了。
+> 另：该节原先引用的 `benchmark/2026-07-23-step3p5-decode-64k-itl.md`（`≈590 ms` raw `rt.run`，
+> 含 lm_head）**在本仓中并不存在**，溯源是待补项；且它与本表口径不同（含 lm_head + 只计
+> raw `rt.run()`），不可直接比较。
 
 ## 7. 已知坑(都已修进本镜像 / Dockerfile)
 
@@ -351,7 +278,7 @@ deployment/docker/
 |-----------|------|----------------------------------------------------------|-------------|
 | `stepfun-develop-20260723` | 2026-07-23 | `8af501fc` / `4c48215b` / `ecb6c303` / `72ada0a1` / `36957c6b` / `v0.45` | 冒烟 PASS + 整网 decode `6127→303` / step2→`6127`(与 vanilla 逐 token 一致)✅ |
 | `stepfun-develop-20260724` | 2026-07-24 | `ca21ab5f` / `fd26b1be` / `ecb6c303` / `fc8c6cae` / `216e7632` / `v0.50` | 合并 origin/main + IPC 权重 interior 指针 provenance 修复（解 `submit_next_level child_memory` 卡点）。冒烟 PASS(ptoas 0.50) + 整网 8 步 decode `6127→303→1207→6127`(与 live vanilla 逐 token 一致)✅ |
-| `stepfun-develop-20260729-allreduce-push` | 2026-07-29 | `6933b1aa` / `cfbdcce8` / `ecb6c303` / `fc8c6cae` / `8459d60f` / `v0.50` | **当前发布**。registry digest `sha256:7924925f4b281…`（config `sha256:5402e07ba0d19…`）；PERF-C4 TP all-reduce → reduce-scatter + push all-gather，simpler span-aware provenance 入库。0162 immutable-image 回归：audit 5 pin 一致 + `IMAGE_GIT_CREDENTIAL_AUDIT` / `IMAGE_WORKTREE_CLEAN_AUDIT` / `CANONICAL_ONLY_AUDIT` / `ALLREDUCE_PUSH_PRESENT` 全 PASS；smoke PASS；整网 CI `rc=0` 198.3 s，6 项 check 全 true（`tokens_exact` / `eight_steps` / `result_clean` / `pypto_hidden_only` / `step0_hidden_saved` / `process_rc_zero`），token `303,1207,19384,872,428,6127,4231,2636`；`hidden_tp_spread` 在 ci/main + rep1/rep2/rep3 共 **4×8 = 32 步全 `0.0`**；ITL p50 `65.942 ms`(ctx=1024) / `66.455 ms`(ctx=4096) |
+| `stepfun-develop-20260729-allreduce-push` | 2026-07-29 | `6933b1aa` / `cfbdcce8` / `ecb6c303` / `fc8c6cae` / `8459d60f` / `v0.50` | **当前发布**。registry digest `sha256:7924925f4b281…`（config `sha256:5402e07ba0d19…`）；PERF-C4 TP all-reduce → reduce-scatter + push all-gather，simpler span-aware provenance 入库。0162 immutable-image 回归：audit 5 pin 一致 + `IMAGE_GIT_CREDENTIAL_AUDIT` / `IMAGE_WORKTREE_CLEAN_AUDIT` / `CANONICAL_ONLY_AUDIT` / `ALLREDUCE_PUSH_PRESENT` 全 PASS；smoke PASS；整网 CI `rc=0` 198.3 s，6 项 check 全 true（`tokens_exact` / `eight_steps` / `result_clean` / `pypto_hidden_only` / `step0_hidden_saved` / `process_rc_zero`），token `303,1207,19384,872,428,6127,4231,2636`；`hidden_tp_spread` 在 ci/main + rep1/rep2/rep3 共 **4×8 = 32 步全 `0.0`**；ITL p50 `65.942 ms`(ctx=1024) / `66.455 ms`(ctx=4096)（`--num-blocks 32`），权威 64k 工作点 `--num-blocks 512` 为 p50 `83.349 ms`，DFX 拆解见 benchmark/2026-07-29 |
 | `stepfun-develop-20260726-step3p5-only` | 2026-07-26 | `ca21ab5f` / `53eb7212` / `ecb6c303` / `fc8c6cae` / `216e7632` / `v0.50` | registry digest `sha256:99b2b971…`（config `sha256:d2964610…`）；0162 credential/symbol/ldd audit、smoke、unit `136 passed/4 skipped`、contract `15 passed`；唯一 program=`whole_decode_step3p5`；N=256 raw `240/256=93.75%`，与清理前 canonical token/hidden `256/256` exact、`max_abs_diff=0`、TP spread `0`，step127/128/255 PASS |
 
 ## Pin 依据

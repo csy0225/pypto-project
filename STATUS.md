@@ -49,10 +49,14 @@
 >
 > 该镜像在 ctx=65536 的实测：ITL p50 **83.349 ms**（active_batch=1，`--num-blocks 512`；
 > 1024→65536 只涨 18.8%），active_batch 扫描 bs≤8 可跑（bs=8 p50 145 ms ≈ 4.6× 吞吐）、
-> **bs=16 撞 device HBM**。DFX 拆解给出一个**改变优化方向**的结论：64k 下
-> `full_softmax` 占 device span **93.9%**，而 `tp_all_reduce` 只占 **1.84%**、routed expert
-> busy 仅 0.99% —— 与 0724 那份 ctx≈1 采集的结论（通信 74% wall）相反。ring heap 峰值
-> 79.9% 是唯一偏紧的 runtime 资源。
+> **bs=16 撞 device HBM**。DFX 给出两条可用结论：① `tp_all_reduce` 在 64k 只占 span
+> **1.84%**、routed expert busy 仅 **0.99%** —— **C 系与 D/F 系对 64k 单 token 延迟都已低 ROI**，
+> 与 0724 那份 ctx≈1 采集的结论（通信 74% wall）相反；② ITL 曲线给出硬约束：context ×64
+> 只涨 13.3 ms，即**随 context 变化的部分 ≤16%，≈70 ms（84%）是与 context 无关的固定 floor**，
+> 而该 floor 的构成当前 DFX 回答不了（插桩开销占了 span 的 4/5）。
+> ⚠ 不要把 DFX 里 attention 的 97.9% 当延迟占比 —— 插桩 span 是真实单步的 5.21×，
+> attention 占 56% task 数因而被系统性放大。下一步是**同镜像 ctx=1024 vs 65536 的 DFX A/B**
+> 相减，把 floor 拆开再决定动谁。ring heap 峰值 79.9% 是唯一偏紧的 runtime 资源。
 >
 > 详见 [`deployment/docker/README.md`](deployment/docker/README.md)、
 > [`benchmark/2026-07-29-release-image-64k-dfx-itl.md`](benchmark/2026-07-29-release-image-64k-dfx-itl.md)、

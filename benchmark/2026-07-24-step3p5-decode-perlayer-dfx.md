@@ -20,7 +20,7 @@ TP=8、W8A8、active batch=1、`--num-blocks 512`、`--steps 1`。
 > | | 本文（ctx≈1） | ctx=65536 实测 |
 > |---|---|---|
 > | `tp_all_reduce` wall | 74.1% | **1.84%** |
-> | attention wall | <1% | **97.89%**（`full_softmax` 单个 93.94%） |
+> | attention wall | <1% | 97.89%（⚠ 含插桩放大，不可当延迟占比——见新文 §1.6(b)） |
 > | routed expert busy | 90.7% | 0.99% |
 >
 > 因此下面 §6 的「降延迟先攻 C 系通信、attention 低 ROI」**不能用于 64k 工作点**。
@@ -29,10 +29,11 @@ TP=8、W8A8、active batch=1、`--num-blocks 512`、`--steps 1`。
 > 另：本文开头把这些占比当成「那 590 ms 摊到哪些 kernel」，这个归因也不成立——
 > 590 ms 是 64k 的数字，而本文的 kernel 分布是 ctx≈1 的。
 
-> 绝对单步延迟以权威 benchmark 为准：[`2026-07-23-step3p5-decode-64k-itl.md`](2026-07-23-step3p5-decode-64k-itl.md)
-> （64k device-KV **≈590 ms/step** raw `rt.run`，含 lm_head）。⚠ 该文档在本仓中**不存在**，
-> 只有其他文档对它的引用；且 `590 ms` 与 2026-07-29 实测的 `83 ms`(hidden-only + dummy KV)
-> 相差约 7 倍、基准未对齐 —— 溯源与对齐都是待补项。
+> 本文成文时引用的「64k device-KV **≈590 ms/step** raw `rt.run`，含 lm_head」出自
+> `2026-07-23-step3p5-decode-64k-itl.md` —— ⚠ **该文档在本仓中不存在**，只有其他文档对它的
+> 引用，溯源是待补项。另：同一 harness 同一批 flag 在 2026-07-29 发布镜像上实测 64k 为
+> **83.5 ms**（hidden-only、`kv_ipc=True`），见
+> [`2026-07-29-release-image-64k-dfx-itl.md`](2026-07-29-release-image-64k-dfx-itl.md) §3.1。
 
 ---
 
