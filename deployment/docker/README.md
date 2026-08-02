@@ -6,7 +6,61 @@ containerd/nerdctl)。**
 
 ---
 
-## 1. 内容与 pin
+## 0. 当前镜像状态（2026-08-02）
+
+最新构建是 **clean canonical candidate，不是正式 release**：
+
+```text
+tag:
+  hub.i.basemind.com/stepcast/vllm-pypto:
+  stepfun-develop-20260802-attn-final-canonical
+
+manifest:
+  sha256:64c573bcf64497da6df0d3d28d7de85dfddde8e2a2a1b70e8bd5123edd51cb9d
+
+config/image ID:
+  sha256:c7f612a2562e932908d2a0d9ffadd1a1bd155c70bff0e82c24be32ef6b9f79ea
+```
+
+pins：
+
+```text
+pypto      defa97c526fec7e8f032dbbfcc39c820add02bf7
+pypto-lib  76d96bdbeac280f12ecf626b1bbd722b9278719e
+pto-isa    ecb6c303f797749f811a494742c3c08156aacabb
+PTOAS      fc8c6caee561914b4fb991dfc8427bb63194269e
+simpler    e2efebcbd190302609c0775d2984f409f5f42c76
+ptoas-bin  v0.50
+vLLM       1b3e538c35999e62b6d24e0651b3a85b7d16c826
+```
+
+镜像内容 audit、smoke、64K ITL、DFX 均 PASS；64K p50 为 `50.563 ms`。但同一
+fresh oracle 的 N=128 三轮均为 `121/128=94.53125%`，低于 `>=95%` raw gate，
+所以当前状态是 **release blocked**。部署/回归时必须按 manifest 核对，不能只看 tag，
+也不能引用 v2 的历史 `123/128` 作为该 clean 镜像的结果。
+
+本轮 immutable 验证只挂载 driver(ro)、checkpoint(ro)、output(rw)，没有宿主源码挂载。
+0162 只使用 cards `0–7`，未操作 cards `8–15` 及 PID `2045390–2045397`。
+
+拉取 candidate（仅用于继续定位/复核，不作为 production rollout）：
+
+```bash
+IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260802-attn-final-canonical
+sudo "$NC" pull "$IMG"
+# 拉取后必须核对 manifest sha256:64c573bcf64497da6df0d3d28d7de85dfddde8e2a2a1b70e8bd5123edd51cb9d
+```
+
+> 本文后续 2026-07-29 镜像段落保留为历史 runbook。当前 pin、tag 和发布判定以本节、
+> [`../version-matrix.md`](../version-matrix.md) 与
+> [`../../benchmark/2026-08-02-step3p5-attention-final.md`](../../benchmark/2026-08-02-step3p5-attention-final.md)
+> 为准。
+
+## 1. 历史 2026-07-29 镜像内容与 pin
+
+> 本节只描述 `stepfun-develop-20260729-allreduce-push` 这一历史组合，保留作
+> 复现/回退 runbook；它不是 2026-08-02 clean canonical candidate 的当前 pin。
+> 当前 candidate 的 pin、digest 和发布判定以 §0、[`../version-matrix.md`](../version-matrix.md)
+> 为准。
 
 - **base**: `hub.i.basemind.com/stepcast/stepcast:0.19.0-081dd47dd175-fbfe288fe1ee-2026.06.09-141938`
   (自带 CANN 8.5.1 + CANN 9.0.0-beta.1 + vLLM 0.19.0 + vllm-ascend + python3.11.14)
@@ -63,7 +117,12 @@ containerd/nerdctl)。**
 
 ---
 
-## 2. 构建(devbox)
+## 2. 构建(devbox；通用流程，示例以当前 candidate 为准)
+
+> 下面的构建流程适用于所有 immutable spec。旧的 2026-07-29 baseline 仍保留在
+> 历史 spec 中；若目标是复现当前 attention candidate，应使用
+> `builds/stepfun-develop-20260802-attn-final-canonical.env`。该 candidate 的
+> raw precision gate 尚未通过，重建/复核不等于正式发布。
 
 > ### ⚠ 两条硬性流程要求（均为踩过的坑，见 [`postmortems/14`](../../postmortems/14-image-dirty-worktree-unreproducible-pins.md)）
 >
@@ -95,9 +154,10 @@ containerd/nerdctl)。**
 cd deployment/docker
 # 每次构建的 pins+tag 在一个 spec 文件里(builds/<tag>.env),配方共用单一 Dockerfile。
 GH=/data/chensiyu/secrets/github.env GL=/data/chensiyu/secrets/gitlab.env \
-bash build.sh builds/stepfun-develop-20260729-allreduce-push.env
+bash build.sh builds/stepfun-develop-20260802-attn-final-canonical.env
 # ⚠ 先做 §2(a) 的本地核对，PASS 之后才 push
-docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push
+# 可以推 candidate tag 供定位/复核，但不得 retag 或 rollout 为 production release。
+docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260802-attn-final-canonical
 ```
 
 - `build.sh <spec>` 读 spec 里的 pins,以 `--build-arg` 传进 Dockerfile,`-t` 用 `IMAGE_TAG`。
@@ -114,13 +174,19 @@ docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allr
 
 ---
 
-## 3. 部署到 0162(containerd / nerdctl)
+## 3. 部署到 0162(containerd / nerdctl；历史 baseline 示例)
+
+> 本节的设备占用和命令是 2026-07-29 baseline 的历史示例（当时使用 cards
+> `8–15`）。2026-08-02 candidate 的 immutable 验证使用 cards `0–7`，且只允许
+> 继续定位/复核，不得据此进行 production rollout；实际部署必须按 §0 的 manifest
+> 重新核对并由设备 owner 分配 cards。
 
 0162 **没有 docker**,用 containerd 自带的 `nerdctl`(路径 `/mnt/persist/k8s-install/containerd/bin/`)。
 0-7 卡通常被 vanilla vLLM oracle(8000)占用,pypto 用 **8-15 卡**。
 
 ```bash
 NC=/mnt/persist/k8s-install/containerd/bin/nerdctl
+# Historical 2026-07-29 baseline; do not use as the current candidate.
 IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push
 CKPT=/data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp   # W8A8 ckpt
 
@@ -175,7 +241,12 @@ sudo $NC run --rm --net host --security-opt apparmor=unconfined \
 
 ---
 
-## 5. 整网精度验证(canonical, 8 卡)
+## 5. 历史 2026-07-29 整网精度与 ITL 记录
+
+> 本节数据属于历史 `stepfun-develop-20260729-*` 镜像，不是当前
+> `attn-final-canonical` 的 N=128 gate 结果。当前 candidate 的精度 blocker、
+> 64K ITL 和 DFX 证据见 §0 及
+> [`../../benchmark/2026-08-02-step3p5-attention-final.md`](../../benchmark/2026-08-02-step3p5-attention-final.md)。
 
 权威 runner:`tests/step3p5/ci/run_whole_network_ci.py`(preflight → Main 45 层 hidden-only
 8-step → MTP45/46/47 → 清理)。用 §3 的 8 卡 run 命令,把最后一行换成:
@@ -278,9 +349,12 @@ deployment/docker/
 |-----------|------|----------------------------------------------------------|-------------|
 | `stepfun-develop-20260723` | 2026-07-23 | `8af501fc` / `4c48215b` / `ecb6c303` / `72ada0a1` / `36957c6b` / `v0.45` | 冒烟 PASS + 整网 decode `6127→303` / step2→`6127`(与 vanilla 逐 token 一致)✅ |
 | `stepfun-develop-20260724` | 2026-07-24 | `ca21ab5f` / `fd26b1be` / `ecb6c303` / `fc8c6cae` / `216e7632` / `v0.50` | 合并 origin/main + IPC 权重 interior 指针 provenance 修复（解 `submit_next_level child_memory` 卡点）。冒烟 PASS(ptoas 0.50) + 整网 8 步 decode `6127→303→1207→6127`(与 live vanilla 逐 token 一致)✅ |
-| `stepfun-develop-20260729-allreduce-push` | 2026-07-29 | `6933b1aa` / `cfbdcce8` / `ecb6c303` / `fc8c6cae` / `8459d60f` / `v0.50` | **当前发布**。registry digest `sha256:7924925f4b281…`（config `sha256:5402e07ba0d19…`）；PERF-C4 TP all-reduce → reduce-scatter + push all-gather，simpler span-aware provenance 入库。0162 immutable-image 回归：audit 5 pin 一致 + `IMAGE_GIT_CREDENTIAL_AUDIT` / `IMAGE_WORKTREE_CLEAN_AUDIT` / `CANONICAL_ONLY_AUDIT` / `ALLREDUCE_PUSH_PRESENT` 全 PASS；smoke PASS；整网 CI `rc=0` 198.3 s，6 项 check 全 true（`tokens_exact` / `eight_steps` / `result_clean` / `pypto_hidden_only` / `step0_hidden_saved` / `process_rc_zero`），token `303,1207,19384,872,428,6127,4231,2636`；`hidden_tp_spread` 在 ci/main + rep1/rep2/rep3 共 **4×8 = 32 步全 `0.0`**；ITL p50 `65.942 ms`(ctx=1024) / `66.455 ms`(ctx=4096)（`--num-blocks 32`），权威 64k 工作点 `--num-blocks 512` 为 p50 `83.349 ms`，DFX 拆解见 benchmark/2026-07-29 |
+| `stepfun-develop-20260729-allreduce-push` | 2026-07-29 | `6933b1aa` / `cfbdcce8` / `ecb6c303` / `fc8c6cae` / `8459d60f` / `v0.50` | **2026-07-29 正式发布基线**。registry digest `sha256:7924925f4b281…`（config `sha256:5402e07ba0d19…`）；PERF-C4 TP all-reduce → reduce-scatter + push all-gather，simpler span-aware provenance 入库。0162 immutable-image 回归：audit 5 pin 一致 + `IMAGE_GIT_CREDENTIAL_AUDIT` / `IMAGE_WORKTREE_CLEAN_AUDIT` / `CANONICAL_ONLY_AUDIT` / `ALLREDUCE_PUSH_PRESENT` 全 PASS；smoke PASS；整网 CI `rc=0` 198.3 s，6 项 check 全 true（`tokens_exact` / `eight_steps` / `result_clean` / `pypto_hidden_only` / `step0_hidden_saved` / `process_rc_zero`），token `303,1207,19384,872,428,6127,4231,2636`；`hidden_tp_spread` 在 ci/main + rep1/rep2/rep3 共 **4×8 = 32 步全 `0.0`**；ITL p50 `65.942 ms`(ctx=1024) / `66.455 ms`(ctx=4096)（`--num-blocks 32`），权威 64k 工作点 `--num-blocks 512` 为 p50 `83.349 ms`，DFX 拆解见 benchmark/2026-07-29 |
 | `stepfun-develop-20260726-step3p5-only` | 2026-07-26 | `ca21ab5f` / `53eb7212` / `ecb6c303` / `fc8c6cae` / `216e7632` / `v0.50` | registry digest `sha256:99b2b971…`（config `sha256:d2964610…`）；0162 credential/symbol/ldd audit、smoke、unit `136 passed/4 skipped`、contract `15 passed`；唯一 program=`whole_decode_step3p5`；N=256 raw `240/256=93.75%`，与清理前 canonical token/hidden `256/256` exact、`max_abs_diff=0`、TP spread `0`，step127/128/255 PASS |
 | `stepfun-develop-20260729-perf-h1` | 2026-07-29 | `1f704616` / `4513007d` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **PERF-H1 device-memset 优化镜像**（perf 上取代 C4 发布，正确性等价）。registry digest `sha256:b4e8c8a457a5…`。在 C4 上前进 pypto→`1f704616`(gitlink→simpler `e2efebcb`)、pypto-lib→`4513007d`(=`cfbdcce8` + ITL `--active-batch` + MTP CI oracle-dir 可配置化)。0162 回归：smoke PASS；整网 CI `ok=true`（Main token `303,1207,19384,872,428,6127,4231,2636` exact + MTP single/batch16 `6178,410,303` exact，`hidden_tp_spread=0`）；N=256 H1 vs C4 **token 256/256 exact**（step127/128/255 含），全步 finite（raw-hidden run-to-run 抖动=C4 push all-reduce 归约顺序，非 H1 回归，H1a-vs-H1b 复跑证实）。**ITL p50(`--num-blocks 512`)：1024 `50.9` / 8192 `52.0` / 32768 `58.0` / 65536 `64.1` ms，较 C4 同工作点降 23–27%**。PMU/scope 与 C4 逐项一致（cube_int8 46.35%，ring heap 79.9%，dropped=0）。benchmark: [`../../benchmark/2026-07-29-perf-h1-image-itl-dfx.md`](../../benchmark/2026-07-29-perf-h1-image-itl-dfx.md)。⚠ MTP CI oracle-wiring 修复 `0f3650c7`(test-only) 为 mount 验证、未 rebuild 烤进本镜像 |
+| `stepfun-develop-20260802-attn-final` | 2026-08-02 | `1f704616` / `76d96bdb` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **v1 失败证据**：缺 `defa97c5` 动态 SPMD codegen 修复，immutable-image compile 报 launch-bound 变量未声明；非 candidate |
+| `stepfun-develop-20260802-attn-final-v2` | 2026-08-02 | `defa97c5` / `76d96bdb` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **v2 非 canonical**：代码可运行，但 image config 仍含旧 CANN 8.5.1 字符串；历史 `123/128` 不得借给 clean 镜像 |
+| `stepfun-develop-20260802-attn-final-canonical` | 2026-08-02 | `defa97c5` / `76d96bdb` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **clean canonical candidate / release blocked**。manifest `sha256:64c573bcf64497da6df0d3d28d7de85dfddde8e2a2a1b70e8bd5123edd51cb9d`，config `sha256:c7f612a2562e932908d2a0d9ffadd1a1bd155c70bff0e82c24be32ef6b9f79ea`；audit/smoke/64K ITL/DFX PASS，p50 `50.563 ms`；fresh-oracle 三轮均 `121/128=94.53125%`，低于 raw gate |
 
 ## Pin 依据
 

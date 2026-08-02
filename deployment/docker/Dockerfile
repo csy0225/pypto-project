@@ -106,6 +106,9 @@ ENV ASCEND_TOOLKIT_HOME=/usr/local/Ascend/cann-9.0.0-beta.1 \
     ASCEND_AICPU_PATH=/usr/local/Ascend/cann-9.0.0-beta.1 \
     ASCEND_OPP_PATH=/usr/local/Ascend/cann-9.0.0-beta.1/opp \
     TOOLCHAIN_HOME=/usr/local/Ascend/cann-9.0.0-beta.1/toolkit
+ENV PATH=${WS}/ptoas-bin/bin:/usr/local/python3.11.14/bin:/usr/local/Ascend/nnal/atb/latest/atb/cxx_abi_1/bin:/usr/local/Ascend/cann-9.0.0-beta.1/bin:/usr/local/Ascend/cann-9.0.0-beta.1/tools/ccec_compiler/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PYTHONPATH=${WS}/vllm-pypto:${WS}/pypto/python:${WS}/pypto/runtime/python:/usr/local/Ascend/cann-9.0.0-beta.1/python/site-packages:/usr/local/Ascend/cann-9.0.0-beta.1/opp/built-in/op_impl/ai_core/tbe \
+    CMAKE_PREFIX_PATH=/usr/local/Ascend/cann-9.0.0-beta.1/toolkit/tools/tikicpulib/lib/cmake:/usr/local/Ascend/cann-9.0.0-beta.1/lib64/cmake
 ENV PYPTO_PROG_BUILD_DIR=/tmp/pypto_build_output
 ENV PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072
 RUN ln -sfn bin/ptoas ${WS}/ptoas-bin/ptoas && \
@@ -118,7 +121,11 @@ RUN ln -sfn bin/ptoas ${WS}/ptoas-bin/ptoas && \
   'export PATH=$WS/ptoas-bin/bin:/usr/local/python3.11.14/bin:$PATH' \
   'export PYTHONPATH=$WS/vllm-pypto:$WS/pypto/python:$WS/pypto/runtime/python:$PYTHONPATH' \
   'export PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072' \
-  > /etc/profile.d/pypto-env.sh
+  > /etc/profile.d/pypto-env.sh; \
+    test ! -e /usr/local/Ascend/cann-8.5.1; \
+    ! env | grep -q '/usr/local/Ascend/cann-8\.5\.1'; \
+    ! grep -Rqs '/usr/local/Ascend/cann-8\.5\.1' \
+        /etc/profile /etc/profile.d /root/.bashrc /root/.profile 2>/dev/null
 
 WORKDIR ${WS}
 COPY pypto-smoke.sh /workspace/pypto-smoke.sh

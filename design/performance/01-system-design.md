@@ -1,5 +1,15 @@
 # 01 — System Design (HLD)：step3p5 decode 性能优化
 
+> **2026-08-02 current-source override（优先于下方历史正文）**：Attention/Vec
+> 收口源码为 `pypto-lib stepfun/develop@76d96bdbeac280f12ecf626b1bbd722b9278719e`，
+> 动态 SPMD codegen 修复为 `pypto stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。
+> 当前实现采用 workload-derived logical tasks + runtime wave mapping，Full SV 合并
+> segment-local recurrence，Full/SWA out-proj cast 默认融合。clean canonical candidate
+> 的 audit/smoke/64K ITL/DFX 已通过，但 fresh-oracle N=128 三轮均
+> `121/128=94.53125% < 95%`，正式发布仍 BLOCKED。下方较早的主线表和收益表是
+> 设计历史；I1/I2 当前状态以 [`task-tracking.md`](task-tracking.md) 和
+> [`04-attention-optimization.md`](04-attention-optimization.md) §10 为准。
+
 > **2026-07-26 交付收益覆盖**：本专项当前已实际落地并完成 device
 > regression 的优化为 **B1、B2、C2**，另有 A1 可观测性基线。本文 §5
 > 的“预期”不能代替已测结果；已落地项的前后对比见下表，性能数字只在有
@@ -14,7 +24,7 @@
 
 本专项的历史起点是 `whole_decode_faithful_real`
 （historical `pypto-lib/models/step3p5/decode_layer.py`，**31,686 行**）的 45 层展开实现；
-current release 已切到 `models/step3p5/decode_fwd.py:whole_decode_step3p5`
+current source path 已切到 `models/step3p5/decode_fwd.py:whole_decode_step3p5`
 （4,772 行）。下文 §2–§4 保留历史诊断和目标架构，current 实际交付及收益
 以 §5 为准。
 
@@ -92,7 +102,7 @@ l3_decode_fwd (@pl.jit.host)
    这是 unroll → `pl.range` 的**前置**（否则 SSA 窗口复用会撞 RAW-only-v1 非别名约束）。
 2. **stacked + resident 权重**（PERF-B1）：`[N_RANKS, L*dim, ...]` 上传一次；层内 `pl.slice`。
 3. **`pl.range` 循环体**（PERF-B2）：原设计希望同时依赖 C1/B1；实际
-   current release 保留 per-layer communication stack，只依赖 B1 的
+   current source path 保留 per-layer communication stack，只依赖 B1 的
    zero-copy view ABI 即完成了 loop-form replacement。
 
 ---
@@ -128,17 +138,17 @@ l3_decode_fwd (@pl.jit.host)
 | 主体源码体量 | `31,686` lines (`3af13f4f` historical `models/step3p5/decode_layer.py`) | `4,772` lines (`53eb7212` `models/step3p5/decode_fwd.py`) | 静态结构指标，约 `84.94%` 降低；不是编译时延直接测量 |
 | MoE loop 主体 | 40 个物理 MoE layer sites | 1 个 `pl.range(40)` loop body + 2 个尾部 specializations | 降低 IR/调度图重复；没有把“IR 行数”冒充 compiler wall-clock |
 | loop-form attention bucket 绑定 | 若为 loop-form 的 10 FULL + 30 SWA bucket 另做 materialization，会重复约 `965 MiB/rank` 权重 | 直接从 canonical resident pool 建 `Wsub()` zero-copy view | 约 `0.94 GiB/rank` 避免的额外设备副本是 shape 推导值；不是 wall-clock 或实际 H2D 采样 |
-| MoE communication window | 历史设计约 `766 MB` per-layer window domain | **当前 B2/C2 release 仍是 per-layer stack**；C1 尚未交付 | 不能把 C1 设计目标 `766 MB→十几 MB` 写成当前收益 |
+| MoE communication window | 历史设计约 `766 MB` per-layer window domain | **当前 B2/C2 source path 仍是 per-layer stack**；C1 尚未交付 | 不能把 C1 设计目标 `766 MB→十几 MB` 写成当前收益 |
 | vanilla raw alignment | current canonical-only 与清理前 canonical 各 `240/256=93.75%` | 两者相同 | raw `>=95%` 未通过；说明差异不是 B2 或兼容入口清理引入 |
 | replacement equivalence | — | canonical-only 清理前后 token `256/256` exact；hidden `256/256` exact；`max_abs_diff=0` | B2 replacement 与 canonical-only cleanup regression 均 PASS |
 | 256-step warm runtime | 历史 loop-form artifact warm mean `0.8057s/step`；baseline `0.7363s/step` | 最终镜像 canonical warm mean `0.8088s/step` | harness `run_sec`，不是完整 serving ITL；未与历史 31k-line implementation 做同环境 A/B，不能据此宣称 B2 加速 |
 
 ### 5.2 未完成优化，不得提前计入收益
 
-- **C1 单 window + `moe_epoch` + `WaitCmp.Ge`**：当前 release 仍按
+- **C1 单 window + `moe_epoch` + `WaitCmp.Ge`**：当前 source path 仍按
   per-layer stack 传 window；预计的 `~766 MB→十几 MB` 是设计目标，不是本次
   B2 release 的实测收益。
-- **D1/D2 INT8-native routed expert**：当前 release 不能把设计中的
+- **D1/D2 INT8-native routed expert**：当前 source path 不能把设计中的
   `47.6 GiB/rank→~24 GiB/rank` 写成已交付收益。
 - **C3 peer fan-out、E1 LM-head overlap、F1/F2/G1**：尚未有新的 device
   latency/PMU 对比，保留为待办。

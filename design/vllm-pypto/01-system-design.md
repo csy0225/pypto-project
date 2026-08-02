@@ -1,13 +1,18 @@
 # vLLM + pypto 集成 · 系统设计（HLD）
 
-> **2026-07-28 current-release override**：当前 release pins 见
+> **2026-08-02 current-source override（优先于下方历史正文）**：当前 source/candidate
+> pins 见
 > [`deployment/version-matrix.md`](../../deployment/version-matrix.md)。
-> `pypto-lib stepfun/develop@563fe62a` 的唯一默认 Main 是
+> `pypto-lib stepfun/develop@76d96bdbeac280f12ecf626b1bbd722b9278719e` 的唯一默认 Main 是
 > `models.step3p5.decode_fwd:whole_decode_step3p5`，固定 0724
 > 环境 N=256 canonical-only 清理前后 replacement `256/256` exact；这只关闭了
-> standalone/Main replacement 子 gate。独立 live front 接管、真实 paged-KV
+> standalone/Main replacement 子 gate。clean canonical candidate 的 audit/smoke/
+> 64K ITL/DFX 已通过，但 fresh-oracle N=128 三轮均为 `121/128=94.53125%`，
+> 低于 `>=95%` raw gate，正式发布仍 BLOCKED。独立 live front 接管、真实 paged-KV
 > bridge、同代 MTP absolute gate 和 3-way HBM 仍是 active work，不得把本设计
 > 中的历史 plumbing 证据写成完整 production serving 平替。
+>
+> 下方较早历史正文及其 pins 属历史上下文；当前 pin 以本段和版本矩阵为准。
 >
 > **层级**：System Design / High-Level Design。回答"vLLM 与 pypto 怎么分工、
 > 怎么在同 8 卡共驻、请求怎么走到 pypto 整网再回来"。落地实现细节（monkey-patch

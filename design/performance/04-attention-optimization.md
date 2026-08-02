@@ -1,12 +1,26 @@
 # 04 · Attention 优化专项（step3p5 full / SWA flash decode）
 
+> **最终实现覆盖说明（2026-08-02）**：本文 §0–§9 保留专项探索过程，包含早期
+> fixed-24 lane、四阶段 split、standalone Pass-A/B/C 与 cast 默认关闭等历史状态；
+> **这些内容不得再作为当前实现说明。** 当前权威状态以
+> [§10](#10-最终实现与发布状态2026-08-02) 和
+> [`attention/attention-tiling-and-partitioning.md`](attention/attention-tiling-and-partitioning.md)
+> 为准：logical task 数按 active workload 推导，runtime 再映射到物理 AIC/AIV；
+> 5–10 us 仅是 task-grain 搜索起点；Full 的 SV 与 segment-local recurrence 已融合，
+> 只保留必要的 `full_online_softmax_reduce/finalize`；Full/SWA out-proj cast 默认都融合。
+> 源码已进入 `pypto-lib stepfun/develop@76d96bdb`，动态 SPMD codegen 修复进入
+> `pypto stepfun/develop@defa97c5`。clean canonical 镜像 audit/smoke/64K ITL/DFX 已通过，
+> 但同一 fresh oracle 的三次 N=128 均为 `121/128=94.53125%`，低于 `>=95%` raw gate；
+> 因此该镜像当前是 **candidate，发布门禁阻塞**。
+>
 > **性质**：LLD 专项。聚焦 decode 阶段 flash-attention kernel 本体（`attention_full.py` /
 > `attention_swa.py`）的重写路线，独立于 README 主表里的 Track A–H。收敛后其中的子项会以
 > `PERF-*` ID 回填 [`task-tracking.md`](task-tracking.md)。
 >
-> **验证基线**：pypto-lib `perf/step3p5-bc-20260726 @ 4513007d`，canonical Main =
-> `models/step3p5/decode_fwd.py:whole_decode_step3p5`（loop-form，B2 后）。
-> 本文所有 file:line 均对当前 source 逐条核对（2026-07-29）。
+> **当前源码基线**：pypto-lib `stepfun/develop@76d96bdbeac280f12ecf626b1bbd722b9278719e`，
+> pypto `stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`；canonical Main =
+> `models/step3p5/decode_fwd.py:whole_decode_step3p5`。正文中的旧 file:line 只对应当时快照，
+> 不能覆盖当前源码。
 >
 > **审计口径**（沿用 [`README.md` 顶层审计方法](README.md)）：任何“step3p5 独有 / 必须保留”
 > 判断都要沿 `producer → 数学变换 → transport → consumer → rounding/reduction → lifetime`
@@ -164,6 +178,283 @@ but got 8`）；且 16 行是 cube fractal 的最小处理单位，M=8 与 M=16 
 | pipeline | `pl.pipeline(编译期常量)` | `fa_ctx_blocks` 是 runtime | **未验证**，见 [§5.7](#57-方案-e-无-in-repo-证据现有-plpipeline-都是编译期常量-bound) |
 
 结论：V4-Flash 提供的是**若干 lowering 惯用法**的证据，不是 kernel 骨架。凡搬一处，过一次 ST。
+
+### 3.1 DeepSeek decode attention 的实际切分方式（2026-07-30 补充）
+
+本轮重新核对了：
+
+```text
+models/deepseek/v4/decode_sparse_attn_swa.py
+models/deepseek/v4/decode_sparse_attn.py
+```
+
+DeepSeek 并不是统一把 context block 铺满 24 核，而是根据单个 work item 的计算密度选择不同
+切分方式。
+
+#### 统一抽象：切分发生在哪个逻辑轴
+
+Decode attention 的模型逻辑维度统一写为：
+
+| 轴 | 上层含义 | Decode 场景 |
+|---|---|---|
+| `B` | batch/request 数 | active batch |
+| `Sq` | query sequence length | 通常为 1 |
+| `Skv` | KV/context sequence length | `ctx_len` 或 `WIN` |
+| `Nq` | query head 数 | FULL=8，SWA=12（TP-local） |
+| `Nkv` | KV head 数 | 当前 TP-local 为 1 |
+| `D` | 单个 head 的向量维度 | `HEAD_DIM=128` |
+
+模型张量通常写为：
+
+```text
+Q: [B, Sq, Nq, D]
+K: [B, Skv, Nkv, D]
+V: [B, Skv, Nkv, Dv]
+```
+
+GQA 下 `Nq/Nkv` 个 query heads 共享一个 KV head。固定一个 batch、query token 和 KV
+group 后，QK/PV 的 GEMM 映射为：
+
+```text
+QK:
+    Q      [GEMM M = query-head tile, GEMM K = D]
+    K^T    [GEMM K = D,               GEMM N = Skv tile]
+
+PV:
+    P      [GEMM M = query-head tile, GEMM K = Skv tile]
+    V      [GEMM K = Skv tile,         GEMM N = Dv]
+```
+
+因此本文准确描述为“沿 `Skv`/context 轴切分”：
+
+- 在 QK GEMM 中对应 GEMM `N`；
+- 在 PV GEMM 中对应 GEMM `K`；
+- 不能笼统称为“沿矩阵 K 方向切分”。
+
+工程实现还需区分以下层级：
+
+1. **存储 block**：KV cache 的寻址粒度，例如 `BLOCK_SIZE=128`；
+2. **计算 `Skv` tile**：一次 QK/PV matmul 实际消费的 KV token 数，例如
+   `ATTN_K_TILE=128`（该变量名中的 K 指 key-token，而非 GEMM K）；
+3. **work item**：可独立调度的逻辑工作，如 `(token, Skv tile)`；
+4. **device task**：一次 dispatch，内部可以串行处理一个或多个 work items；
+5. **lane/core 映射**：task 或 work item 如何分配到物理核心；
+6. **核内 pipeline**：同一 task 内不同 M tile/`Skv` tile 如何交叠。
+
+`BLOCK_SIZE` 不必等于 `ATTN_K_TILE`。当计算 tile 跨多个物理 cache blocks 时，通常需要先
+gather/拼接到连续的 L1/L0 operand。反之，仅把两个 block 映射给同一个 task，并不意味着
+已经形成一个 256-token matmul。
+
+#### SWA：不切 `Skv` block，按 token/request 切 task，核内按 head tile 流水
+
+DeepSeek V4 SWA 的关键静态配置为：
+
+```python
+WIN = 128
+ATTN_K_TILE = 128
+SPARSE_BLOCKS = 1
+H_TILE = 16
+QK_M_TILE = 32
+```
+
+并显式约束：
+
+```python
+assert WIN == ATTN_K_TILE
+```
+
+即整个 sliding window 作为一个 `Skv` tile，不再按 128-token block 继续拆 task。外层为：
+
+```python
+with pl.spmd(T, name_hint="qk_pv"):
+    qk_t = pl.tile.get_block_idx()
+```
+
+每个 task 负责一个 token/request；task 内部通过：
+
+```python
+for qk_hb in pl.pipeline(H // QK_M_TILE, stage=2):
+```
+
+按 32 heads 一组执行 QK → softmax → PV。这样同一个 `[128, HEAD_DIM]` KV tile 可被多组
+query heads 复用，同时避免把 QK、softmax、PV 拆成多个只有数微秒的独立 dispatch。
+
+映射到统一抽象：
+
+```text
+work item      = t
+device task    = (t, 一个完整 Skv tile)
+Skv tile       = ATTN_K_TILE = 128 key tokens
+QK GEMM        = [M=32, K=HEAD_DIM] × [K=HEAD_DIM, N=128]
+PV GEMM        = [M=32, K=128] × [K=128, N=HEAD_DIM]
+M compute tile = QK_M_TILE = 32 heads
+M tile 数      = H / QK_M_TILE
+qk_pv lane 数  = T
+```
+
+例如 `B=8, S=1, H=64` 时，`qk_pv` 有 8 个 task，每个 task 内有
+`64 / 32 = 2` 个 M tile。单个 M tile 的主要矩阵形状为：
+
+```text
+Q tile:  [Nq_tile=32, D=HEAD_DIM]
+KV tile: [Skv_tile=128, D=HEAD_DIM]
+score:   [Nq_tile=32, Skv_tile=128]
+```
+
+所以 DeepSeek SWA 的跨核并行主要来自 `T`；`Skv` 轴保留在 task 内以复用 KV，M 轴则通过
+`QK_M_TILE=32` 提高 cube 计算密度。
+
+DeepSeek SWA 的 merge/normalize 再按 `(token, head_tile)` 切分：
+
+```python
+with pl.spmd(T * (H // H_TILE), name_hint="merge_norm"):
+```
+
+由于 `SPARSE_BLOCKS == 1`，SWA 实际没有跨 `Skv` block 的 online-softmax merge 循环。
+
+#### CSA/HCA：多 block 时才使用 24 核，并先按有效负载重排
+
+DeepSeek CSA 的 work item 是：
+
+```text
+(token, sparse_block)
+QK_ITEMS = T * SPARSE_BLOCKS
+```
+
+它并非直接按静态 block index 轮转，而是先构造 `valid_block_mask` 和 `qk_order`：
+
+1. 将非空/有效 sparse blocks 排到 `qk_order` 前部；
+2. 将空 blocks 追加到队尾；
+3. 再用 24 个 lane 做 stride 分发：
+
+```python
+with pl.spmd(NUM_QK_CORES, name_hint="qk_pv"):
+    qk_flat = qk_core + qk_it * NUM_QK_CORES
+    qk_item = qk_order[qk_flat]
+```
+
+这样有效重任务会优先一核一个，避免不同 token 的有效 block 数不同导致某些核心只处理空块、
+另一些核心连续处理多个有效块。该策略适合 `SPARSE_BLOCKS > 1` 且 block 间负载不均的场景，
+不适合计算量很小的 SWA window。
+
+其参数映射为：
+
+```text
+work item      = (t, sparse_block)
+Skv tile       = ATTN_K_TILE = 128 key tokens
+QK GEMM        = [M=32, K=HEAD_DIM] × [K=HEAD_DIM, N=128]
+PV GEMM        = [M=32, K=128] × [K=128, N=HEAD_DIM]
+M compute tile = QK_M_TILE = 32 heads
+lane 数        = NUM_QK_CORES = 24
+lane 访问      = qk_order[core], qk_order[core + 24], ...
+```
+
+例如 `T=8、SPARSE_BLOCKS=4` 时共有 32 个 work items。24 个 lane 首轮最多各取一个，
+剩余 8 个在第二轮处理。`qk_order` 只改变 work-item 调度顺序，不改变 QK/PV 的 tile shape。
+
+另外，DeepSeek 中两个 head 参数职责不同：
+
+```text
+QK_M_TILE=32：cube QK/PV 的 M tile，偏计算资源利用；
+H_TILE=16：partial 落盘和 merge_norm 粒度，偏存储布局与归并并行度。
+```
+
+#### 对 Step3.5 的含义
+
+Step3.5 SWA 当前参数为：
+
+```text
+SLIDING_WINDOW = 512
+BLOCK_SIZE = 128
+SWA_WIN_BLOCKS = 4
+Q_HEAD_BATCH_SWA = 12
+```
+
+2026-07-30 已实测过将 4 个 blocks 分散到 24 lanes 的版本
+（`cd09f2bd perf(step3p5): stripe sliding-window context blocks`）。DFX 中单个 SWA kernel 的
+执行时间约 `1.3–2.5 us`，而 dispatch-to-finish latency 约 `3.5–5.2 us`。结论是：
+
+- block 并行确实消除了单核串行；
+- 但 work item 太小，dispatch/同步开销超过 kernel 本体；
+- SWA 不应以“铺满 24 核”为目标，而应优先提高每个 task 的计算密度。
+
+因此当前对齐 DeepSeek 的低风险版本改为：
+
+```text
+branch: perf/attn
+commit: 76bd04c4
+策略：每个 batch 使用 2 个 group；每个 group 串行处理相邻 2 个 128-token blocks
+```
+
+统一表示为：
+
+```text
+work item       = (batch, block_group)
+block_group     = 2 个连续 Skv blocks
+Skv storage block = BLOCK_SIZE = 128
+逻辑 Skv group  = 2 × 128 = 256 key tokens
+M 有效行        = Q_HEAD_BATCH_SWA = 12
+M storage pad   = SWA_Q_PAD_ALIGNED = 32
+task 数         = BATCH × 2
+active_batch=1 时有效 task 数 = 2
+```
+
+当前的 256-token group 只是**调度分组**，不是 256-token fused matmul。每个 task 内仍执行：
+
+```text
+block 0 -> [12,128] QK / softmax / PV
+block 1 -> [12,128] QK / softmax / PV
+```
+
+它仍保留逐 block scratch 与 Stage4 online merge。真正的 `Skv tile=256` 需要把两个物理
+cache blocks gather/拼接成连续 operand，并重新验证 cube boxing、UB 和 softmax lowering。
+
+QK、softmax、SV 三个 stage 使用相同的 `(batch, block_group)` 映射，Stage4 保持原有确定性
+online-softmax 归并顺序。该版本的目标是：
+
+1. 将 active batch=1 时每阶段的有效 task 数从 24 降到 2；
+2. 每个 task 承担两个 block，提升计算/dispatch 比；
+3. 暂不引入 QK+softmax+PV mixed Cube/Vec 融合，避免重现历史 507018/boxed-tile 问题；
+4. 保持 scratch 布局和 reduction/rounding 顺序不变，降低精度风险。
+
+当前静态检查结果：
+
+```text
+attention FULL/SWA unit contracts: 7 passed
+Python compile / git diff --check: passed
+```
+
+该 grouped 版本的无 DFX ITL、token-exact 精度和 DFX task 粒度仍需以 0162 实测结果为准，
+在结果完成前不得宣称有性能收益。
+
+#### FULL attention 与 DeepSeek 对齐的边界
+
+Step3.5 FULL 64k 有 512 个 context blocks，属于多 work-item 场景。当前
+`46662b20 perf(step3p5): stripe full attention context blocks across 24 lanes` 将 Stage1–3
+按 24 lane 条带分配，512 blocks 时每核约 21/22 blocks，静态负载已经基本均匀；该版本曾测得
+64k ITL `63.44 ms → 53.24 ms`（约 16.1%）。
+
+FULL 后续若仍观察到动态不均衡，可借 DeepSeek CSA 的 `valid_block_mask + qk_order` 思路，
+但必须先证明不同 batch/context row 的有效 block 数确实形成运行时偏斜。对于 active batch=1、
+所有 512 blocks 均有效的典型 64k decode，增加 planning task 只会引入额外开销。当前更明确的
+串行尾部是 Stage4 的 block merge，而不是 Stage1–3 的 21/22 block 分配差异。
+
+FULL 的参数映射为：
+
+```text
+work item      = (batch, context_block)
+Skv storage/tile = BLOCK_SIZE = 128
+QK GEMM        = [M=8, K=HEAD_DIM] × [K=HEAD_DIM, N=128]
+PV GEMM        = [M=8, K=128] × [K=128, N=HEAD_DIM]
+M 有效行       = Q_HEAD_BATCH_FULL = 8
+M storage pad  = Q_HEAD_PAD_FULL = 16
+lane 数        = FULL_ATTN_CTX_LANES = 24
+lane 映射      = lane + iteration × 24
+```
+
+64k、`active_batch=1` 时共有 512 个有效 `Skv` work items，每 lane 处理 21 或 22 个。
+短 context（例如 1024）只有 8 个有效 blocks，此时最多只有 8 个有效 lane；继续增加 lane
+不能增加实际并行度，应转而考虑单 task 的 M/K 计算密度。
 
 ---
 
@@ -446,3 +737,217 @@ per-kernel 数值 + liveness 定位。**建议先补 ST**，否则 A–E 每步�
 - 回归 runbook：`.claude/skills/pypto-perf-regression/SKILL.md`
 - 主表 / 分层：[`README.md`](README.md)；跟踪：[`task-tracking.md`](task-tracking.md)
 - Phase 15 为何拆 4-stage：`workspace/pypto-lib/docs/step3p5/phases/15-singlerank-npu.md`
+
+---
+
+## 9. 复查落地：context-split 首个 device 结果（2026-07-30）
+
+上一版结论“attention kernel 本体已无可落地的延迟优化”需要修正。B/D
+per-block fusion 的回退，只能说明**在原 batch-only core mapping 下融合不合适**；
+它没有否定 context 轴并行化。
+
+### 9.1 实现
+
+独立 worktree branch `perf/step3p5-attn-context-split`，commit `5ef8a517`：
+
+- 只改 FULL decode attention；
+- 保留原四阶段 split、GM scratch、BF16 PV 输入、Stage4 online-softmax 顺序；
+- QK / softmax / SV 三个 stage 从 `pl.spmd(BATCH)` 改成固定
+  `pl.spmd(FULL_ATTN_CTX_LANES=24)`；
+- 每个 lane 对每个 active batch row 处理
+  `sb = lane + n * 24`；
+- 24 lane 不足当前 context 时通过静态 guard 跳过；
+- 没有改变 KV 物理 block（仍为 128 token），也没有改变 cube 的 16-row
+  boxed tile 合同；
+- Stage4 仍按 context block 顺序串行 merge，因此该版本是**最小并行分解
+  probe**，不是最终 partial-per-core 方案。
+
+这个版本刻意没有引入新的 `(m,l,o)` per-core partial ABI，目的是先隔离
+“context 轴没有并行化”这一变量。
+
+### 9.2 验证
+
+- Python syntax / AST contract：通过；
+- `test_attention_full_runtime_active_bound.py`：`3 passed`；
+- canonical whole-net hidden CI（8 cards，skip MTP）：`SINGLE_CHIP_HIDDEN_CI=PASS`；
+- 无 507018、无 stall，token/hidden gate 通过。
+
+同环境 perf-h1 A/B（cards 0-7，20 iters，warmup 3）：
+
+| context | baseline p50 | context-split p50 | delta |
+|---:|---:|---:|---:|
+| 1,024 | 50.73 ms | 51.09 ms | **+0.36 ms / +0.7%** |
+| 65,536 | 63.44 ms | 53.24 ms | **−10.20 ms / −16.1%** |
+
+64k 结果表明：原实现确实存在 context 轴串行瓶颈；把长 context block
+条带分配到 24 lane 后，虽然保留 GM scratch 和 Stage4 merge，仍获得了
+明显收益。1k 的轻微回退说明在短 context 下 24-lane dispatch / 重复 runtime
+循环的固定开销超过了并行收益，不能对所有 context 无条件启用。
+
+### 9.3 当前结论和后续
+
+新的性能结论应改为：
+
+> **FULL decode 的首要延迟问题是 batch-only core mapping。**
+> 在 bs=1、长 context 下，应优先做 context-split；Stage1+2+3 fusion
+> 不是当前首选，因其会把 cube boxed 输出重新带入 16-row softmax。
+
+建议下一步：
+
+1. 增加按 context 的 dispatch threshold：短 context 保留旧 batch-only
+   路径，长 context 使用 24-lane path；
+2. 扫描 `NUM_CTX_LANES = 4/8/12/16/24`，确定 context 长度和 active batch
+   的选择函数；
+3. 在 24-lane 版本上把多个 block 的 `(m,l,o)` 收缩为 per-core partial，
+   再做小型 merge，减少当前 per-block scratch 和 Stage4 GM 读取；
+4. 最后再做 KV block grouping（建议 1/2/4 个物理 block/task）和
+   MTE/cube/Vec 双缓冲流水；
+5. SWA 暂不照搬：window 只有 4 blocks，context-split 的并行收益不足，
+   仍应保留 batch-oriented path。
+
+---
+
+## 10. 最终实现与发布状态（2026-08-02）
+
+本节覆盖 §0–§9 中所有与“当前实现、默认参数、性能结果、发布状态”冲突的历史结论。
+
+### 10.1 当前实现
+
+- 不再固定 24 个物理核心。各 stage 的 logical task 数由 active rows、每行真实
+  `seq_len` 和 architecture profile grain 推导，runtime 再映射到 AIC/AIV wave。
+- `5–10 us/task` 只是 sweep 起点。最终选择联合考虑 task duration、stage span、wave、
+  packing、tail、dispatch、归约依赖链与 batch16。
+- A2A3 默认：Full QK `22 blocks/task`、block-softmax `12 blocks/task`、
+  SV+segment recurrence `16 blocks/task`、reduce fan-in `8`。
+- Full 已把历史 Pass-A 合入 `full_sv_matmul`；当前只保留跨 task 必需的
+  `full_online_softmax_reduce` 与 per-row `full_online_softmax_finalize`。
+  当前无 `full_online_softmax_pass_a/pass_b/pass_c`。
+- Full/SWA out-proj 各自保留独立 profile，当前默认均为
+  `matmul N=64`、`tiles/task=3`、`vector N=128`、`cast fusion=1`；
+  在默认 decode 配置下不会生成 standalone `full_out_proj_cast` /
+  `swa_out_proj_cast`。源码仍保留 `FUSE_CAST=0` 的 fallback 分支；prefill
+  路径也仍有独立的 `prefill_full_out_proj_cast` /
+  `prefill_swa_out_proj_cast`，因此不能把“默认 decode graph 无该 kernel”
+  扩写成“整个仓库没有这些符号”。
+- TP all-reduce 保留 reduce-scatter + push all-gather，transfer chunk 为 512；
+  residual epilogue 不复用通信粒度。dense RMSNorm direct BF16 reread 与 dense
+  down-proj cast fusion 保留；AR+residual、residual+RMS stats、RMS+projection、
+  gate/up+SiLU 等无稳定收益方案不合入。
+
+权威源码：
+
+```text
+pypto-lib stepfun/develop
+  76d96bdbeac280f12ecf626b1bbd722b9278719e
+
+pypto stepfun/develop
+  defa97c526fec7e8f032dbbfcc39c820add02bf7
+```
+
+后者修复 workload-derived 动态 SPMD launch bound 在 orchestration codegen 中的变量
+重命名/声明问题。实现保持 PyPTO 分层：Orchestration 构建 logical task DAG，InCore
+只执行自己的 tile/segment；没有新增 app-side persistent work-stealing loop。
+
+### 10.2 batch16 与 Full/SWA 边界
+
+`BATCH=16` 是 storage capacity，不是永久 logical batch。active-batch=16、ctx=1 已验证
+所有 active hidden finite/nonzero 且 TP spread=0；异构 16-row context 已验证 task 数按
+各行 workload 求和。uniform batch16/64K 的 online grain 单轮结果中，16 与 24 仅差
+约 0.17%，不足以把 batch-aware 分支硬编码进数学语义。
+
+Full 的长 context 需要 context split 和层次归约；SWA 最多 4 个 KV blocks，保持每个
+active row 一个高密度 task，不机械复制 Full 的 reduction graph。
+
+### 10.3 clean canonical candidate
+
+```text
+image:
+  hub.i.basemind.com/stepcast/vllm-pypto:
+  stepfun-develop-20260802-attn-final-canonical
+
+manifest:
+  sha256:64c573bcf64497da6df0d3d28d7de85dfddde8e2a2a1b70e8bd5123edd51cb9d
+
+config/image ID:
+  sha256:c7f612a2562e932908d2a0d9ffadd1a1bd155c70bff0e82c24be32ef6b9f79ea
+```
+
+镜像演进：
+
+1. `attn-final`：缺动态 SPMD codegen 修复，immutable 编译失败；
+2. `attn-final-v2`：代码可执行，但 image config 仍含旧 CANN 8.5.1 字符串；
+3. `attn-final-canonical`：显式清理 `PATH/PYTHONPATH/CMAKE_PREFIX_PATH`，镜像
+   config 与内容 audit 全绿。
+
+canonical 已通过：
+
+```text
+IMAGE_CONFIG_CANN_851_AUDIT=PASS
+IMAGE_WORKTREE_CLEAN_AUDIT=PASS
+IMAGE_GIT_CREDENTIAL_AUDIT=PASS
+CANONICAL_ONLY_AUDIT=PASS
+CANN_851_RUNTIME_AUDIT=PASS
+EXPECTED_OPTIMIZATION_SYMBOL_AUDIT=PASS
+PTOAS_LDD_AUDIT=PASS
+smoke=PASS
+```
+
+验证为 immutable image：只挂 driver(ro)、checkpoint(ro)、output(rw)，没有挂载宿主源码。
+本轮只使用 0162 cards `0–7`；未操作 cards `8–15` 或其 PID
+`2045390–2045397`，测试结束后 cards `0–7` 无残留进程。
+
+### 10.4 最终 ITL、DFX 与发布 blocker
+
+64K、bs=1、512 blocks、warmup=3、20 measured iterations：
+
+```text
+min  = 49.213 ms
+mean = 50.568 ms
+p50  = 50.563 ms
+p99  = 52.537 ms
+max  = 52.537 ms
+```
+
+结果路径：
+
+```text
+0162:/mnt/persist/chensiyu/workspace/attn-opt/out/
+  image_attn_final_canonical_20260802/itl64k/itl_report.json
+```
+
+DFX 必须使用 rank2 作为本轮 LOW-WAIT reference：
+
+```text
+0162:/mnt/persist/chensiyu/workspace/attn-opt/out/
+  image_attn_final_canonical_20260802/itl64k/build_output/
+  WholeDecodeStep3p5_20260802_162729/dfx_outputs/rank2/d0/
+    critical_path_report.md
+    merged_swimlane_20260802_162823.json
+```
+
+rank2 makespan 为 `38.924 ms`，其中 `tp_all_reduce` critical-path compute 为
+`2.049 ms`。rank4–7 的约 `371–381 ms` makespan 主要是 collective 自旋等待被记为
+compute；例如 rank5 的 `tp_all_reduce` critical-path compute 为 `344.553 ms`。
+因此 rank5 可用于观察完整 collective span，但不能称为 LOW-WAIT reference。
+
+发布门禁仍未通过。同一 fresh oracle 上 canonical 三轮均为：
+
+```text
+121/128 = 94.53125% < 95%
+```
+
+三轮 miss 分别为：
+
+```text
+run1 [2,8,13,15,22,82,93]；TP spread=0
+run2 [2,8,15,22,29,82,93]；step39 spread=0.953125
+run3 [2,8,13,14,22,82,93]；step68/70 spread=1.1875/3.25
+```
+
+所有 hidden finite。不能借用 v2 的历史 `123/128` 宣称 clean canonical PASS，也不应
+无限重跑直到偶然过线。当前镜像是 **clean canonical candidate / release blocked**；
+源码合入、audit/smoke、ITL、DFX 已收尾，但正式发布需先闭环 raw precision/collective
+非确定性。
+
+完整记录见
+[`../../benchmark/2026-08-02-step3p5-attention-final.md`](../../benchmark/2026-08-02-step3p5-attention-final.md)。

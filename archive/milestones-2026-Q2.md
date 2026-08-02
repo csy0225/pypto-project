@@ -1,5 +1,39 @@
 # Milestones —— 2026 Q2
 
+## 2026-08-02 —— Attention/Vec 优化收口 + clean canonical candidate（发布阻塞）
+
+- **源码合入**：
+  - pypto-lib `stepfun/develop@76d96bdbeac280f12ecf626b1bbd722b9278719e`；
+  - pypto `stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`，修复动态
+    SPMD launch bound 的 orchestration codegen 变量重命名/声明。
+- **设计收口**：logical task 按 active workload 推导，不固定 24 核；5--10 us 仅为
+  sweep 起点。Full SV 合并 segment recurrence，只保留 reduce/finalize；Full/SWA
+  out-proj cast 默认融合。dense RMS direct BF16 reread 与 dense down-cast fusion 保留；
+  all-reduce+residual、residual+RMS stats、RMS+projection、gate/up+SiLU 等无稳定收益
+  probe 不合入。
+- **batch16**：capacity 与 workload 分离；active-batch=16 ctx=1、异构 16-row context
+  与 uniform64K grain 对比已完成，未把一次 batch16 最优点硬编码进模型语义。
+- **镜像演进**：
+  1. v1 缺动态 SPMD codegen 修复，immutable compile 失败；
+  2. v2 代码可执行，但 image config 含旧 CANN 8.5.1 字符串；
+  3. clean canonical candidate
+     `stepfun-develop-20260802-attn-final-canonical`
+     （manifest `sha256:64c573bcf64497da6df0d3d28d7de85dfddde8e2a2a1b70e8bd5123edd51cb9d`，
+     config `sha256:c7f612a2562e932908d2a0d9ffadd1a1bd155c70bff0e82c24be32ef6b9f79ea`）。
+- **audit/smoke**：CANN 8.5.1 absence/config audit、worktree clean、credential、canonical-only、
+  runtime CANN、optimization symbol、PTOAS ldd 与 smoke 全 PASS；immutable 验证无宿主
+  源码挂载，只使用 cards 0--7，未触碰 cards 8--15/PID 2045390--2045397。
+- **64K ITL**：bs=1、512 blocks、warmup=3、20 iters，min `49.213`、mean `50.568`、
+  p50 `50.563`、p99/max `52.537 ms`。
+- **DFX 复核**：正确 LOW-WAIT reference 为 rank2（makespan `38.924 ms`，
+  TP AR critical-path compute `2.049 ms`）；rank5 的 `344.553 ms` TP AR compute
+  主要吸收 collective 自旋等待，不得标成 LOW-WAIT。
+- **发布 blocker**：同一 fresh oracle 三轮均 `121/128=94.53125%`；所有 hidden finite，
+  run2/run3 有瞬态 TP spread。禁止借用 v2 的 `123/128` 或无限重跑。镜像当前只能标记为
+  **clean canonical candidate / release blocked**。
+- 完整记录：
+  [`benchmark/2026-08-02-step3p5-attention-final.md`](../benchmark/2026-08-02-step3p5-attention-final.md)。
+
 ## 2026-07-29 —— PERF-H1 自包含镜像 build + 回归 + MTP CI 修复 + DFX benchmark ✅
 
 - **镜像**：build + push `vllm-pypto:stepfun-develop-20260729-perf-h1`（registry digest `sha256:b4e8c8a457a5…`）。pin = pypto `1f704616` / pypto-lib `4513007d` / pto-isa `ecb6c303` / PTOAS `fc8c6cae` / simpler `e2efebcb` / ptoas-bin `v0.50`。本地核对 5 pin 一致 + 工作树全 clean + smoke PASS 后才 push。H1 源码 commit（pypto `1f704616` / simpler `e2efebcb`）此前已在 fork `stepfun/develop`。

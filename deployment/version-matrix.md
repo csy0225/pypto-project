@@ -5,7 +5,51 @@
 
 ## 已验证组合
 
-### 当前代码与已验证镜像（2026-07-29）
+### 当前源码与 clean canonical candidate（2026-08-02）
+
+> **发布状态：BLOCKED。** 下表是当前源码与镜像内容的权威 pin；镜像 audit、smoke、
+> 64K ITL 和 DFX 已通过，但 fresh-oracle N=128 三轮均为
+> `121/128=94.53125% < 95%`，所以不能标记为正式 release。
+
+| 槽位 | Pin | 备注 |
+|------|-----|------|
+| Driver | `25.5.2` | 0162 device verified |
+| Firmware | `7.8.0.7.220` | 与 driver 成对 |
+| CANN | `9.0.0-beta.1` | clean canonical image config/runtime 仅保留该版本 |
+| pypto | `defa97c526fec7e8f032dbbfcc39c820add02bf7` | 动态 SPMD launch bound 的 orchestration codegen 变量重命名/声明修复；已合入 `stepfun/develop` |
+| pypto-lib / vllm-pypto | `76d96bdbeac280f12ecf626b1bbd722b9278719e` | workload-derived attention、Full SV+segment recurrence、Full/SWA out-proj cast fusion、dense RMS/down-cast、two-phase TP AR；已合入 `stepfun/develop` |
+| pto-isa | `ecb6c303f797749f811a494742c3c08156aacabb` | 镜像显式源码 pin |
+| PTOAS | `fc8c6caee561914b4fb991dfc8427bb63194269e` | 镜像显式源码 pin |
+| simpler | `e2efebcbd190302609c0775d2984f409f5f42c76` | pypto `runtime` submodule |
+| ptoas-bin | `v0.50` | binary release |
+| vLLM overlay | `csy/pypto-tail-mtp-integration@1b3e538c35999e62b6d24e0651b3a85b7d16c826` | immutable checkout |
+| Python | `3.11.14` | 镜像内 `/usr/local/python3.11.14/bin/python3` |
+| **clean canonical candidate** | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260802-attn-final-canonical@sha256:64c573bcf64497da6df0d3d28d7de85dfddde8e2a2a1b70e8bd5123edd51cb9d` | config/image ID `sha256:c7f612a2562e932908d2a0d9ffadd1a1bd155c70bff0e82c24be32ef6b9f79ea`；audit/smoke/ITL/DFX PASS，raw precision gate FAIL |
+
+验证结论：
+
+- `IMAGE_CONFIG_CANN_851_AUDIT`、`IMAGE_WORKTREE_CLEAN_AUDIT`、
+  `IMAGE_GIT_CREDENTIAL_AUDIT`、`CANONICAL_ONLY_AUDIT`、
+  `CANN_851_RUNTIME_AUDIT`、`EXPECTED_OPTIMIZATION_SYMBOL_AUDIT`、
+  `PTOAS_LDD_AUDIT` 与 smoke 全 PASS；
+- immutable 验证只挂载 driver(ro)、checkpoint(ro)、output(rw)，无宿主源码挂载；
+- 64K hidden-only ITL：min `49.213`、mean `50.568`、p50 `50.563`、
+  p99/max `52.537 ms`；
+- DFX LOW-WAIT reference 是 rank2，不是 rank5/rank7。rank2 makespan
+  `38.924 ms`，`tp_all_reduce` critical-path compute `2.049 ms`；rank5 的
+  `344.553 ms` TP AR compute 主要吸收 collective 自旋等待；
+- fresh oracle 三轮均 `121/128`，所有 hidden finite；run2/run3 分别出现瞬态
+  TP spread，故发布阻塞；
+- `/workspace/pto-isa` 是显式 pin 的外部源码；`/workspace/pypto/runtime/build/pto-isa`
+  是 `build_runtimes` 生成/克隆的构建树，两者职责不同，不能把后者当作 release pin。
+
+构建 spec：
+
+- [`docker/builds/stepfun-develop-20260802-attn-final.env`](docker/builds/stepfun-develop-20260802-attn-final.env)：v1，动态 SPMD codegen 缺失，失败；
+- [`docker/builds/stepfun-develop-20260802-attn-final-v2.env`](docker/builds/stepfun-develop-20260802-attn-final-v2.env)：v2，image config 含旧 CANN 路径，非 canonical；
+- [`docker/builds/stepfun-develop-20260802-attn-final-canonical.env`](docker/builds/stepfun-develop-20260802-attn-final-canonical.env)：clean candidate，raw precision gate 阻塞。
+
+### 历史已发布组合（2026-07-29）
 
 | 槽位 | Pin | 备注 |
 |------|-----|------|
@@ -20,18 +64,18 @@
 | ptoas-bin | `v0.50` | binary sha256 `ba93fabeff6dc7fdcd2278a72fd1d4fd92cb2949faedbc83fa58e801bd5ff23b` |
 | vLLM overlay | `csy/pypto-tail-mtp-integration@1b3e538c35999e62b6d24e0651b3a85b7d16c826` | build 时按 commit checkout，不能只依赖可变 branch |
 | Python | `3.11.14` | 镜像内 `/usr/local/python3.11.14/bin/python3` |
-| **当前已发布镜像（代码 pin 全部与 `stepfun/develop` 一致）** | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push@sha256:7924925f4b2816c5645910b90fd2a9fa9469baace2f48f7e0ee41a587bd5d6ba` | config `sha256:5402e07ba0d19b315935bfda1e9f6b445d1a3fdc9067c634a2ce302fd7f2a3dd`；含 PERF-C4 TP all-reduce reduce-scatter + push all-gather 与 simpler span-aware provenance；0162 immutable-image 回归见 benchmark/2026-07-28-tp-allreduce-push.md（4×8 步 `hidden_tp_spread` 全 `0.0`，`IMAGE_WORKTREE_CLEAN_AUDIT=PASS`）。⚠ 该 tag 曾指向一份不可用镜像，**早期拉过的机器须重新 pull 并核对 digest** |
+| **2026-07-29 正式发布基线** | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push@sha256:7924925f4b2816c5645910b90fd2a9fa9469baace2f48f7e0ee41a587bd5d6ba` | config `sha256:5402e07ba0d19b315935bfda1e9f6b445d1a3fdc9067c634a2ce302fd7f2a3dd`；含 PERF-C4 TP all-reduce reduce-scatter + push all-gather 与 simpler span-aware provenance；0162 immutable-image 回归见 benchmark/2026-07-28-tp-allreduce-push.md（4×8 步 `hidden_tp_spread` 全 `0.0`，`IMAGE_WORKTREE_CLEAN_AUDIT=PASS`）。⚠ 该 tag 曾指向一份不可用镜像，**早期拉过的机器须重新 pull 并核对 digest** |
 | 上一个已发布镜像（代码 pin 53eb7212，保留回退） | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260726-step3p5-only@sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81` | config `sha256:d296461051559e6ea0e22d04a4cc44f749c82f19a50418fe6db75387f1f067e9` |
 
 验证结论：
 
-- **当前发布镜像 0162 immutable-image 回归**：5 个 pin 与 spec 逐字一致；
+- **该历史发布镜像的 0162 immutable-image 回归**：5 个 pin 与 spec 逐字一致；
   `IMAGE_GIT_CREDENTIAL_AUDIT` / `IMAGE_WORKTREE_CLEAN_AUDIT` / `CANONICAL_ONLY_AUDIT` /
   `ALLREDUCE_PUSH_PRESENT` 全 PASS；smoke PASS；整网 CI `rc=0`（198.3 s）6 项 check
   全 true，token `303,1207,19384,872,428,6127,4231,2636`；`hidden_tp_spread` 在
   ci/main + rep1/rep2/rep3 共 4×8 = 32 步全 `0.0`（PERF-C4 的准出指标）；
   ITL p50 `65.942 ms`(ctx=1024) / `66.455 ms`(ctx=4096)。
-- GitHub 当前代码（`pypto-lib cfbdcce8`）默认入口为 `whole_decode_step3p5`，与镜像内 pin 一致。
+- 当时对应的 GitHub 代码（`pypto-lib cfbdcce8`）默认入口为 `whole_decode_step3p5`，与镜像内 pin 一致。
   `stepfun/develop` 在镜像之后各多一个**纯测试**提交（`pypto ce7fcb64` all-reduce 微基准、
   `pypto-lib cc850ee5` ITL `--active-batch`），产品代码无差异，无需重建镜像；
   下面 `563fe62a` / `53eb7212` 相关结论属于 0726/0728 阶段的历史记录；
@@ -98,8 +142,12 @@ simpler 是 pypto 的 git submodule，在 `pypto/runtime/`。`pypto` 仓的
 pin 决定编哪个 simpler commit。更新 simpler 时必须
 `git submodule update` 并 commit pypto 侧的 submodule pin。
 
-当前 release 的 simpler pin 是 `8459d60f`，并由 pypto `6933b1aa` 的 `runtime`
-gitlink 固定。**Dockerfile 里的显式 checkout 不算**——`pip install -e pypto` 期间的
+当前 clean candidate 的 simpler pin 是
+`e2efebcbd190302609c0775d2984f409f5f42c76`，并由 pypto
+`defa97c526fec7e8f032dbbfcc39c820add02bf7` 的 `runtime` gitlink 固定；它尚未通过
+N=128 raw release gate。2026-07-29 历史发布组合使用的是 simpler
+`8459d60f04b64b74322e965e0dd038ab26165124`，由 pypto `6933b1aa` 固定。
+**Dockerfile 里的显式 checkout 不算**——`pip install -e pypto` 期间的
 `git submodule update` 会把它切回 gitlink，所以换 simpler 必须同时 bump pypto。
 下方 `a6e06406` 仅属于 2026-06-22 历史组合。
 

@@ -1,5 +1,13 @@
 # Performance 性能优化专项
 
+> **2026-08-02 current-source override（优先于下方历史快照）**：当前 attention/Vec
+> 源码为 `pypto-lib stepfun/develop@76d96bdbeac280f12ecf626b1bbd722b9278719e`，
+> 配套 pypto 为 `stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。
+> A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1 已完成；B3 仍在进行，I2 因 clean
+> candidate 的 N=128 raw gate `121/128=94.53125%` 而 BLOCKED。64K immutable
+> ITL p50 为 `50.563 ms`。下方 2026-07-27 状态、65 ms 分账和旧依赖关系保留为
+> 历史分析，不能覆盖 [`task-tracking.md`](task-tracking.md) 的当前状态。
+
 > **2026-07-27 当前目标快照**：已完成并保留完成态的优化为 **A1、B1、B2**。
 > historical fixed-slot pull C2仅作为回归基线；目标通信架构已改为直接迁移
 > V4-Flash expert-lane dispatch push/gather + combine scatter/wait/token reduce。
@@ -122,7 +130,7 @@ F1 独立 ; F2 需 A1
 **当前收口**：A1/B1/B2 已交付；B3、C1/C2/C3、D1/D2、E1、
 F1/F2/F3、G1仍是后续工作。historical pull C2不再计为目标完成态；不得把表中设计收益当作已测性能提升。
 
-**历史推进顺序**曾把 C1 视为 B2 前置；实际 current release 通过保留
+**历史推进顺序**曾把 C1 视为 B2 前置；实际 current source path 通过保留
 per-layer communication stack，先完成了 **A1 → B1 → B2**，C1 留作独立
 窗口/HBM 优化。后续 agent 不应再因 C1 未完成而把 B2 标回 blocked。
 

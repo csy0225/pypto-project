@@ -4,6 +4,14 @@
 > [`../archive/milestones-2026-Q2.md`](../archive/milestones-2026-Q2.md)（session 日志
 > SSOT）；此刻状态在 [`../STATUS.md`](../STATUS.md)；接力上下文在
 > [`handoff.md`](handoff.md)。想讲进度给别人听 → 看本文。
+>
+> **2026-08-02 current-source override**：Attention/Vec 源码已合入
+> `pypto-lib stepfun/develop@76d96bdbeac280f12ecf626b1bbd722b9278719e` 与
+> `pypto stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。clean
+> canonical candidate 的 audit/smoke/64K ITL/DFX 已通过，64K p50
+> `50.563 ms`；但 N=128 raw gate 三轮均 `121/128=94.53125%`，所以正式发布
+> BLOCKED。下方 B2/Phase 28 的 2026-07-26 状态保留为历史里程碑，当前准出以
+> [`../STATUS.md`](../STATUS.md) 与 [`../blockers.md`](../blockers.md) 为准。
 
 ## 1. 一眼看清
 
@@ -31,7 +39,7 @@ graph TD
 | Phase 23 | 零拷贝 KV-IPC 验证（IPC 主卡点解除） | ✅ 2026-07-03 | [`../archive/completed-phases/23-zero-copy-kv-ipc-validation.md`](../archive/completed-phases/23-zero-copy-kv-ipc-validation.md) |
 | **Phase 27** | **N=1 整网融合**（单 `@pl.program` Main） | ✅ 2026-07-18 | 历史 P42 20/20；0724 canonical baseline 保留为 rollback |
 | **B2 release** | **45 层 loop-form Main replacement** | ✅ 2026-07-26 | `stepfun/develop@563fe62a` canonical-only 默认 `whole_decode_step3p5`；0162 历史发布镜像内清理前后 N=256 token/hidden 均 `256/256` exact |
-| **Phase 28** | **N=1 整网 → vLLM live 集成** | 🟡 进行中 | release 镜像与 Main replacement 已完成；live front、paged KV、同代 MTP、HBM 待完成 |
+| **Phase 28** | **N=1 整网 → vLLM live 集成** | 🟡 进行中 | Main replacement 已完成；2026-08-02 attention candidate 已构建但 raw gate 阻塞；live front、paged KV、同代 MTP、HBM 待完成 |
 
 > Phase 20/21/22/24/25/26 的设计/中间态已归档到
 > [`../archive/completed-phases/`](../archive/completed-phases/)（被 27/28 取代或吸收）。
@@ -42,14 +50,16 @@ graph TD
 
 - **当前形态**：单个 `@pl.program`，45 层 loop-form Main，TP=8/EP=8，
   native W8A8；0724 hidden-only unroll baseline 仅作显式 rollback。
-- **已达成**：`pypto-lib stepfun/develop@563fe62a` 已作为当前代码 Main；
-  正式路径为 `models.step3p5.decode_fwd:whole_decode_step3p5`；0162 的 0726 已发布镜像内
+- **已达成**：当前源码已前进到 `pypto-lib stepfun/develop@76d96bdb`；
+  正式路径仍为 `models.step3p5.decode_fwd:whole_decode_step3p5`；0162 的 0726 历史发布镜像内
   N=256 清理前后 token/hidden `256/256` exact、`max_abs_diff=0`、
   TP spread `0.0`。
 - **口径**：同一 vanilla oracle 的 raw canonical/baseline 都是
   `240/256=93.75%`，低于历史 95% raw gate；这不是 opt regression，
   但也不是 raw precision PASS。
-- **已收口**：C/D/G 与 BS1 动态 batch correctness 已完成；**遗留**：B3 KV resident/in-place、perf 调优，以及 serving 侧独立闭环。
+- **已收口**：C/D/G、H1、Attention/Vec I1 与 BS1 动态 batch correctness 已完成；
+  **遗留**：I2 raw precision/TP spread 根因、B3 KV resident/in-place，以及 serving
+  侧独立闭环。
 
 ### 3.2 vLLM 集成子系统（vllm-pypto）→ 设计 [`../design/vllm-pypto/`](../design/vllm-pypto/)
 
@@ -77,11 +87,12 @@ graph TD
     class A,B,C,D g;
 ```
 
-1. 用当前 release 镜像/代码完成独立 live vLLM front 接管和 A/B。
-2. 接 live paged-KV bridge、dynamic batch metadata。
-3. 建 current Main→MTP 同代 absolute oracle。
-4. 收口 HBM/redundant weights。
-5. Phase 26 perf baseline + 调优（gate 在 live A/B、MTP、HBM 均闭环后）。
+1. 先定位 clean candidate 的 N=128 raw precision/TP spread 非确定性，产出新的
+   clean immutable image 并通过 `>=95%` gate。
+2. 用通过 gate 的镜像/代码完成独立 live vLLM front 接管和 A/B。
+3. 接 live paged-KV bridge、dynamic batch metadata。
+4. 建 current Main→MTP 同代 absolute oracle。
+5. 收口 HBM/redundant weights，再继续 serving 侧 perf 调优。
 
 ## 5. 更新协议
 

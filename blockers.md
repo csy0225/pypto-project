@@ -10,7 +10,64 @@
 如 507899/507018、co-tenancy(G4)、tmov Vec-LHS、gate_topk、多程序 co-prepare 死锁、
 gap-5、scheduler-timeout、attention 乱码、G5b import_ipc、swa_moe const-fold 等均已归档。
 
-**最后检视**：2026-07-29。
+**最后检视**：2026-08-02。
+
+---
+
+## 🔴 ACTIVE — ATTN-CANONICAL-PRECISION：clean candidate N=128 raw gate 仅 121/128
+
+**范围**：只 gate `stepfun-develop-20260802-attn-final-canonical` 的正式发布，不回退已经
+合入 `stepfun/develop` 的 attention/Vec 源码，也不否定镜像 audit/smoke/ITL/DFX 结果。
+
+**镜像**：
+
+```text
+hub.i.basemind.com/stepcast/vllm-pypto:
+  stepfun-develop-20260802-attn-final-canonical
+
+manifest:
+  sha256:64c573bcf64497da6df0d3d28d7de85dfddde8e2a2a1b70e8bd5123edd51cb9d
+
+config:
+  sha256:c7f612a2562e932908d2a0d9ffadd1a1bd155c70bff0e82c24be32ef6b9f79ea
+```
+
+**症状**：同一 fresh vanilla oracle
+`/mnt/persist/chensiyu/workspace/attn-opt/out/fresh_vanilla_oracle_20260731/oracle_ids.json`
+（sha256 `c9b2c72121880e9c605ae70d1cf85c0d4fc8815b180598bc76f7e293551dd947`）
+上，clean canonical image 连续三轮均为：
+
+```text
+121/128 = 94.53125% < 95%
+```
+
+| run | miss | TP spread |
+|---|---|---|
+| 1 | `[2,8,13,15,22,82,93]` | none |
+| 2 | `[2,8,15,22,29,82,93]` | step39=`0.953125` |
+| 3 | `[2,8,13,14,22,82,93]` | step68=`1.1875`、step70=`3.25` |
+
+所有 hidden finite。v2 曾出现 `123/128`，但 v2 的 image config 含旧 CANN 8.5.1
+字符串，不能把该结果借给 clean canonical image。
+
+**当前判断**：miss 集合与 TP spread 存在跨轮变化，更像 collective/runtime
+非确定性，但这只是待验证假设，尚未形成根因闭环。rank4--7 DFX 的超长 makespan
+主要来自 `tp_all_reduce` 自旋等待被记为 compute；本轮正确 LOW-WAIT reference 为 rank2。
+
+**已通过且不应重复做**：镜像 config/worktree/credential/canonical-only/CANN runtime/
+optimization symbol/PTOAS ldd audit、smoke、immutable 64K ITL 与 DFX。64K p50
+`50.563 ms`；验证无宿主源码挂载。
+
+**解除条件**：
+
+1. 在不修改 fresh oracle 的前提下定位并修复可复现的 collective/runtime 或数值根因；
+2. 用新的 clean immutable image 连续完成 N=128，达到 `>=95%`，所有 hidden finite，
+   且 TP spread 满足准出合同；
+3. 复跑 audit/smoke/64K ITL/DFX，并记录新 manifest/config；
+4. 禁止“无限重跑直到偶然通过”或用 v2 的 `123/128` 替代 clean image 结果。
+
+证据见
+[`benchmark/2026-08-02-step3p5-attention-final.md`](benchmark/2026-08-02-step3p5-attention-final.md)。
 
 ---
 
@@ -71,10 +128,11 @@ runtime `.so` hash/mtime；③ CANN/PTOAS/checkpoint/device/ring env；④ 对�
 
 ## 🔴 ACTIVE — Phase 28 live serving：per-layer KV bridge + 3-way HBM / redundant weights
 
-**当前代码 release 边界（2026-07-28）**：`pypto-lib stepfun/develop@563fe62a`
-只保留 `models.step3p5.decode_fwd:whole_decode_step3p5`。C/D/G 的 BS1
-correctness 已在 `b404a3c9` 修复并完成 0162 cards 8-15 验证；本节 blocker
-只描述 Phase 28 live serving 缺口，不再把 BS1 的旧 `6127` 结果视为当前代码状态。
+**当前代码边界（2026-08-02）**：`pypto-lib stepfun/develop@76d96bdbeac280f12ecf626b1bbd722b9278719e`
+只保留 `models.step3p5.decode_fwd:whole_decode_step3p5`。C/D/G、BS1 correctness
+和 Attention/Vec I1 已合入；clean canonical candidate 的 audit/smoke/64K ITL/DFX
+通过，但 N=128 raw gate 由本文件首条 blocker 单独阻塞。本节只描述 Phase 28
+live serving 缺口，不再把 BS1 的旧 `6127` 结果视为当前代码状态。
 `models/step3p5_opt`
 package、`whole_decode_opt` 和 `WholeDecodeOpt` 已删除。0726 已发布镜像内
 canonical-only N=256 与清理前 canonical 镜像 token/hidden `256/256` exact、
@@ -101,7 +159,7 @@ Main module/name 参数；后续 blocker 定位只允许 canonical。
 > **结论:多decode精度 blocker 已解决,整网 forward 数值忠实、逐 token 对齐 vanilla。**
 > 历史"near-tie/未完全正常"表述作废。详见 memory `n1_multidecode_neartie_faithful_a632c42e`。
 
-1. **live per-layer paged-KV bridge**：standalone current release 已有
+1. **live per-layer paged-KV bridge**：standalone canonical path 已有
    resident per-layer KV 并完成多步回归；缺口是从真实 vLLM paged KV pool
    导入 per-layer BF16 slice，并按请求/step 传
    `block_table`/`slot_mapping`/`seq_lens` 与 dynamic batch metadata。

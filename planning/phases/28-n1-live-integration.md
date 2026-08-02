@@ -1,33 +1,35 @@
 # Phase 28 — N=1 整网 → vLLM live single-handoff 集成
 
-> **2026-07-28 current-release override（优先于下方 2026-07-15/18 历史正文）**
+> **2026-08-02 current-source override（优先于下方 2026-07-28、2026-07-15/18
+> 历史正文）**
 >
-> 当前 active release 为：
+> 当前 source/candidate 为：
 >
 > ```text
-> pypto-lib / vllm-pypto 563fe62a (stepfun/develop)
-> pypto                    ca21ab5f
-> simpler/runtime          216e7632
+> pypto-lib / vllm-pypto 76d96bdbeac2 (stepfun/develop)
+> pypto                    defa97c526fec
+> simpler/runtime          e2efebcbd190
 > pto-isa                  ecb6c303
 > PTOAS                    fc8c6cae
 > ptoas                    0.50
 > default Main             models.step3p5.decode_fwd:whole_decode_step3p5
+> image                    stepfun-develop-20260802-attn-final-canonical
+> manifest                 sha256:64c573bcf64497da6df0d3d28d7de85dfddde8e2a2a1b70e8bd5123edd51cb9d
 > ```
 >
-> 当前代码已完成 **C/D/G + BS1 dynamic-batch correctness**：`b404a3c9` 恢复固定
-> expert physical lane bases，BS1/2/16 单步 `6127→303`、TP spread `0`，BS1
-> persistent 4-step 通过，row0 batch-extension exact。`563fe62a` 将 image CI
-> cleanup 与 `--skip-mtp` 正式提交。0162 本地 candidate 镜像以产品 HEAD
-> `b404a3c9` 加上述 CI 工作树补丁构建，Main 8-step PASS；N=256 teacher-forced
-> hidden finite `256/256`、TP spread `0`、token exact `241/256`，raw vanilla
-> `>=95%` 仍不宣称通过。已发布 registry 镜像仍是 0726 的 `53eb7212`
-> canonical-only 镜像；0728 candidate 尚未推 registry。
+> Attention/Vec 源码已合入，candidate 的 audit/smoke/64K ITL/DFX 已通过；但
+> fresh-oracle N=128 三轮均为 `121/128=94.53125%`，低于 `>=95%` raw gate，
+> 所以该镜像是 **candidate / release blocked**，不能写成正式 release。
+> 0162 本轮只使用 cards 0--7，未操作 cards 8--15 及 PID 2045390--2045397。
 >
 > 本 phase 尚未关闭：独立 live vLLM front 接管、live paged-KV bridge /
 > dynamic batch、同代 Main→MTP absolute oracle、3-way HBM/redundant weights
 > 均待闭环。下方 `3af13f4f`、`e49ce111`、`0e7a0fdd`、旧 generator /
 > `whole_decode_faithful_real` 内容只作为历史设计背景，不得作为当前 checkout、
 > 构建 pin 或“完整 serving 已平替”的证据。
+>
+> 下方较早历史正文和旧 pins 均为历史记录；继续工作时以本段和
+> [`../../deployment/version-matrix.md`](../../deployment/version-matrix.md) 为准。
 >
 > 承 Phase 27（N=1 整网融合 `whole_decode_faithful_real`，分支
 > `feat/whole-net-n1-fusion`，最终 standalone release 在机器 0162）。本 phase 把已

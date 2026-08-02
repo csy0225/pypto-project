@@ -3,12 +3,16 @@
 > 每个子任务一张卡片：current-source问题实证 / producer-to-lifetime链路 / 五类差异归属 / capacity与layout / 如何生效 / 参考 / 改法 / 验证 / 落地边界。shape只用于容量和layout说明，不得单独用于架构判断。
 > HLD 见 [`01-system-design.md`](01-system-design.md)，状态见 [`task-tracking.md`](task-tracking.md)。
 >
-> **2026-07-28 active release override**：`P/` 当前必须读
-> `pypto-lib stepfun/develop@563fe62a`。唯一 Main 是
+> **2026-08-02 current-source override（优先于下方历史正文）**：`P/` 当前必须读
+> `pypto-lib stepfun/develop@76d96bdbeac280f12ecf626b1bbd722b9278719e`；动态 SPMD
+> codegen 修复为 `pypto stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。
+> 唯一 Main 是
 > `P/models/step3p5/decode_fwd.py:whole_decode_step3p5`。0724 unroll source、
 > rollback selector、自定义 Main module/name 参数和旧 opt compatibility
-> package/aliases 已删除。B2 已完成 N=256 replacement regression；
-> 下方基于旧 unroll/generator 的内容只用于解释设计起点，不是可执行 base。
+> package/aliases 已删除。Attention/Vec 的 clean canonical candidate 已通过
+> audit/smoke/64K ITL/DFX，但 N=128 raw gate 三轮均为
+> `121/128=94.53125%`，正式发布仍 BLOCKED。下方基于旧 unroll/generator 的内容
+> 只用于解释设计起点，不是可执行 base。
 >
 > 路径约定：`P/` = active `pypto-lib/`；`REF/` =
 > `origin/main:models/deepseek/v4-flash/`（`git show REF/<f>` 读取）。
