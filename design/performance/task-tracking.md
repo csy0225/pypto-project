@@ -7,12 +7,11 @@
 
 ---
 
-> **⚠ 2026-08-02 current-source override**：attention/Vec 产品实现的权威 pin 为
-> `pypto-lib stepfun/develop@76d96bdbeac280f12ecf626b1bbd722b9278719e` 与
-> `pypto stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。当前 clean
-> canonical candidate 已通过 audit/smoke/64K ITL/DFX，但 N=128 raw gate 三轮均
-> `121/128=94.53125%`，正式发布仍 BLOCKED。下方 2026-07-28 release override
-> 只保留为历史状态，不能覆盖当前 I1/I2 结论。
+> **⚠ 2026-08-03 current-source override**：attention/Vec 产品实现权威 pin 为
+> `pypto-lib stepfun/develop@d7e1381be0236d6e068cd4d86aa815ea693ea5c7` 与
+> `pypto stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。Wave4
+> audit/smoke/compile/64K ITL/DFX PASS，raw token gate 两轮均过；但 Run1 step2
+> TP spread=`2.0`，正式发布等待稳定性。下方历史 override 不覆盖 I1/I2。
 
 > **历史 2026-07-28 release override**：active base =
 > **`stepfun/develop @ 563fe62a`**。唯一 release Main 为
@@ -93,8 +92,8 @@ producer → 数学变换/quant/route-map → transport/window
 ### Track I — Attention / Vec 收尾与 canonical 发布
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| I1 | workload-derived attention、Full 层次归约、out-proj cast、dense Vec 收尾 | P0 | ✅ | codex | A1, C4, H1 | `pypto-lib stepfun/develop@76d96bdb`：logical task 按 active workload 推导；Full SV 合并 segment recurrence，只保留 reduce/finalize；Full/SWA out-proj cast 默认融合；dense RMS direct BF16 reread、dense down-proj cast fusion 保留；AR+residual、residual+RMS stats、RMS+projection、gate/up+SiLU 等无稳定收益方案不合入。active-batch=16/异构 context、source/compile/device/DFX 已完成。设计见 [`attention/attention-tiling-and-partitioning.md`](attention/attention-tiling-and-partitioning.md) | 2026-08-02 |
-| I2 | clean canonical image raw precision release gate | P0 | ⛔ | codex | I1 | 镜像 `stepfun-develop-20260802-attn-final-canonical@sha256:64c573bc…` 的 audit/smoke/64K ITL/DFX PASS，p50 `50.563 ms`；但同一 fresh oracle 三轮均 `121/128=94.53125% <95%`，run2/run3 有瞬态 TP spread。所有 hidden finite。禁止借用 v2 的 `123/128` 或无限重跑；根因闭环前不正式发布。见 [`../../benchmark/2026-08-02-step3p5-attention-final.md`](../../benchmark/2026-08-02-step3p5-attention-final.md) | 2026-08-02 |
+| I1 | workload-derived attention、Full 层次归约、out-proj cast、dense Vec 收尾 | P0 | ✅ | codex | A1, C4, H1 | `pypto-lib stepfun/develop@d7e1381b`：logical task 按 active workload 推导；Full SV 合并 segment recurrence，只保留 reduce/finalize；Full/SWA out-proj cast 默认融合；dense RMS direct BF16 reread、dense down-proj cast fusion 保留；AR+residual、residual+RMS stats、RMS+projection、gate/up+SiLU 等无稳定收益方案不合入。active-batch=16/异构 context、source/compile/device/DFX 已完成。设计见 [`attention/attention-tiling-and-partitioning.md`](attention/attention-tiling-and-partitioning.md) | 2026-08-02 |
+| I2 | Wave4 immutable release stability gate | P0 | ⛔ | codex | I1 | `d58b6be7` 增第三 completion wave，`d7e1381b` 对齐 harness AST。Wave4 manifest `sha256:8125c678…` 的 audit/smoke/compile/64K ITL/DFX PASS，p50 `50.204 ms`；N=128 Run1 `122/128` 但 step2 spread=`2.0`，Run2 `123/128` spread=0。raw token gate PASS，正式发布等待 TP-spread 稳定性；禁止无限重跑挑结果。见 [`../../benchmark/2026-08-02-step3p5-attention-final.md`](../../benchmark/2026-08-02-step3p5-attention-final.md) | 2026-08-03 |
 
 ---
 
@@ -110,8 +109,9 @@ producer → 数学变换/quant/route-map → transport/window
 
 **base 校正后关键路径**：A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1 已 ✅；
 historical pull C2 仅作回归基线。当前剩余：
-**B3（KV resident/in-place 的连续多轮 row-diff/liveness 证据）和 I2（clean canonical
-N=128 raw gate）**。Attention/Vec 产品实现已合入，但 candidate 镜像尚不能正式发布。
+**B3（KV resident/in-place 的连续多轮 row-diff/liveness 证据）和 I2（Wave4
+TP-spread 稳定性）**。Attention/Vec 产品实现已合入，raw token gate 已过，但 candidate
+尚不能正式发布。
 
 ---
 
@@ -130,7 +130,8 @@ N=128 raw gate）**。Attention/Vec 产品实现已合入，但 candidate 镜像
 
 | 日期 | ID | 变更 | 备注 |
 |------|----|----|------|
-| 2026-08-02 | I1/I2 | Attention/Vec 产品实现收口并构建 clean canonical candidate；I1 完成，I2 因 raw precision gate 阻塞 | 源码 `pypto-lib@76d96bdb` / `pypto@defa97c5`；64K p50 `50.563 ms`；N=128 三轮均 `121/128`；LOW-WAIT DFX reference 更正为 rank2 |
+| 2026-08-03 | I2 | 三波 completion lifetime + harness AST 对齐进入 Wave4 immutable candidate；raw token gate 转绿，稳定性仍阻塞 | `pypto-lib@d7e1381b`；64K p50 `50.204 ms`；N=128 为 `122/128(spread=2.0)`、`123/128(spread=0)`；LOW-WAIT rank2 |
+| 2026-08-02 | I1/I2 | Attention/Vec 产品实现收口并构建历史 clean canonical candidate；I1 完成，当时 I2 因 raw precision gate 阻塞 | 源码 `pypto-lib@76d96bdb` / `pypto@defa97c5`；64K p50 `50.563 ms`；N=128 三轮均 `121/128` |
 | 2026-07-24 | — | 专项建档，12 个子任务初始化为 TODO | 对照 v4-flash `decode_fwd.py` 拆分；HLD/LLD 见同目录 |
 | 2026-07-24 | — | 验证标准改为**单一多步 decode**（N=128 ≥95% vs vanilla）；删除单步/单 token 单列（多步已含首 token） | 采纳用户口径；stall 用探针独立判定 |
 | 2026-07-24 | G1 | 新增：调度轴 batch→experts/feature + dynamic active-token（对齐 DeepSeek） | 源自 batch/SPMD 分歧调研 |

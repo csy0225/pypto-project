@@ -1,7 +1,7 @@
 # Attention task 切分与 tile 校准（最终实现）
 
-> **状态：2026-08-02 current source。** 权威代码为
-> `pypto-lib stepfun/develop@76d96bdbeac280f12ecf626b1bbd722b9278719e`；
+> **状态：2026-08-03 current source。** 权威代码为
+> `pypto-lib stepfun/develop@d7e1381be0236d6e068cd4d86aa815ea693ea5c7`；
 > 动态 SPMD launch bound 所需 codegen 修复为
 > `pypto stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。
 > 旧文档中的 fixed-24、四阶段 Full online-softmax、standalone Pass-A/B/C 和
@@ -202,8 +202,9 @@ stage local BF16 window
 -> Wave 1 notify/wait
 -> rank-owned reduce-scatter（固定 peer 顺序，单 FP32 accumulator，一次 BF16 cast）
 -> push all-gather
--> Wave 2 notify/wait
+-> Wave 2 notify/wait（publish pushed chunks）
 -> copy completed window to local output
+-> Wave 3 notify/wait（close final local-read lifetime）
 ```
 
 当前 transfer grain 为 512 columns，是通信 profile，不应被 residual Vec epilogue 机械继承。
@@ -260,9 +261,10 @@ subject to:
   canonical precision gate
 ```
 
-## 10. 验证与当前发布状态
+## 10. 历史 `76d96bdb` 验证与发布状态
 
-源码/镜像验证已覆盖：source contracts、compile/lowered、bs=1/64K DFX、active-batch=16、
+本节保留 `76d96bdb` clean candidate 的历史结果；当前状态以 §11 为准。
+当时源码/镜像验证覆盖：source contracts、compile/lowered、bs=1/64K DFX、active-batch=16、
 异构 context、immutable-image audit/smoke，以及 canonical N=128。
 
 最终 candidate 镜像：
@@ -289,3 +291,15 @@ min=49.213 ms, mean=50.568 ms, p50=50.563 ms, p99=max=52.537 ms
 所以源码合入、镜像审计和性能验证已经收尾，但该镜像只能标记为 **candidate / release
 blocked**，不能宣称 canonical release PASS。完整证据见
 [`../../../benchmark/2026-08-02-step3p5-attention-final.md`](../../../benchmark/2026-08-02-step3p5-attention-final.md)。
+
+
+## 11. 2026-08-03 Wave4 release 覆盖
+
+`d58b6be7` 修正 §7 的生命周期：Wave 2 只保证 push 已发布，不能证明所有 peer 已完成
+final local read；因此在 copy 后增加 Wave 3 completion barrier，防止下一次 collective
+过早复用通信 window。`d7e1381b` 让 two-layer harness 与 canonical 方法 AST 完全一致。
+
+最新 Wave4：`pypto-lib@d7e1381b`，manifest `sha256:8125c678…`，64K p50
+`50.204 ms`。N=128 两轮 raw token gate 为 `122/128` 与 `123/128`；前者 step2
+TP spread=`2.0`，后者 spread=0。设计/性能优化可收尾，但正式 release 仍等待
+TP-spread 稳定性。历史 `76d96bdb` 的 `50.563 ms` / `121/128` 仅作基线。

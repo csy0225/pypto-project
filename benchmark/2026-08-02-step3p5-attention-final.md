@@ -1,6 +1,99 @@
-# Step3p5 Attention/Vec 收尾与 clean canonical candidate（2026-08-02）
+# Step3p5 Attention/Vec 收尾、Wave3/Wave4 immutable 验证（2026-08-02—03）
 
-## 1. 结论摘要
+## 0. 2026-08-03 最终覆盖：Wave4 immutable candidate
+
+本文原始 §1--§10 记录 `pypto-lib@76d96bdb` 的 2026-08-02 clean canonical
+candidate，作为历史基线保留。当前源码和最新 immutable 候选已前进到：
+
+```text
+pypto-lib stepfun/develop
+  d7e1381be0236d6e068cd4d86aa815ea693ea5c7
+
+pypto stepfun/develop
+  defa97c526fec7e8f032dbbfcc39c820add02bf7
+```
+
+`d58b6be7` 在 canonical `tp_all_reduce` 的 final local copy 后增加第三波
+completion barrier，确保所有 rank 完成通信 window 的最终本地读取后，任何 rank
+才可返回并复用 window；`d7e1381b` 让 two-layer harness 使用同一三波协议，并通过
+AST contract 防止再次漂移。focused contracts 为 `28 passed`。
+
+镜像演进必须分开理解：
+
+| 阶段 | pypto-lib | 结果 | 定位 |
+|---|---|---|---|
+| 历史 clean canonical | `76d96bdb` | N=128 三轮均 `121/128`；64K p50 `50.563 ms` | 历史失败基线 |
+| Wave3 | `d58b6be7` | immutable `124/128`，miss `[2,8,13,82]`，TP spread 全零 | canonical 三波修复；harness 尚未对齐 |
+| **Wave4** | **`d7e1381b`** | Run1 `122/128`、step2 spread=`2.0`；Run2 `123/128`、spread 全零 | 最新 immutable candidate |
+
+Wave4 镜像：
+
+```text
+hub.i.basemind.com/stepcast/vllm-pypto:
+  stepfun-develop-20260802-attn-final-wave4
+
+manifest:
+  sha256:8125c678779c332d196b3d770242659d9a86185e0a8d96d89681647b00c864ab
+
+config/image ID:
+  sha256:c340001f791bd4666310b2f1755daba5492fec8c65f126888d46ed4366131c92
+```
+
+Wave4 通过 config/worktree/credential/canonical-only/CANN runtime/optimization
+symbol/PTOAS ldd audit、smoke、compile-only、64K ITL 与 DFX。验证只挂载
+driver(ro)、checkpoint(ro)、output(rw)，无宿主源码；只使用 cards `0--7`，未操作
+cards `8--15` 或 PID `2045390--2045397`。
+
+64K、bs=1、512 blocks、warmup=3、20 measured iterations：
+
+```text
+min  = 48.316 ms
+mean = 50.529 ms
+p50  = 50.204 ms
+p99  = 56.355 ms
+max  = 56.355 ms
+```
+
+其他已测点：active-batch=1/context=1 p50 `43.273 ms`；
+active-batch=16/context=1 p50 `112.773 ms`。
+
+DFX 的 LOW-WAIT reference 仍为 rank2：
+
+```text
+0162:/mnt/persist/chensiyu/workspace/attn-opt/out/
+  image_attn_final_wave4_20260802_immutable/itl64k/build_output/
+  WholeDecodeStep3p5_20260803_000049/dfx_outputs/rank2/d0/
+    critical_path_report.md
+    merged_swimlane_20260803_000143.json
+```
+
+rank2 makespan `38.504 ms`，`tp_all_reduce` critical-path compute `2.125 ms`。
+rank0/1/3--7 的超长 all-reduce 主要吸收 kernel 内自旋等待，不能当真实计算量；
+全 rank 摘要在 `itl64k/low_wait_reference.json`。
+
+同一固定 oracle（sha256
+`c9b2c72121880e9c605ae70d1cf85c0d4fc8815b180598bc76f7e293551dd947`）的
+Wave4 两轮 raw token gate 都达到 `>=95%`：
+
+| run | aligned | miss | TP spread |
+|---|---:|---|---|
+| 1 | `122/128=95.3125%` | `[2,8,13,22,82,93]` | step2=`2.0` |
+| 2 | `123/128=96.09375%` | `[2,8,13,22,82]` | 全零 |
+
+两轮 hidden 均 finite。**因此 raw token gate 已通过，但正式 release gate 仍未关闭**：
+Run1 违反 TP-spread 合同，当前证据尚不足以证明跨运行稳定。准确状态为：
+
+```text
+Wave4 immutable candidate
+raw token gate PASS
+formal release gate pending TP-spread stability
+```
+
+不要通过无预先限定的重复运行挑选“最好一轮”，也不要把 Wave4 写成正式 release。
+后续只应做预先定义的稳定性/根因实验；如果需要新镜像，必须再次完成 immutable
+audit、N=128、ITL 与 DFX gate。
+
+## 1. 结论摘要（历史 `76d96bdb` clean candidate）
 
 本轮完成了 attention 阶段源码、0162 真机验证、文档 double-check、镜像构建与
 immutable 性能/DFX 采集：

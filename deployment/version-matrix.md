@@ -5,9 +5,38 @@
 
 ## 已验证组合
 
-### 当前源码与 clean canonical candidate（2026-08-02）
+### 最新 Wave4 immutable candidate（2026-08-03）
 
-> **发布状态：BLOCKED。** 下表是当前源码与镜像内容的权威 pin；镜像 audit、smoke、
+> **发布状态：PENDING。** raw token gate 两轮均达到 `>=95%`，但 Run1 出现
+> step2 TP spread=`2.0`，因此只可标记为 immutable candidate，不能标正式 release。
+
+| 槽位 | Pin | 备注 |
+|------|-----|------|
+| Driver | `25.5.2` | 0162 device verified |
+| Firmware | `7.8.0.7.220` | 与 driver 成对 |
+| CANN | `9.0.0-beta.1` | image config/runtime audit PASS |
+| pypto | `defa97c526fec7e8f032dbbfcc39c820add02bf7` | dynamic SPMD launch-bound codegen fix |
+| pypto-lib / vllm-pypto | `d7e1381be0236d6e068cd4d86aa815ea693ea5c7` | `d58b6be7` 三波 completion lifetime + harness AST 对齐 |
+| pto-isa | `ecb6c303f797749f811a494742c3c08156aacabb` | immutable pin |
+| PTOAS | `fc8c6caee561914b4fb991dfc8427bb63194269e` | immutable pin |
+| simpler | `e2efebcbd190302609c0775d2984f409f5f42c76` | pypto runtime gitlink |
+| ptoas-bin | `v0.50` | binary release |
+| vLLM overlay | `csy/pypto-tail-mtp-integration@1b3e538c35999e62b6d24e0651b3a85b7d16c826` | immutable checkout |
+| **Wave4 candidate** | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260802-attn-final-wave4@sha256:8125c678779c332d196b3d770242659d9a86185e0a8d96d89681647b00c864ab` | config `sha256:c340001f791bd4666310b2f1755daba5492fec8c65f126888d46ed4366131c92` |
+
+验证：audit/smoke/compile/ITL/DFX PASS；64K p50 `50.204 ms`；rank2 LOW-WAIT
+makespan `38.504 ms`、TP AR compute `2.125 ms`。固定 oracle 下 Run1
+`122/128`、step2 spread=`2.0`；Run2 `123/128`、spread=0；hidden 均 finite。
+
+构建 spec：
+[`docker/builds/stepfun-develop-20260802-attn-final-wave4.env`](docker/builds/stepfun-develop-20260802-attn-final-wave4.env)。
+Wave3 spec/镜像为历史中间版本：`d58b6be7`、manifest `sha256:5c38b669…`、
+config `sha256:c2de3311…`、N=128 `124/128` 且 spread=0；因 two-layer harness 尚未
+与 canonical 建立 AST equality contract，被 Wave4 取代。
+
+### 历史 clean canonical candidate（2026-08-02）
+
+> **历史发布状态：BLOCKED。** 下表是该历史源码与镜像内容的权威 pin；镜像 audit、smoke、
 > 64K ITL 和 DFX 已通过，但 fresh-oracle N=128 三轮均为
 > `121/128=94.53125% < 95%`，所以不能标记为正式 release。
 
@@ -17,7 +46,7 @@
 | Firmware | `7.8.0.7.220` | 与 driver 成对 |
 | CANN | `9.0.0-beta.1` | clean canonical image config/runtime 仅保留该版本 |
 | pypto | `defa97c526fec7e8f032dbbfcc39c820add02bf7` | 动态 SPMD launch bound 的 orchestration codegen 变量重命名/声明修复；已合入 `stepfun/develop` |
-| pypto-lib / vllm-pypto | `76d96bdbeac280f12ecf626b1bbd722b9278719e` | workload-derived attention、Full SV+segment recurrence、Full/SWA out-proj cast fusion、dense RMS/down-cast、two-phase TP AR；已合入 `stepfun/develop` |
+| pypto-lib / vllm-pypto | `76d96bdbeac280f12ecf626b1bbd722b9278719e` | workload-derived attention、Full SV+segment recurrence、Full/SWA out-proj cast fusion、dense RMS/down-cast、当时的 two-wave TP AR；后续由 Wave3/Wave4 取代 |
 | pto-isa | `ecb6c303f797749f811a494742c3c08156aacabb` | 镜像显式源码 pin |
 | PTOAS | `fc8c6caee561914b4fb991dfc8427bb63194269e` | 镜像显式源码 pin |
 | simpler | `e2efebcbd190302609c0775d2984f409f5f42c76` | pypto `runtime` submodule |
@@ -47,7 +76,9 @@
 
 - [`docker/builds/stepfun-develop-20260802-attn-final.env`](docker/builds/stepfun-develop-20260802-attn-final.env)：v1，动态 SPMD codegen 缺失，失败；
 - [`docker/builds/stepfun-develop-20260802-attn-final-v2.env`](docker/builds/stepfun-develop-20260802-attn-final-v2.env)：v2，image config 含旧 CANN 路径，非 canonical；
-- [`docker/builds/stepfun-develop-20260802-attn-final-canonical.env`](docker/builds/stepfun-develop-20260802-attn-final-canonical.env)：clean candidate，raw precision gate 阻塞。
+- [`docker/builds/stepfun-develop-20260802-attn-final-canonical.env`](docker/builds/stepfun-develop-20260802-attn-final-canonical.env)：历史 clean candidate，raw precision gate 阻塞；
+- [`docker/builds/stepfun-develop-20260802-attn-final-wave3.env`](docker/builds/stepfun-develop-20260802-attn-final-wave3.env)：历史三波 lifetime 中间版本；
+- [`docker/builds/stepfun-develop-20260802-attn-final-wave4.env`](docker/builds/stepfun-develop-20260802-attn-final-wave4.env)：最新 immutable candidate。
 
 ### 历史已发布组合（2026-07-29）
 
@@ -142,10 +173,9 @@ simpler 是 pypto 的 git submodule，在 `pypto/runtime/`。`pypto` 仓的
 pin 决定编哪个 simpler commit。更新 simpler 时必须
 `git submodule update` 并 commit pypto 侧的 submodule pin。
 
-当前 clean candidate 的 simpler pin 是
+当前 Wave4 candidate 的 simpler pin 是
 `e2efebcbd190302609c0775d2984f409f5f42c76`，并由 pypto
-`defa97c526fec7e8f032dbbfcc39c820add02bf7` 的 `runtime` gitlink 固定；它尚未通过
-N=128 raw release gate。2026-07-29 历史发布组合使用的是 simpler
+`defa97c526fec7e8f032dbbfcc39c820add02bf7` 的 `runtime` gitlink 固定；它的 raw token gate 已过，但尚未通过 TP-spread 稳定性 release gate。2026-07-29 历史发布组合使用的是 simpler
 `8459d60f04b64b74322e965e0dd038ab26165124`，由 pypto `6933b1aa` 固定。
 **Dockerfile 里的显式 checkout 不算**——`pip install -e pypto` 期间的
 `git submodule update` 会把它切回 gitlink，所以换 simpler 必须同时 bump pypto。

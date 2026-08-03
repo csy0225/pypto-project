@@ -1,6 +1,6 @@
 # 04 · Attention 优化专项（step3p5 full / SWA flash decode）
 
-> **最终实现覆盖说明（2026-08-02）**：本文 §0–§9 保留专项探索过程，包含早期
+> **最终实现覆盖说明（2026-08-03）**：本文 §0–§9 保留专项探索过程，包含早期
 > fixed-24 lane、四阶段 split、standalone Pass-A/B/C 与 cast 默认关闭等历史状态；
 > **这些内容不得再作为当前实现说明。** 当前权威状态以
 > [§10](#10-最终实现与发布状态2026-08-02) 和
@@ -8,16 +8,16 @@
 > 为准：logical task 数按 active workload 推导，runtime 再映射到物理 AIC/AIV；
 > 5–10 us 仅是 task-grain 搜索起点；Full 的 SV 与 segment-local recurrence 已融合，
 > 只保留必要的 `full_online_softmax_reduce/finalize`；Full/SWA out-proj cast 默认都融合。
-> 源码已进入 `pypto-lib stepfun/develop@76d96bdb`，动态 SPMD codegen 修复进入
-> `pypto stepfun/develop@defa97c5`。clean canonical 镜像 audit/smoke/64K ITL/DFX 已通过，
-> 但同一 fresh oracle 的三次 N=128 均为 `121/128=94.53125%`，低于 `>=95%` raw gate；
-> 因此该镜像当前是 **candidate，发布门禁阻塞**。
+> 源码已进入 `pypto-lib stepfun/develop@d7e1381b`，动态 SPMD codegen 修复进入
+> `pypto stepfun/develop@defa97c5`。Wave4 audit/smoke/compile/64K ITL/DFX 已通过，
+> raw token gate 两轮均过；但 Run1 step2 TP spread=`2.0`，因此仍是
+> **immutable candidate，正式发布等待稳定性**。
 >
 > **性质**：LLD 专项。聚焦 decode 阶段 flash-attention kernel 本体（`attention_full.py` /
 > `attention_swa.py`）的重写路线，独立于 README 主表里的 Track A–H。收敛后其中的子项会以
 > `PERF-*` ID 回填 [`task-tracking.md`](task-tracking.md)。
 >
-> **当前源码基线**：pypto-lib `stepfun/develop@76d96bdbeac280f12ecf626b1bbd722b9278719e`，
+> **当前源码基线**：pypto-lib `stepfun/develop@d7e1381be0236d6e068cd4d86aa815ea693ea5c7`，
 > pypto `stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`；canonical Main =
 > `models/step3p5/decode_fwd.py:whole_decode_step3p5`。正文中的旧 file:line 只对应当时快照，
 > 不能覆盖当前源码。
@@ -807,9 +807,9 @@ per-block fusion 的回退，只能说明**在原 batch-only core mapping 下融
 
 ---
 
-## 10. 最终实现与发布状态（2026-08-02）
+## 10. 历史 clean candidate 实现与发布状态（2026-08-02）
 
-本节覆盖 §0–§9 中所有与“当前实现、默认参数、性能结果、发布状态”冲突的历史结论。
+本节曾覆盖 §0–§9；当前发布状态再由 §11 的 2026-08-03 Wave4 结果覆盖。
 
 ### 10.1 当前实现
 
@@ -951,3 +951,16 @@ run3 [2,8,13,14,22,82,93]；step68/70 spread=1.1875/3.25
 
 完整记录见
 [`../../benchmark/2026-08-02-step3p5-attention-final.md`](../../benchmark/2026-08-02-step3p5-attention-final.md)。
+
+
+## 11. Wave3/Wave4 communication-window lifetime 收口（2026-08-03）
+
+§10 的 `76d96bdb` clean candidate 作为历史基线保留。后续发现 Wave 2 只发布 push
+完成，rank 在 final local copy 后立即返回时，peer 仍可能读取将被下一 collective 复用的
+window。最小修复 `d58b6be7` 在 final copy 后增加 Wave 3 completion barrier；
+`d7e1381b` 再把 two-layer harness 与 canonical `tp_all_reduce` AST 对齐。
+
+Wave3 immutable 为 `124/128`、TP spread=0；Wave4 两轮为 `122/128`（step2
+spread=`2.0`）和 `123/128`（spread=0）。Wave4 64K p50 `50.204 ms`，LOW-WAIT
+rank2 makespan `38.504 ms`、TP AR compute `2.125 ms`。因此 attention/Vec 优化本体
+收尾，raw token gate 已过，但正式发布仍等待 TP-spread 稳定性，不得无限重跑选样本。

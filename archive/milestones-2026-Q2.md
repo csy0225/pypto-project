@@ -1,5 +1,22 @@
 # Milestones —— 2026 Q2
 
+## 2026-08-03 —— TP all-reduce window lifetime 三波闭合 + Wave4 immutable candidate
+
+- `pypto-lib stepfun/develop` 前进到 `d7e1381be0236d6e068cd4d86aa815ea693ea5c7`：
+  `d58b6be7` 在 final local copy 后增加第三 completion wave，`d7e1381b` 对齐
+  two-layer harness 并增加 AST equality contract；focused contracts `28 passed`。
+- Wave3（`d58b6be7`）immutable：manifest `sha256:5c38b669…`、config
+  `sha256:c2de3311…`；audit/smoke PASS；N=128 `124/128`、miss `[2,8,13,82]`、
+  TP spread 全零。它证明 canonical 三波 lifetime 修复有效，但 harness 尚未对齐。
+- Wave4（`d7e1381b`）immutable：manifest `sha256:8125c678…`、config
+  `sha256:c340001f…`；audit/smoke/compile/64K ITL/DFX PASS；64K p50 `50.204 ms`。
+- 固定 oracle 两轮：Run1 `122/128`、miss `[2,8,13,22,82,93]`、step2 spread=`2.0`；
+  Run2 `123/128`、miss `[2,8,13,22,82]`、spread=0；hidden 均 finite。
+- DFX LOW-WAIT rank2：makespan `38.504 ms`，TP AR compute `2.125 ms`；其余 rank
+  的长条主要吸收 kernel 内自旋等待。
+- 判定：**raw token gate PASS；formal release pending TP-spread stability**。不再做
+  无预先限定的 N=128 重跑，也不把 Wave4 标正式 release。
+
 ## 2026-08-02 —— Attention/Vec 优化收口 + clean canonical candidate（发布阻塞）
 
 - **源码合入**：
