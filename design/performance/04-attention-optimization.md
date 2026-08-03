@@ -1,11 +1,12 @@
 # 04 · Attention 优化专项（step3p5 full / SWA flash decode）
 
-> **最终实现覆盖说明（2026-08-03）**：本文 §0–§9 保留专项探索过程，包含早期
-> fixed-24 lane、四阶段 split、standalone Pass-A/B/C 与 cast 默认关闭等历史状态；
-> **这些内容不得再作为当前实现说明。** 当前权威状态以
+> **最终实现覆盖说明（2026-08-03）**：本文已合并原
+> `attention/attention-tiling-and-partitioning.md` 的最终 task/tile 设计。§0–§9
+> 保留专项探索过程，包含早期 fixed-24 lane、四阶段 split、standalone Pass-A/B/C
+> 与 cast 默认关闭等历史状态；**这些内容不得再作为当前实现说明。** 当前权威状态以
 > [§12](#12-wave5-source-publication-稳定性收口2026-08-03) 和
-> [`attention/attention-tiling-and-partitioning.md`](attention/attention-tiling-and-partitioning.md)
-> 为准：logical task 数按 active workload 推导，runtime 再映射到物理 AIC/AIV；
+> [§13](#13-当前最终实现task-切分与-tile-profile合并文档) 为准：
+> logical task 数按 active workload 推导，runtime 再映射到物理 AIC/AIV；
 > 5–10 us 仅是 task-grain 搜索起点；Full 的 SV 与 segment-local recurrence 已融合，
 > 只保留必要的 `full_online_softmax_reduce/finalize`；Full/SWA out-proj cast 默认都融合。
 > 当前源码为 `pypto-lib stepfun/develop@7099476b` 与
@@ -1036,3 +1037,262 @@ AR+residual/RMS/projection 融合不合 canonical。
 
 完整证据见
 [`../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md`](../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md)。
+
+## 13. 当前最终实现：task 切分与 tile profile（合并文档）
+
+本节合并原 `attention/attention-tiling-and-partitioning.md`，作为当前实现的单一
+设计入口。§0–§9 的早期实验、fixed-lane probe 和失败方案仍保留用于解释为什么
+最终没有选择那些路线，但不能覆盖本节。
+
+### 13.1 核心抽象：workload-derived tasks，而不是固定核心数
+
+```text
+logical_tasks(row, stage)
+  = ceil(actual_work(row, stage) / architecture_profile_grain(stage))
+
+total_tasks(stage)
+  = sum(logical_tasks(row, stage) for row in active_rows)
+```
+
+PyPTO Orchestration 只构建 logical task DAG；runtime 根据目标架构的 AIC/AIV
+资源和当前可调度状态形成一个或多个 wave。由此可同时支持：
+
+- 让任务数接近一个或若干完整 wave；
+- 在不同架构上使用不同 grain；
+- 按 active batch 和每行真实 `seq_len` 生成任务；
+- 将静态 `BATCH=16` 作为 storage capacity，而不是永久 logical batch。
+
+**5–10 us/task 只是 sweep 起点，不是目标函数。** 最终选择必须联合比较：
+
+```text
+per-task duration
++ stage span
++ AIC/AIV wave 与 packing/core-wait
++ dispatch overhead
++ reduction/finalize dependency tail
++ batch16 / heterogeneous-context behavior
+```
+
+A2A3 上已经出现过 task body 接近 10 us 但因多一 wave 而慢于约 15–20 us
+单-wave候选的情况。
+
+### 13.2 shape、storage 与逻辑工作量
+
+| 参数 | Full | SWA |
+|---|---:|---:|
+| TP-local Q heads | 8 | 12 |
+| Q physical pad | 16 | 24/32（阶段相关） |
+| `HEAD_DIM` | 128 | 128 |
+| KV cache block | 128 tokens | 128 tokens |
+| 最大有效 KV blocks | context 决定；64K 为 512 | window 512 tokens，即最多 4 |
+| storage batch capacity | 16 | 16 |
+
+必须区分：
+
+1. storage block/tile；
+2. logical task grain；
+3. physical AIC/AIV mapping；
+4. active workload；
+5. static capacity。
+
+两个 128-token storage blocks 被同一 task 连续处理，只表示调度 grouping；除非
+实现还完成 operand gather、合法的新 tile 和对应 lowering，否则不能称为
+256-token fused matmul。
+
+### 13.3 Full attention 最终任务图
+
+```text
+full_qk_matmul
+-> full_softmax
+-> full_sv_matmul                  # SV + segment-local recurrence
+-> full_online_softmax_reduce      # write-disjoint group reduction
+-> full_online_softmax_finalize    # per-row merge/normalize/BF16 store
+-> full_out_proj_matmul_{aic,aiv}  # FP32 accumulator -> BF16 cast fused
+```
+
+默认 decode 配置不会生成：
+
+```text
+full_online_softmax_pass_a
+full_online_softmax_pass_b
+full_online_softmax_pass_c
+full_out_proj_cast
+```
+
+`FUSE_CAST=0` fallback 与 prefill 的独立 cast 路径仍可存在；“默认 decode graph
+没有 standalone cast”不能扩写成“仓库内删除了所有相关符号”。
+
+#### 13.3.1 QK / block-softmax
+
+task 映射到 `(batch_row, task_in_row, block_start)`。每个 active row 先由真实
+`seq_len` 得到 `context_blocks`，再按 stage grain 计算 task 数；短 row 不按最大
+context 补齐无效任务。
+
+A2A3 默认：
+
+```text
+QK blocks/task       = 22
+softmax blocks/task  = 12
+```
+
+64K、batch1 时：
+
+```text
+QK       ceil(512 / 22) = 24 logical tasks
+softmax  ceil(512 / 12) = 43 logical tasks
+```
+
+这里的 `24` 是 workload 与 grain 的结果，不是源码固定使用 24 个物理核心。
+QK 使用 AIC、softmax 使用 AIV，wave 必须按两类资源分别计算。
+
+#### 13.3.2 SV 与 online-softmax
+
+`full_sv_matmul` 同时完成：
+
+1. 每个 KV block 的 `P @ V`；
+2. 同一 task 所拥有 segment 内的 `(m,l,o)` recurrence；
+3. 写出一个 segment partial。
+
+因此历史 Pass-A 已消失。A2A3 profile：
+
+```text
+SV + segment recurrence blocks/task = 16
+reduce fan-in                        = 8
+```
+
+两个后继 kernel 仍需保留：
+
+- `full_online_softmax_reduce`：不同 SV task 的 segment partial 需要跨 task
+  合并；每个 reduce task 只写自己的 destination；
+- `full_online_softmax_finalize`：每个 active row 合并 group outputs，
+  normalize、flatten，并完成 FP32→BF16 最终 store。
+
+若机械并入所有 SV task，要么多个 task 并发写同一 row，要么退回单 task 串行
+消费整行。这两者都比保留明确的 RAW/liveness 边界更差。
+
+### 13.4 SWA 保持不同结构
+
+SWA 的有效 window 最多 4 个 KV blocks。当前每个 active row 是一个 logical task，
+task 内顺序处理完整 window：
+
+```text
+swa_qk_matmul -> swa_softmax -> swa_sv_matmul -> swa_online_softmax
+```
+
+`swa_online_softmax` 的代表性执行约 `2.9–3.2 us`；进一步拆层次归约会增加
+scratch、dispatch 和依赖。Full 与 SWA 不应机械共用 task graph：
+
+- Full：长 context、多 work items，适合 context split 和层次归约；
+- SWA：window 很短，优先保持每 active row 的任务密度。
+
+### 13.5 out-proj 参数与 cast fusion
+
+Full/SWA 保留独立 profile knob；当前 A2A3 默认恰好相同：
+
+```text
+matmul N tile        = 64
+matmul tiles/task    = 3
+vector N             = 128
+cast fusion          = 1
+```
+
+`4096/64=64` 个合法 N tiles 按每 task 3 tiles 分成 22 个 logical tasks，
+接近 A2A3 一个 AIC wave；这是校准结果，不是数学约束。
+
+cast 融合后的数据流：
+
+```text
+FP32 matmul accumulator
+-> same mixed task AIV cast
+-> BF16 partial output
+```
+
+独立开关仍保留，便于新架构发现 mixed-kernel 不合适时回退。
+
+### 13.6 active batch=16 与异构 context
+
+`BATCH=16` 只决定 tensor/ABI capacity。logical tasks 由 `active_tokens` 和
+每行 `seq_lens` 推导；inactive rows 不参与 attention/KV metadata 工作。
+
+已验证：
+
+- active-batch=16、ctx=1：16 行 finite/nonzero，TP spread=0；
+- 异构 16-row context：task 数按各行 `ceil` 求和；
+- uniform batch16/64K online grain：
+
+| grain | logical tasks | 两层 wall p50 |
+|---:|---:|---:|
+| 16 | 512 | 5.5590 ms |
+| 24 | 352 | 5.5494 ms |
+| 32 | 256 | 5.6126 ms |
+
+16 与 24 相差约 0.17%，不足以新增 batch-aware 产品分支。若未来 batch16 是主服务
+点，应补多轮 median，再形成独立 architecture/workload profile。
+
+### 13.7 all-reduce 与 Vec 邻接优化边界
+
+最终 Wave5 all-reduce：
+
+```text
+self-target TPUT source publication
+-> Wave 1 notify/wait
+-> rank-owned reduce-scatter
+-> push all-gather
+-> Wave 2 notify/wait
+-> final local copy
+-> Wave 3 notify/wait
+```
+
+transfer grain=512 是通信 profile，不应机械继承给 residual Vec epilogue。已验证：
+
+- producer 直接写 AR window：正确但无稳定收益，不合入；
+- AR final copy + residual：512 grain 变慢，128 grain 仅噪声级，不合入；
+- residual + RMS stats：多个粒度均变慢，不合入；
+- dense RMSNorm direct BF16 reread：保留；
+- dense down-proj cast fusion：保留；
+- gate/up + SiLU、RMSNorm + projection：只保留 probe。
+
+原则是：**能融合不等于应该融合**。必须同时满足 correctness、稳定收益、
+资源映射、batch16 与最小改动。
+
+### 13.8 PyPTO 架构边界
+
+- Orchestration 由 runtime scalar 构建 logical task DAG 与 dependency；
+- InCore task 只执行自己的 tile/segment；
+- runtime 决定 logical tasks 到物理核和 wave 的映射；
+- task-grain 参数属于 architecture profile，不进入模型数学语义；
+- 当前没有 app-side persistent work-stealing loop。
+
+“每个核拉取 5–10 us task”的核心效果已经由 logical task scheduler + runtime wave
+dispatch 覆盖。真正的 persistent worker/device-side work queue 需要修改 runtime ABI；
+当前证据不支持为了它替换现有模式。
+
+### 13.9 A2A3 当前 profile 与跨架构校准
+
+```text
+Full QK blocks/task                    = 22
+Full block-softmax blocks/task         = 12
+Full SV+segment recurrence blocks/task = 16
+Full online reduce fan-in              = 8
+Full/SWA out-proj matmul N              = 64
+Full/SWA out-proj tiles/task            = 3
+Full/SWA vector N                       = 128
+Full/SWA out-proj cast fusion           = 1
+TP all-reduce transfer chunk            = 512
+```
+
+新架构必须重新 sweep。建议目标：
+
+```text
+minimize:
+  total critical-path stage span
+  + extra-wave/core-wait/dispatch cost
+  + reduction/finalize tail
+
+subject to:
+  logical-task counter limit
+  legal cube/vector tile and UB/L1 budget
+  active-batch/capacity correctness
+  finite + TP consistency
+  canonical precision gate
+```

@@ -1,0 +1,4 @@
+interface:
+  display_name: "PyPTO Attention Performance"
+  short_description: "Evidence-driven attention performance optimization"
+  default_prompt: "Use $pypto-attention-performance to analyze and optimize a PyPTO attention path."

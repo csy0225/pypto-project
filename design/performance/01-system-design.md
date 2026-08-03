@@ -10,7 +10,8 @@
 > 64K/batch16 ITL/DFX 已通过；Main N=128 三轮均 `123/128` 且 TP spread=0，
 > 当前为 **0162 release-qualified**。下方较早的主线表和收益表是
 > 设计历史；I1/I2 当前状态以 [`task-tracking.md`](task-tracking.md) 和
-> [`04-attention-optimization.md`](04-attention-optimization.md) §12 为准。
+> [`04-attention-optimization.md`](04-attention-optimization.md) §12 为准；
+> attention 最终 task/tile 合并设计见同文 §13。
 
 > **2026-07-26 交付收益覆盖**：本专项当前已实际落地并完成 device
 > regression 的优化为 **B1、B2、C2**，另有 A1 可观测性基线。本文 §5
