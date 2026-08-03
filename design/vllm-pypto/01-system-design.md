@@ -1,16 +1,18 @@
 # vLLM + pypto 集成 · 系统设计（HLD）
 
-> **2026-08-02 current-source override（优先于下方历史正文）**：当前 source/candidate
+> **2026-08-03 current-source override（优先于下方历史正文）**：当前 source/release
 > pins 见
 > [`deployment/version-matrix.md`](../../deployment/version-matrix.md)。
-> `pypto-lib stepfun/develop@76d96bdbeac280f12ecf626b1bbd722b9278719e` 的唯一默认 Main 是
+> `pypto-lib stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0` 的唯一默认 Main 是
 > `models.step3p5.decode_fwd:whole_decode_step3p5`，固定 0724
 > 环境 N=256 canonical-only 清理前后 replacement `256/256` exact；这只关闭了
-> standalone/Main replacement 子 gate。clean canonical candidate 的 audit/smoke/
-> 64K ITL/DFX 已通过，但 fresh-oracle N=128 三轮均为 `121/128=94.53125%`，
-> 低于 `>=95%` raw gate，正式发布仍 BLOCKED。独立 live front 接管、真实 paged-KV
+> standalone/Main replacement 子 gate。Wave5 的 audit/smoke/Main+MTP compile、
+> Main N=128×3、Main batch16、MTP batch1/batch16×2、64K/batch16 ITL/DFX 已通过；
+> Main N=128 三轮均 `123/128` 且 TP spread=0，因此在 0162 release-qualified。
+> 独立 live front 接管、真实 paged-KV
 > bridge、同代 MTP absolute gate 和 3-way HBM 仍是 active work，不得把本设计
-> 中的历史 plumbing 证据写成完整 production serving 平替。
+> 中的历史 plumbing 证据写成完整 production serving 平替，也不能把 0162 结果外推
+> 到其它机器/架构。
 >
 > 下方较早历史正文及其 pins 属历史上下文；当前 pin 以本段和版本矩阵为准。
 >

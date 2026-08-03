@@ -1,26 +1,28 @@
 # Phase 28 — N=1 整网 → vLLM live single-handoff 集成
 
-> **2026-08-02 current-source override（优先于下方 2026-07-28、2026-07-15/18
+> **2026-08-03 current-source override（优先于下方 2026-08-02、2026-07-28、2026-07-15/18
 > 历史正文）**
 >
-> 当前 source/candidate 为：
+> 当前 source/release 为：
 >
 > ```text
-> pypto-lib / vllm-pypto 76d96bdbeac2 (stepfun/develop)
+> pypto-lib / vllm-pypto 7099476b7c4f (stepfun/develop)
 > pypto                    defa97c526fec
 > simpler/runtime          e2efebcbd190
 > pto-isa                  ecb6c303
 > PTOAS                    fc8c6cae
 > ptoas                    0.50
 > default Main             models.step3p5.decode_fwd:whole_decode_step3p5
-> image                    stepfun-develop-20260802-attn-final-canonical
-> manifest                 sha256:64c573bcf64497da6df0d3d28d7de85dfddde8e2a2a1b70e8bd5123edd51cb9d
+> image                    stepfun-develop-20260803-attn-final-wave5
+> manifest                 sha256:4acc77cdce05c40fff7fdbcedb5612fa49c2edc847a534c218389ddc08667b32
 > ```
 >
-> Attention/Vec 源码已合入，candidate 的 audit/smoke/64K ITL/DFX 已通过；但
-> fresh-oracle N=128 三轮均为 `121/128=94.53125%`，低于 `>=95%` raw gate，
-> 所以该镜像是 **candidate / release blocked**，不能写成正式 release。
-> 0162 本轮只使用 cards 0--7，未操作 cards 8--15 及 PID 2045390--2045397。
+> Attention/Vec 与 Wave5 TP all-reduce stability 已合入。immutable
+> audit/smoke/Main+MTP compile、Main N=128 预定义三轮、Main batch16、MTP
+> batch1/batch16×2、64K/batch16 ITL/DFX 全 PASS；Main N=128 三轮均
+> `123/128` 且 TP spread=0。因此该镜像为 **0162 release-qualified**，但其它机器/
+> 架构未由本轮独立证明。0162 本轮只使用 cards 0--7，未操作 cards 8--15 及
+> PID 2045390--2045397。
 >
 > 本 phase 尚未关闭：独立 live vLLM front 接管、live paged-KV bridge /
 > dynamic batch、同代 Main→MTP absolute oracle、3-way HBM/redundant weights

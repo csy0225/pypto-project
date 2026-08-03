@@ -3,21 +3,22 @@
 > **最终实现覆盖说明（2026-08-03）**：本文 §0–§9 保留专项探索过程，包含早期
 > fixed-24 lane、四阶段 split、standalone Pass-A/B/C 与 cast 默认关闭等历史状态；
 > **这些内容不得再作为当前实现说明。** 当前权威状态以
-> [§10](#10-最终实现与发布状态2026-08-02) 和
+> [§12](#12-wave5-source-publication-稳定性收口2026-08-03) 和
 > [`attention/attention-tiling-and-partitioning.md`](attention/attention-tiling-and-partitioning.md)
 > 为准：logical task 数按 active workload 推导，runtime 再映射到物理 AIC/AIV；
 > 5–10 us 仅是 task-grain 搜索起点；Full 的 SV 与 segment-local recurrence 已融合，
 > 只保留必要的 `full_online_softmax_reduce/finalize`；Full/SWA out-proj cast 默认都融合。
-> 源码已进入 `pypto-lib stepfun/develop@d7e1381b`，动态 SPMD codegen 修复进入
-> `pypto stepfun/develop@defa97c5`。Wave4 audit/smoke/compile/64K ITL/DFX 已通过，
-> raw token gate 两轮均过；但 Run1 step2 TP spread=`2.0`，因此仍是
-> **immutable candidate，正式发布等待稳定性**。
+> 当前源码为 `pypto-lib stepfun/develop@7099476b` 与
+> `pypto stepfun/develop@defa97c5`。Wave5 以 self-target TPUT 显式发布 all-reduce
+> source partial，已完成 immutable audit、Main/MTP compile、Main N=128×3、
+> Main batch16、MTP batch1/batch16×2、64K/batch16 ITL/DFX，状态为
+> **0162 release-qualified**；其它机器/架构未由本轮独立证明。
 >
 > **性质**：LLD 专项。聚焦 decode 阶段 flash-attention kernel 本体（`attention_full.py` /
 > `attention_swa.py`）的重写路线，独立于 README 主表里的 Track A–H。收敛后其中的子项会以
 > `PERF-*` ID 回填 [`task-tracking.md`](task-tracking.md)。
 >
-> **当前源码基线**：pypto-lib `stepfun/develop@d7e1381be0236d6e068cd4d86aa815ea693ea5c7`，
+> **当前源码基线**：pypto-lib `stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0`，
 > pypto `stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`；canonical Main =
 > `models/step3p5/decode_fwd.py:whole_decode_step3p5`。正文中的旧 file:line 只对应当时快照，
 > 不能覆盖当前源码。
@@ -809,9 +810,9 @@ per-block fusion 的回退，只能说明**在原 batch-only core mapping 下融
 
 ## 10. 历史 clean candidate 实现与发布状态（2026-08-02）
 
-本节曾覆盖 §0–§9；当前发布状态再由 §11 的 2026-08-03 Wave4 结果覆盖。
+本节曾覆盖 §0–§9；当前发布状态再由 §12 的 2026-08-03 Wave5 结果覆盖。
 
-### 10.1 当前实现
+### 10.1 当时实现
 
 - 不再固定 24 个物理核心。各 stage 的 logical task 数由 active rows、每行真实
   `seq_len` 和 architecture profile grain 推导，runtime 再映射到 AIC/AIV wave。
@@ -819,10 +820,10 @@ per-block fusion 的回退，只能说明**在原 batch-only core mapping 下融
   packing、tail、dispatch、归约依赖链与 batch16。
 - A2A3 默认：Full QK `22 blocks/task`、block-softmax `12 blocks/task`、
   SV+segment recurrence `16 blocks/task`、reduce fan-in `8`。
-- Full 已把历史 Pass-A 合入 `full_sv_matmul`；当前只保留跨 task 必需的
+- Full 已把历史 Pass-A 合入 `full_sv_matmul`；该版本只保留跨 task 必需的
   `full_online_softmax_reduce` 与 per-row `full_online_softmax_finalize`。
-  当前无 `full_online_softmax_pass_a/pass_b/pass_c`。
-- Full/SWA out-proj 各自保留独立 profile，当前默认均为
+  该版本无 `full_online_softmax_pass_a/pass_b/pass_c`。
+- Full/SWA out-proj 各自保留独立 profile，当时默认均为
   `matmul N=64`、`tiles/task=3`、`vector N=128`、`cast fusion=1`；
   在默认 decode 配置下不会生成 standalone `full_out_proj_cast` /
   `swa_out_proj_cast`。源码仍保留 `FUSE_CAST=0` 的 fallback 分支；prefill
@@ -834,7 +835,7 @@ per-block fusion 的回退，只能说明**在原 batch-only core mapping 下融
   down-proj cast fusion 保留；AR+residual、residual+RMS stats、RMS+projection、
   gate/up+SiLU 等无稳定收益方案不合入。
 
-权威源码：
+当时源码：
 
 ```text
 pypto-lib stepfun/develop
@@ -930,7 +931,7 @@ rank2 makespan 为 `38.924 ms`，其中 `tp_all_reduce` critical-path compute �
 compute；例如 rank5 的 `tp_all_reduce` critical-path compute 为 `344.553 ms`。
 因此 rank5 可用于观察完整 collective span，但不能称为 LOW-WAIT reference。
 
-发布门禁仍未通过。同一 fresh oracle 上 canonical 三轮均为：
+该历史版本当时未通过发布门禁。同一 fresh oracle 上 canonical 三轮均为：
 
 ```text
 121/128 = 94.53125% < 95%
@@ -945,9 +946,10 @@ run3 [2,8,13,14,22,82,93]；step68/70 spread=1.1875/3.25
 ```
 
 所有 hidden finite。不能借用 v2 的历史 `123/128` 宣称 clean canonical PASS，也不应
-无限重跑直到偶然过线。当前镜像是 **clean canonical candidate / release blocked**；
-源码合入、audit/smoke、ITL、DFX 已收尾，但正式发布需先闭环 raw precision/collective
-非确定性。
+无限重跑直到偶然过线。该历史镜像当时是
+**clean canonical candidate / release blocked**；源码合入、audit/smoke、ITL、DFX
+已收尾，但当时正式发布仍需先闭环 raw precision/collective 非确定性。当前发布结论
+以 §12 Wave5 为准。
 
 完整记录见
 [`../../benchmark/2026-08-02-step3p5-attention-final.md`](../../benchmark/2026-08-02-step3p5-attention-final.md)。
@@ -963,4 +965,74 @@ window。最小修复 `d58b6be7` 在 final copy 后增加 Wave 3 completion barr
 Wave3 immutable 为 `124/128`、TP spread=0；Wave4 两轮为 `122/128`（step2
 spread=`2.0`）和 `123/128`（spread=0）。Wave4 64K p50 `50.204 ms`，LOW-WAIT
 rank2 makespan `38.504 ms`、TP AR compute `2.125 ms`。因此 attention/Vec 优化本体
-收尾，raw token gate 已过，但正式发布仍等待 TP-spread 稳定性，不得无限重跑选样本。
+当时已收尾，raw token gate 已过，但 Wave4 正式发布仍等待 TP-spread 稳定性；
+该历史 blocker 后续由 §12 Wave5 关闭。
+
+
+## 12. Wave5 source-publication 稳定性收口（2026-08-03）
+
+§11 的 Wave4 仍有一轮 step2 TP spread=`2.0`，说明 final-read lifetime 闭合并不能
+自动证明 Wave 1 前的 source payload 已在 notify 前可靠发布。Wave5
+`7099476b7c4f13112b159e237e7a64344803caf0` 做最小修复：把普通 local source store
+改为 self-target synchronous TPUT，再进入既有三波协议。
+
+```text
+local source
+-> self-target drained TPUT
+-> Wave 1 source publication
+-> rank-owned reduce-scatter
+-> push all-gather
+-> Wave 2 result publication
+-> final local copy
+-> Wave 3 lifetime close
+```
+
+该变化同步覆盖 canonical Main、selected MTP 与 two-layer harness，并显式保留
+MTP input projection 的 all-reduce 返回值 lineage。不改变 rank ownership、固定 peer
+顺序、单 FP32 accumulator、最终一次 BF16 cast、host ABI 或 task graph；也不新增
+orchestration kernel。
+
+Wave5 immutable release：
+
+```text
+image:
+  hub.i.basemind.com/stepcast/vllm-pypto:
+  stepfun-develop-20260803-attn-final-wave5
+
+manifest:
+  sha256:4acc77cdce05c40fff7fdbcedb5612fa49c2edc847a534c218389ddc08667b32
+
+config:
+  sha256:4f2539c17fe60e61062bd27d96082a707e581b81fe716208c1bca4139dfd7394
+```
+
+0162 immutable gate：
+
+- Main N=128 预定义三轮均 `123/128=96.09375%`，miss
+  `[2,8,13,22,82]`，hidden finite，TP spread=0；
+- Main active-batch=16 为 `8/8 exact`、finite、128 个 active rank rows、
+  TP spread=0；
+- MTP batch1/batch16 两轮 token `[6178,410,303]`、pass rate 1.0、
+  max diff 0、TP spread=0；
+- 64K ITL p50 `49.796 ms`；batch16/context1 p50 `112.827 ms`；
+- DFX LOW-WAIT heuristic rank2：64K makespan `38.367 ms`、TP AR compute
+  `2.437 ms`；batch16 makespan `107.076 ms`、TP AR compute `2.429 ms`。
+
+critical-path 工具会把 collective 内部自旋等待计入 kernel compute，因此其它 rank
+的长 span 不能解释为 all-reduce 算术耗时。
+
+发布判断：
+
+```text
+Wave5 canonical release
+machine scope = 0162 release-qualified
+```
+
+当前证据支持 source publication/lifetime ordering 是 0162 的关键边界；没有跨所有
+硬件的 bit-level 证明，因此不能写成 self-target TPUT 是所有架构的唯一根因。attention
+task grain、Full/SWA cast、online-softmax 和 Vec 结论不变：不固定 24 核，`5–10 us`
+仅为 sweep 起点，`BATCH=16` 仍只是 storage capacity，无稳定收益的
+AR+residual/RMS/projection 融合不合 canonical。
+
+完整证据见
+[`../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md`](../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md)。

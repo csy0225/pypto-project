@@ -14,55 +14,6 @@ gap-5、scheduler-timeout、attention 乱码、G5b import_ipc、swa_moe const-fo
 
 ---
 
-## 🔴 ACTIVE — ATTN-WAVE4-STABILITY：raw token gate 已过，TP-spread 稳定性未闭环
-
-**范围**：只 gate Wave4 的正式 release，不回退已经合入 `stepfun/develop` 的
-attention/Vec 与三波 all-reduce lifetime 修复。
-
-**最新镜像**：
-
-```text
-hub.i.basemind.com/stepcast/vllm-pypto:
-  stepfun-develop-20260802-attn-final-wave4
-manifest: sha256:8125c678779c332d196b3d770242659d9a86185e0a8d96d89681647b00c864ab
-config:   sha256:c340001f791bd4666310b2f1755daba5492fec8c65f126888d46ed4366131c92
-pypto-lib: d7e1381be0236d6e068cd4d86aa815ea693ea5c7
-```
-
-**已解决部分**：历史 `76d96bdb` clean candidate 的 N=128 三轮均为 `121/128`。
-`d58b6be7` 在 canonical TP all-reduce final local copy 后增加第三 completion wave，
-关闭通信 window read lifetime；Wave3 immutable 结果为 `124/128`、TP spread 全零。
-`d7e1381b` 又把 two-layer harness 与 canonical 三波协议完全对齐，并增加 AST contract。
-
-**当前症状**：同一固定 oracle（sha256
-`c9b2c72121880e9c605ae70d1cf85c0d4fc8815b180598bc76f7e293551dd947`）上：
-
-| run | aligned | miss | TP spread |
-|---|---:|---|---|
-| 1 | `122/128=95.3125%` | `[2,8,13,22,82,93]` | step2=`2.0` |
-| 2 | `123/128=96.09375%` | `[2,8,13,22,82]` | 全零 |
-
-两轮 hidden 均 finite，raw token gate 均过；但 Run1 违反 TP-spread 合同，因此不能把
-Wave4 标成正式 release。当前准确状态是 **immutable candidate / formal release pending
-TP-spread stability**。
-
-**已通过且不应重复做**：config/worktree/credential/canonical-only/CANN runtime/
-optimization symbol/PTOAS ldd audit、smoke、two-layer compile（约 `1.4 s`）、64K ITL 与
-DFX。64K p50 `50.204 ms`；LOW-WAIT rank2 makespan `38.504 ms`，TP AR compute
-`2.125 ms`。验证无宿主源码挂载。
-
-**解除条件**：
-
-1. 预先定义有限的稳定性实验次数、输入、cards 与 TP-spread 判据；
-2. 证明三波 lifetime 协议在重复运行中满足 TP-spread 合同，或定位并修复剩余根因；
-3. 如代码变化，构建新的 clean immutable image，并复跑 audit/N=128/ITL/DFX；
-4. 禁止无限重跑、挑选最好一轮，或把 raw token PASS 等同正式 release。
-
-证据见
-[`benchmark/2026-08-02-step3p5-attention-final.md`](benchmark/2026-08-02-step3p5-attention-final.md)。
-
----
-
 ## 🟡 ACTIVE — DEPLOY-REPRO：镜像内 git 工作树 dirty，pin 集不足以复现验证环境（部分已解）
 
 **症状**：按 `deployment/docker/build.sh` + 记录 pin 全新构建的镜像，整网 CI 在
@@ -120,11 +71,11 @@ runtime `.so` hash/mtime；③ CANN/PTOAS/checkpoint/device/ring env；④ 对�
 
 ## 🔴 ACTIVE — Phase 28 live serving：per-layer KV bridge + 3-way HBM / redundant weights
 
-**当前代码边界（2026-08-03）**：`pypto-lib stepfun/develop@d7e1381be0236d6e068cd4d86aa815ea693ea5c7`
-只保留 `models.step3p5.decode_fwd:whole_decode_step3p5`。C/D/G、BS1 correctness
-和 Attention/Vec I1 已合入；Wave4 的 audit/smoke/compile/64K ITL/DFX 与 raw token
-gate 已通过，但 TP-spread stability 由本文件首条 blocker 单独阻塞。本节只描述
-Phase 28 live serving 缺口，不再把 BS1 的旧 `6127` 结果视为当前代码状态。
+**当前代码边界（2026-08-03）**：`pypto-lib stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0`
+只保留 `models.step3p5.decode_fwd:whole_decode_step3p5`。C/D/G、BS1 correctness、
+Attention/Vec I1 与 Wave5 TP all-reduce stability 已合入；Wave5 在 0162
+release-qualified。本节只描述 Phase 28 live serving 缺口，不再把 BS1 的旧
+`6127` 结果视为当前代码状态，也不把 0162 的结论外推到其它机器。
 `models/step3p5_opt`
 package、`whole_decode_opt` 和 `WholeDecodeOpt` 已删除。0726 已发布镜像内
 canonical-only N=256 与清理前 canonical 镜像 token/hidden `256/256` exact、

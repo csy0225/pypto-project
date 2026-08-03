@@ -8,19 +8,19 @@ containerd/nerdctl)。**
 
 ## 0. 当前镜像状态（2026-08-03）
 
-最新构建是 **Wave4 immutable candidate，不是正式 release**：
+最新构建是 **Wave5 canonical release（0162 release-qualified）**：
 
 ```text
-tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260802-attn-final-wave4
-manifest: sha256:8125c678779c332d196b3d770242659d9a86185e0a8d96d89681647b00c864ab
-config:   sha256:c340001f791bd4666310b2f1755daba5492fec8c65f126888d46ed4366131c92
+tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260803-attn-final-wave5
+manifest: sha256:4acc77cdce05c40fff7fdbcedb5612fa49c2edc847a534c218389ddc08667b32
+config:   sha256:4f2539c17fe60e61062bd27d96082a707e581b81fe716208c1bca4139dfd7394
 ```
 
 pins：
 
 ```text
 pypto      defa97c526fec7e8f032dbbfcc39c820add02bf7
-pypto-lib  d7e1381be0236d6e068cd4d86aa815ea693ea5c7
+pypto-lib  7099476b7c4f13112b159e237e7a64344803caf0
 pto-isa    ecb6c303f797749f811a494742c3c08156aacabb
 PTOAS      fc8c6caee561914b4fb991dfc8427bb63194269e
 simpler    e2efebcbd190302609c0775d2984f409f5f42c76
@@ -28,34 +28,32 @@ ptoas-bin  v0.50
 vLLM       1b3e538c35999e62b6d24e0651b3a85b7d16c826
 ```
 
-`d58b6be7` 给 canonical `tp_all_reduce` 增加第三 completion wave；`d7e1381b`
-让 two-layer harness 使用同一三波协议并增加 AST equality contract。镜像 audit、
-smoke、compile、64K ITL 与 DFX 均 PASS；64K p50 `50.204 ms`。
-
-固定 fresh oracle 下：Run1 `122/128`，但 step2 TP spread=`2.0`；Run2
-`123/128` 且 spread 全零。raw token gate 两轮均通过，正式 release 仍等待
-TP-spread 稳定性闭环。部署/回归必须按 manifest 核对，不能只看 tag。
+`7099476b` 使用 self-target synchronous TPUT 发布 source partial，再进入既有
+reduce-scatter + push all-gather 与三波 lifetime。镜像 audit/smoke/Main+MTP
+compile、Main N=128×3、Main batch16、MTP batch1/batch16×2、64K/batch16 ITL/DFX
+全 PASS。Main N=128 三轮均 `123/128` 且 TP spread=0；64K p50 `49.796 ms`。
+部署/回归必须按 manifest 核对，不能只看 tag。
 
 本轮 immutable 验证只挂载 driver(ro)、checkpoint(ro)、output(rw)，无宿主源码；
 0162 只使用 cards `0–7`，未操作 cards `8–15` 及 PID `2045390–2045397`。
 
 ```bash
-IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260802-attn-final-wave4
+IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260803-attn-final-wave5
 sudo "$NC" pull "$IMG"
-# 核对 manifest sha256:8125c678779c332d196b3d770242659d9a86185e0a8d96d89681647b00c864ab
+# 核对 manifest sha256:4acc77cdce05c40fff7fdbcedb5612fa49c2edc847a534c218389ddc08667b32
 ```
 
 历史 `attn-final-canonical`（`76d96bdb`、p50 `50.563 ms`、三轮 `121/128`）和
 Wave3（`d58b6be7`、`124/128`、spread=0）只用于演进对账。当前判定以本节、
 [`../version-matrix.md`](../version-matrix.md) 与
-[`../../benchmark/2026-08-02-step3p5-attention-final.md`](../../benchmark/2026-08-02-step3p5-attention-final.md)
+[`../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md`](../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md)
 为准。
 
 ## 1. 历史 2026-07-29 镜像内容与 pin
 
 > 本节只描述 `stepfun-develop-20260729-allreduce-push` 这一历史组合，保留作
 > 复现/回退 runbook；它不是 2026-08-02 clean canonical candidate 的当前 pin。
-> 当前 candidate 的 pin、digest 和发布判定以 §0、[`../version-matrix.md`](../version-matrix.md)
+> 当前 release 的 pin、digest 和发布判定以 §0、[`../version-matrix.md`](../version-matrix.md)
 > 为准。
 
 - **base**: `hub.i.basemind.com/stepcast/stepcast:0.19.0-081dd47dd175-fbfe288fe1ee-2026.06.09-141938`
@@ -113,12 +111,11 @@ Wave3（`d58b6be7`、`124/128`、spread=0）只用于演进对账。当前判定
 
 ---
 
-## 2. 构建(devbox；通用流程，示例以当前 candidate 为准)
+## 2. 构建(devbox；通用流程，示例以当前 release 为准)
 
 > 下面的构建流程适用于所有 immutable spec。旧的 2026-07-29 baseline 仍保留在
-> 历史 spec 中；若目标是复现当前 attention candidate，应使用
-> `builds/stepfun-develop-20260802-attn-final-wave4.env`。该 candidate 的 raw token gate
-> 已过，但 TP-spread 稳定性尚未闭环，重建/复核不等于正式发布。
+> 历史 spec 中；若目标是复现当前 release，应使用
+> `builds/stepfun-develop-20260803-attn-final-wave5.env`。
 
 > ### ⚠ 两条硬性流程要求（均为踩过的坑，见 [`postmortems/14`](../../postmortems/14-image-dirty-worktree-unreproducible-pins.md)）
 >
@@ -150,10 +147,9 @@ Wave3（`d58b6be7`、`124/128`、spread=0）只用于演进对账。当前判定
 cd deployment/docker
 # 每次构建的 pins+tag 在一个 spec 文件里(builds/<tag>.env),配方共用单一 Dockerfile。
 GH=/data/chensiyu/secrets/github.env GL=/data/chensiyu/secrets/gitlab.env \
-bash build.sh builds/stepfun-develop-20260802-attn-final-wave4.env
+bash build.sh builds/stepfun-develop-20260803-attn-final-wave5.env
 # ⚠ 先做 §2(a) 的本地核对，PASS 之后才 push
-# 可以推 candidate tag 供定位/复核，但不得 retag 或 rollout 为 production release。
-docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260802-attn-final-wave4
+docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260803-attn-final-wave5
 ```
 
 - `build.sh <spec>` 读 spec 里的 pins,以 `--build-arg` 传进 Dockerfile,`-t` 用 `IMAGE_TAG`。
@@ -240,9 +236,9 @@ sudo $NC run --rm --net host --security-opt apparmor=unconfined \
 ## 5. 历史 2026-07-29 整网精度与 ITL 记录
 
 > 本节数据属于历史 `stepfun-develop-20260729-*` 镜像，不是当前
-> `attn-final-wave4` 的 N=128 gate 结果。当前 candidate 的稳定性 blocker、
-> 64K ITL 和 DFX 证据见 §0 及
-> [`../../benchmark/2026-08-02-step3p5-attention-final.md`](../../benchmark/2026-08-02-step3p5-attention-final.md)。
+> `attn-final-wave5` 的 release gate 结果。当前 0162 release-qualified 的稳定性、
+> 64K/batch16 ITL 和 DFX 证据见 §0 及
+> [`../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md`](../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md)。
 
 权威 runner:`tests/step3p5/ci/run_whole_network_ci.py`(preflight → Main 45 层 hidden-only
 8-step → MTP45/46/47 → 清理)。用 §3 的 8 卡 run 命令,把最后一行换成:
@@ -352,7 +348,8 @@ deployment/docker/
 | `stepfun-develop-20260802-attn-final-v2` | 2026-08-02 | `defa97c5` / `76d96bdb` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **v2 非 canonical**：代码可运行，但 image config 仍含旧 CANN 8.5.1 字符串；历史 `123/128` 不得借给 clean 镜像 |
 | `stepfun-develop-20260802-attn-final-canonical` | 2026-08-02 | `defa97c5` / `76d96bdb` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **clean canonical candidate / release blocked**。manifest `sha256:64c573bcf64497da6df0d3d28d7de85dfddde8e2a2a1b70e8bd5123edd51cb9d`，config `sha256:c7f612a2562e932908d2a0d9ffadd1a1bd155c70bff0e82c24be32ef6b9f79ea`；audit/smoke/64K ITL/DFX PASS，p50 `50.563 ms`；fresh-oracle 三轮均 `121/128=94.53125%`，低于 raw gate |
 | `stepfun-develop-20260802-attn-final-wave3` | 2026-08-03 | `defa97c5` / `d58b6be7` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **历史中间版本**。canonical TP communication window 增第三 completion wave；manifest `sha256:5c38b669269f686a105e810a39a97242ee223ceb0a3d7437fc306df78a920b22`，config `sha256:c2de331156de9f182f54a0ee840564850a522d1214bb3b83b0f6d0c3e4160cb0`；audit/smoke PASS；N=128 `124/128`、spread=0；two-layer harness 尚未 AST 对齐 |
-| `stepfun-develop-20260802-attn-final-wave4` | 2026-08-03 | `defa97c5` / `d7e1381b` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **最新 immutable candidate，非正式 release**。manifest `sha256:8125c678779c332d196b3d770242659d9a86185e0a8d96d89681647b00c864ab`，config `sha256:c340001f791bd4666310b2f1755daba5492fec8c65f126888d46ed4366131c92`；audit/smoke/compile/64K ITL/DFX PASS，p50 `50.204 ms`；N=128 Run1 `122/128` 但 step2 spread=`2.0`，Run2 `123/128` spread=0；raw token gate PASS，正式发布待稳定性 |
+| `stepfun-develop-20260802-attn-final-wave4` | 2026-08-03 | `defa97c5` / `d7e1381b` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **历史 immutable candidate，非正式 release；已由 Wave5 取代**。manifest `sha256:8125c678779c332d196b3d770242659d9a86185e0a8d96d89681647b00c864ab`，config `sha256:c340001f791bd4666310b2f1755daba5492fec8c65f126888d46ed4366131c92`；audit/smoke/compile/64K ITL/DFX PASS，p50 `50.204 ms`；N=128 Run1 `122/128` 但 step2 spread=`2.0`，Run2 `123/128` spread=0；raw token gate PASS，但未通过当时 TP-spread stability gate |
+| `stepfun-develop-20260803-attn-final-wave5` | 2026-08-03 | `defa97c5` / `7099476b` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **当前 canonical release（0162 release-qualified）**。manifest `sha256:4acc77cdce05c40fff7fdbcedb5612fa49c2edc847a534c218389ddc08667b32`，config `sha256:4f2539c17fe60e61062bd27d96082a707e581b81fe716208c1bca4139dfd7394`；self-target TPUT source publication + 既有三波 lifetime；audit/smoke/Main+MTP compile、Main N=128×3、Main batch16、MTP batch1/batch16×2、64K/batch16 ITL/DFX PASS；N=128 三轮均 `123/128` 且 spread=0；64K p50 `49.796 ms` |
 
 ## Pin 依据
 

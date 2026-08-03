@@ -1,7 +1,7 @@
 # Attention task 切分与 tile 校准（最终实现）
 
 > **状态：2026-08-03 current source。** 权威代码为
-> `pypto-lib stepfun/develop@d7e1381be0236d6e068cd4d86aa815ea693ea5c7`；
+> `pypto-lib stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0`；
 > 动态 SPMD launch bound 所需 codegen 修复为
 > `pypto stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。
 > 旧文档中的 fixed-24、四阶段 Full online-softmax、standalone Pass-A/B/C 和
@@ -263,7 +263,7 @@ subject to:
 
 ## 10. 历史 `76d96bdb` 验证与发布状态
 
-本节保留 `76d96bdb` clean candidate 的历史结果；当前状态以 §11 为准。
+本节保留 `76d96bdb` clean candidate 的历史结果；当前状态以 §12 为准。
 当时源码/镜像验证覆盖：source contracts、compile/lowered、bs=1/64K DFX、active-batch=16、
 异构 context、immutable-image audit/smoke，以及 canonical N=128。
 
@@ -293,13 +293,35 @@ blocked**，不能宣称 canonical release PASS。完整证据见
 [`../../../benchmark/2026-08-02-step3p5-attention-final.md`](../../../benchmark/2026-08-02-step3p5-attention-final.md)。
 
 
-## 11. 2026-08-03 Wave4 release 覆盖
+## 11. 2026-08-03 Wave4 historical release 覆盖
 
 `d58b6be7` 修正 §7 的生命周期：Wave 2 只保证 push 已发布，不能证明所有 peer 已完成
 final local read；因此在 copy 后增加 Wave 3 completion barrier，防止下一次 collective
 过早复用通信 window。`d7e1381b` 让 two-layer harness 与 canonical 方法 AST 完全一致。
 
-最新 Wave4：`pypto-lib@d7e1381b`，manifest `sha256:8125c678…`，64K p50
+历史 Wave4：`pypto-lib@d7e1381b`，manifest `sha256:8125c678…`，64K p50
 `50.204 ms`。N=128 两轮 raw token gate 为 `122/128` 与 `123/128`；前者 step2
-TP spread=`2.0`，后者 spread=0。设计/性能优化可收尾，但正式 release 仍等待
-TP-spread 稳定性。历史 `76d96bdb` 的 `50.563 ms` / `121/128` 仅作基线。
+TP spread=`2.0`，后者 spread=0。设计/性能优化可收尾，但 Wave4 当时的正式 release
+仍等待 TP-spread 稳定性；该版本已由 Wave5 取代。历史 `76d96bdb` 的 `50.563 ms` /
+`121/128` 仅作基线。
+
+## 12. 2026-08-03 Wave5 source-publication release 覆盖
+
+Wave5 `pypto-lib@7099476b` 在 Wave 1 前用 self-target synchronous TPUT 发布
+source partial，再保持既有 reduce-scatter、push all-gather 与 Wave 1/2/3 lifetime。
+这同步覆盖 canonical Main、selected MTP、two-layer harness 和 MTP input projection
+返回值 lineage；不改变 fixed peer order、single FP32 accumulator、最终一次 BF16
+cast、task grain 或 PyPTO Orchestration/InCore/runtime 分层。
+
+0162 immutable release：
+
+```text
+image:   hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260803-attn-final-wave5
+manifest: sha256:4acc77cdce05c40fff7fdbcedb5612fa49c2edc847a534c218389ddc08667b32
+config:   sha256:4f2539c17fe60e61062bd27d96082a707e581b81fe716208c1bca4139dfd7394
+```
+
+Main N=128 预定义三轮均 `123/128`、hidden finite、TP spread=0；Main batch16、
+MTP batch1/batch16、64K/batch16 ITL/DFX 均通过。64K p50=`49.796 ms`，
+batch16/context1 p50=`112.827 ms`。当前适用范围为 **0162 release-qualified**；
+其它机器/架构仍需独立 immutable gate。

@@ -19,6 +19,9 @@ signature 或一类根因）。目标是沉淀——让后来者不重复踩坑�
 | [`10`](10-gap5-attention-quant-scope.md) | gap-5 in-kernel `cast(→INT8)` 喂 cube A-operand 误编译 | ~98% wrong, no fault | codegen | 🟡 缓解 |
 | [`11`](11-8001-bridge-live-ops.md) | 8001 PyPTO bridge live 运维 | HCCL binary conflict / PID ns / exbus leak / `507899` | vllm-pypto | ✅ 已解 |
 | [`12`](12-integration-churn-meta.md) | 集成反复推翻（meta） | —（流程级） | meta | 🟡 缓解 |
+| [`13`](13-tp-allreduce-pull-notify-race.md) | TP all-reduce pull-form all-gather 跨方向发布 race | `hidden_tp_spread != 0` | whole-net | ✅ 已解 |
+| [`14`](14-image-dirty-worktree-unreproducible-pins.md) | 镜像 dirty worktree 导致 pin 不可复现 | 相同 pin、行为不同 | deployment | ✅ 已解（主路径） |
+| [`15`](15-tp-allreduce-source-publication-lifetime.md) | TP all-reduce source publication / lifetime 边界 | 间歇性 `hidden_tp_spread != 0` | whole-net | ✅ 已解（0162） |
 
 ## 模板与新增
 

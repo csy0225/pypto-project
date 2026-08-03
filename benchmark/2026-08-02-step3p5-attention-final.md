@@ -1,9 +1,13 @@
-# Step3p5 Attention/Vec 收尾、Wave3/Wave4 immutable 验证（2026-08-02—03）
+# Step3p5 Attention/Vec 收尾、Wave3/Wave4 immutable 验证（历史，2026-08-02—03）
 
-## 0. 2026-08-03 最终覆盖：Wave4 immutable candidate
+> **历史记录。** 本文记录 Wave4 及更早版本；当前 release 状态已由
+> [`2026-08-03-step3p5-wave5-allreduce-stability.md`](2026-08-03-step3p5-wave5-allreduce-stability.md)
+> 覆盖。Wave4 不是当前 release。
+
+## 0. 历史最终状态：Wave4 immutable candidate（已由 Wave5 取代）
 
 本文原始 §1--§10 记录 `pypto-lib@76d96bdb` 的 2026-08-02 clean canonical
-candidate，作为历史基线保留。当前源码和最新 immutable 候选已前进到：
+candidate，作为历史基线保留。本文截至 Wave4 时的源码和 immutable candidate 为：
 
 ```text
 pypto-lib stepfun/develop
@@ -24,7 +28,7 @@ AST contract 防止再次漂移。focused contracts 为 `28 passed`。
 |---|---|---|---|
 | 历史 clean canonical | `76d96bdb` | N=128 三轮均 `121/128`；64K p50 `50.563 ms` | 历史失败基线 |
 | Wave3 | `d58b6be7` | immutable `124/128`，miss `[2,8,13,82]`，TP spread 全零 | canonical 三波修复；harness 尚未对齐 |
-| **Wave4** | **`d7e1381b`** | Run1 `122/128`、step2 spread=`2.0`；Run2 `123/128`、spread 全零 | 最新 immutable candidate |
+| **Wave4** | **`d7e1381b`** | Run1 `122/128`、step2 spread=`2.0`；Run2 `123/128`、spread 全零 | 历史 immutable candidate；已由 Wave5 取代 |
 
 Wave4 镜像：
 
@@ -80,18 +84,18 @@ Wave4 两轮 raw token gate 都达到 `>=95%`：
 | 1 | `122/128=95.3125%` | `[2,8,13,22,82,93]` | step2=`2.0` |
 | 2 | `123/128=96.09375%` | `[2,8,13,22,82]` | 全零 |
 
-两轮 hidden 均 finite。**因此 raw token gate 已通过，但正式 release gate 仍未关闭**：
-Run1 违反 TP-spread 合同，当前证据尚不足以证明跨运行稳定。准确状态为：
+两轮 hidden 均 finite。**因此 Wave4 当时的 raw token gate 已通过，但正式 release
+gate 尚未关闭**：Run1 违反 TP-spread 合同，当时证据不足以证明跨运行稳定。
+Wave4 的历史状态为：
 
 ```text
-Wave4 immutable candidate
+Wave4 historical immutable candidate
 raw token gate PASS
-formal release gate pending TP-spread stability
+formal release gate pending TP-spread stability (closed later by Wave5)
 ```
 
 不要通过无预先限定的重复运行挑选“最好一轮”，也不要把 Wave4 写成正式 release。
-后续只应做预先定义的稳定性/根因实验；如果需要新镜像，必须再次完成 immutable
-audit、N=128、ITL 与 DFX gate。
+后续稳定性/根因实验已由 Wave5 完成；当前证据与发布结论见本文顶部链接。
 
 ## 1. 结论摘要（历史 `76d96bdb` clean candidate）
 

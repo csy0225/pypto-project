@@ -1,14 +1,16 @@
 # 01 — System Design (HLD)：step3p5 decode 性能优化
 
-> **2026-08-02 current-source override（优先于下方历史正文）**：Attention/Vec
-> 收口源码为 `pypto-lib stepfun/develop@76d96bdbeac280f12ecf626b1bbd722b9278719e`，
+> **2026-08-03 current-source override（优先于下方历史正文）**：Attention/Vec
+> 与 TP all-reduce stability 收口源码为
+> `pypto-lib stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0`，
 > 动态 SPMD codegen 修复为 `pypto stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。
 > 当前实现采用 workload-derived logical tasks + runtime wave mapping，Full SV 合并
-> segment-local recurrence，Full/SWA out-proj cast 默认融合。clean canonical candidate
-> 的 audit/smoke/64K ITL/DFX 已通过，但 fresh-oracle N=128 三轮均
-> `121/128=94.53125% < 95%`，正式发布仍 BLOCKED。下方较早的主线表和收益表是
+> segment-local recurrence，Full/SWA out-proj cast 默认融合。Wave5 immutable
+> audit/smoke/Main+MTP compile、Main N=128×3、Main batch16、MTP batch1/batch16×2、
+> 64K/batch16 ITL/DFX 已通过；Main N=128 三轮均 `123/128` 且 TP spread=0，
+> 当前为 **0162 release-qualified**。下方较早的主线表和收益表是
 > 设计历史；I1/I2 当前状态以 [`task-tracking.md`](task-tracking.md) 和
-> [`04-attention-optimization.md`](04-attention-optimization.md) §10 为准。
+> [`04-attention-optimization.md`](04-attention-optimization.md) §12 为准。
 
 > **2026-07-26 交付收益覆盖**：本专项当前已实际落地并完成 device
 > regression 的优化为 **B1、B2、C2**，另有 A1 可观测性基线。本文 §5

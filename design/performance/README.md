@@ -1,11 +1,13 @@
 # Performance 性能优化专项
 
-> **2026-08-02 current-source override（优先于下方历史快照）**：当前 attention/Vec
-> 源码为 `pypto-lib stepfun/develop@76d96bdbeac280f12ecf626b1bbd722b9278719e`，
+> **2026-08-03 current-source override（优先于下方历史快照）**：当前 attention/Vec
+> 与 TP all-reduce stability 源码为
+> `pypto-lib stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0`，
 > 配套 pypto 为 `stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。
-> A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1 已完成；B3 仍在进行，I2 因 clean
-> candidate 的 N=128 raw gate `121/128=94.53125%` 而 BLOCKED。64K immutable
-> ITL p50 为 `50.563 ms`。下方 2026-07-27 状态、65 ms 分账和旧依赖关系保留为
+> A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2 已完成；B3 仍在进行。
+> Wave5 在 0162 release-qualified：Main N=128×3 均 `123/128` 且 TP spread=0，
+> 64K immutable ITL p50 为 `49.796 ms`。下方 2026-07-27 状态、65 ms 分账和
+> 旧依赖关系保留为
 > 历史分析，不能覆盖 [`task-tracking.md`](task-tracking.md) 的当前状态。
 
 > **2026-07-27 当前目标快照**：已完成并保留完成态的优化为 **A1、B1、B2**。

@@ -1,6 +1,38 @@
 # Milestones —— 2026 Q2
 
-## 2026-08-03 —— TP all-reduce window lifetime 三波闭合 + Wave4 immutable candidate
+## 2026-08-03 —— Wave5 TP all-reduce source publication 稳定性闭环 + 0162 发布 ✅
+
+- `pypto-lib stepfun/develop` 前进到
+  `7099476b7c4f13112b159e237e7a64344803caf0`，并已推
+  `csy0225/pypto-lib:stepfun/develop`。最小修复是在 Wave 1 前用 self-target
+  synchronous TPUT 发布 source partial，再保持既有 rank-owned reduce-scatter、
+  push all-gather 与 Wave 1/2/3 lifetime。
+- Main、selected MTP、two-layer harness 与 MTP input projection 返回值 lineage
+  同步对齐；数值合同不变：固定 peer 顺序、单 FP32 accumulator、最终一次 BF16 cast；
+  不固定 24 核、不新增 orchestration kernel。focused contracts `25 passed`，
+  `py_compile` / `git diff --check` PASS。
+- immutable 镜像
+  `stepfun-develop-20260803-attn-final-wave5`：manifest
+  `sha256:4acc77cdce05c40fff7fdbcedb5612fa49c2edc847a534c218389ddc08667b32`，
+  config
+  `sha256:4f2539c17fe60e61062bd27d96082a707e581b81fe716208c1bca4139dfd7394`。
+  audit/smoke/Main+MTP compile/codegen PASS。
+- Main N=128 预定义三轮均 `123/128=96.09375%`、miss `[2,8,13,22,82]`、
+  hidden finite、TP spread=0；Main batch16 `8/8 exact`、128 active rank rows、
+  TP spread=0；MTP batch1/batch16 两轮 token `[6178,410,303]`、pass rate 1.0、
+  max diff 0、TP spread=0。
+- 64K ITL min/mean/p50/max=`48.523/50.027/49.796/54.539 ms`；
+  batch16/context1 min/mean/p50/max=`112.525/112.819/112.827/113.203 ms`。
+  DFX LOW-WAIT rank2：64K makespan `38.367 ms`、TP AR compute `2.437 ms`；
+  batch16 makespan `107.076 ms`、TP AR compute `2.429 ms`。其它 rank 的长 AR
+  span 主要含自旋等待，不是算术耗时。
+- 验证只使用 cards `0–7`，未触碰 cards `8–15` 或 PID
+  `2045390–2045397`；结束后 cards `0–7` 无残留，保护 PID hash 不变。
+- 判定：`ATTN-WAVE4-STABILITY` 关闭，**Wave5 在 0162 release-qualified**。
+  当前证据支持 source publication/lifetime ordering 是 0162 的关键边界，但不宣称
+  self-target TPUT 是所有硬件/架构的唯一根因。
+
+## 2026-08-03 —— TP all-reduce window lifetime 三波闭合 + Wave4 historical candidate
 
 - `pypto-lib stepfun/develop` 前进到 `d7e1381be0236d6e068cd4d86aa815ea693ea5c7`：
   `d58b6be7` 在 final local copy 后增加第三 completion wave，`d7e1381b` 对齐
@@ -14,8 +46,8 @@
   Run2 `123/128`、miss `[2,8,13,22,82]`、spread=0；hidden 均 finite。
 - DFX LOW-WAIT rank2：makespan `38.504 ms`，TP AR compute `2.125 ms`；其余 rank
   的长条主要吸收 kernel 内自旋等待。
-- 判定：**raw token gate PASS；formal release pending TP-spread stability**。不再做
-  无预先限定的 N=128 重跑，也不把 Wave4 标正式 release。
+- 判定：**当时 raw token gate PASS；当时 formal release pending TP-spread stability**。
+  Wave4 已由后续 Wave5 取代；历史数据保留用于根因演进对账，不作为当前发布状态。
 
 ## 2026-08-02 —— Attention/Vec 优化收口 + clean canonical candidate（发布阻塞）
 
