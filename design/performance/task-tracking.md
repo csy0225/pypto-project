@@ -14,6 +14,16 @@
 > audit/smoke/Main+MTP compile、Main N=128×3、Main batch16、MTP batch1/batch16×2、
 > 64K/batch16 ITL/DFX 均通过，当前为 **0162 release-qualified**。其它机器/架构
 > 未由本轮独立证明。下方历史 override 不覆盖 I1/I2。
+>
+> **⚠ 2026-08-04 L0–L4 focused MoE override**：Track J 已完成，但验证范围只包含
+> `L0 Full+dense / L1–L2 SWA+dense / L3 SWA+MoE / L4 Full+MoE`，L4 必须消费
+> 真实 L3 输出。最终方案为 routed gate/up stage split，普通 expert 使用
+> `row=16, K=512, N=64, down N=256`；L43/L44 specialization 保持原配置。
+> 0162 cards `8–15` 上 p50 `12.1777→10.7677 ms`（-11.58%），repeated 和
+> heterogeneous 两套完整 L3/L4 hidden 均 bit-exact、finite、TP spread=0。
+> DFX、golden 和 8-rank swimlane 位于
+> `/mnt/persist/chensiyu/workspace/moe-opt/l0-l4/final`。该结果不覆盖 whole-net
+> 或 64K release gate。
 
 > **历史 2026-07-28 release override**：active base =
 > **`stepfun/develop @ 563fe62a`**。唯一 release Main 为
@@ -97,6 +107,11 @@ producer → 数学变换/quant/route-map → transport/window
 | I1 | workload-derived attention、Full 层次归约、out-proj cast、dense Vec 收尾 | P0 | ✅ | codex | A1, C4, H1 | `pypto-lib stepfun/develop@7099476b`（attention/Vec 内容自 `76d96bdb` 起保持）：logical task 按 active workload 推导；Full SV 合并 segment recurrence，只保留 reduce/finalize；Full/SWA out-proj cast 默认融合；dense RMS direct BF16 reread、dense down-proj cast fusion 保留；AR+residual、residual+RMS stats、RMS+projection、gate/up+SiLU 等无稳定收益方案不合入。active-batch=16/异构 context、source/compile/device/DFX 已完成。最终 task/tile 设计已合并到 [`04-attention-optimization.md`](04-attention-optimization.md) §13 | 2026-08-03 |
 | I2 | TP all-reduce immutable release stability gate | P0 | ✅ | codex | I1 | Wave3/4 先闭合 final-read lifetime 并对齐 harness AST；Wave5 `7099476b` 再以 self-target synchronous TPUT 发布 source partial，并同步 Main/MTP/harness/返回值 lineage。manifest `sha256:4acc77cd…`：audit/smoke/Main+MTP compile、Main N=128 预定义三轮均 `123/128` 且 spread=0、Main batch16、MTP batch1/batch16×2、64K/batch16 ITL/DFX 全 PASS；64K p50 `49.796 ms`。machine scope=`0162 release-qualified`。见 [`../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md`](../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md) | 2026-08-03 |
 
+### Track J — MoE compute 优化
+| ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
+|----|--------|--------|------|-------|------|------|----------|
+| J1 | L0–L4 routed gate/up stage split + task-grain tuning | P0 | ✅ | codex | A1, C1–C3, D1–D2, G1, I2 | `moe-opt@505e2c6b` 基于 `7099476b`：fused gate/up 拆为 gate、up、activation，普通 expert 采用 `row16/K512/N64/down-N256`，保留 scatter→wait 真依赖与 L43/L44 原 specialization。0162 cards 8–15：gate/up AIC p50 `≈144→12.7–12.9 µs`；同口径 repeated p50 `12.1777→10.7677 ms`（-11.58%）；两套 `hidden_l3/hidden_l4` BF16 bit-exact、finite、128/128 active rows、TP spread=0。代价为约 45 MiB/rank INT32 GM scratch；shared expert 和 route-heavy scatter 是剩余机会。设计见 [`05-moe-optimization.md`](05-moe-optimization.md) | 2026-08-04 |
+
 ---
 
 ## 进度汇总
@@ -105,14 +120,16 @@ producer → 数学变换/quant/route-map → transport/window
 |------|------|
 | ⬜ TODO | 6 |
 | 🟦 IN PROGRESS | 1 |
-| ✅ DONE | 13 |
+| ✅ DONE | 14 |
 | ⛔ BLOCKED | 0 |
-| **合计** | **20** |
+| **合计** | **21** |
 
 **base 校正后关键路径**：A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2 已 ✅；
 historical pull C2 仅作回归基线。当前 performance 看板只剩
 **B3（KV resident/in-place 的连续多轮 row-diff/liveness 证据）**处于进行中。
-Attention/Vec 与 TP all-reduce stability 已在 0162 release-qualified；其它机器仍需独立 gate。
+Attention/Vec 与 TP all-reduce stability 已在 0162 release-qualified；J1 只在
+0162 的 L0–L4 focused graph validated，不能升级为 whole-net release 结论。
+其它机器和整网集成仍需独立 gate。
 
 ---
 
@@ -131,6 +148,8 @@ Attention/Vec 与 TP all-reduce stability 已在 0162 release-qualified；其它
 
 | 日期 | ID | 变更 | 备注 |
 |------|----|----|------|
+| 2026-08-04 | J1 | ✅ 0162 完成 L0–L4 focused MoE 优化 | `moe-opt@505e2c6b`（base=`7099476b`），`decode_fwd.py` SHA256=`2475c77c…`；gate/up split + `row16/K512/N64/down-N256`；repeated p50 -11.58%；两套 L3/L4 hidden bit-exact；DFX、swimlane、golden 和 manifest 在 `/mnt/persist/chensiyu/workspace/moe-opt/l0-l4/final/` |
+| 2026-08-03 | J1 | 建立 focused MoE 专项并冻结五层、双 hidden 与 0162 验证合同 | 仅 L0–L4；L4 消费 L3；禁止用 whole-net/64K 或 mock hidden 替代；设计见 [`05-moe-optimization.md`](05-moe-optimization.md) |
 | 2026-08-03 | I2 | Wave5 self-target TPUT source publication 关闭间歇性 TP spread，0162 release gate 转绿 | `pypto-lib@7099476b`；manifest `sha256:4acc77cd…`；Main N=128×3 均 `123/128(spread=0)`；Main batch16/MTP/64K+batch16 ITL/DFX PASS；64K p50 `49.796 ms` |
 | 2026-08-03 | I2 | 三波 completion lifetime + harness AST 对齐进入 Wave4 immutable candidate；raw token gate 转绿，稳定性仍阻塞 | `pypto-lib@d7e1381b`；64K p50 `50.204 ms`；N=128 为 `122/128(spread=2.0)`、`123/128(spread=0)`；LOW-WAIT rank2 |
 | 2026-08-02 | I1/I2 | Attention/Vec 产品实现收口并构建历史 clean canonical candidate；I1 完成，当时 I2 因 raw precision gate 阻塞 | 源码 `pypto-lib@76d96bdb` / `pypto@defa97c5`；64K p50 `50.563 ms`；N=128 三轮均 `121/128` |
