@@ -32,7 +32,7 @@ if [ ! -f ptoas-bin.tgz ]; then
 fi
 
 echo "[build] SPEC=$SPEC  IMG=$IMG"
-echo "[build] pins: pypto=$PYPTO_COMMIT pypto-lib=$PYPTO_LIB_COMMIT pto-isa=$PTO_ISA_COMMIT PTOAS=$PTOAS_COMMIT simpler=$SIMPLER_COMMIT ptoas-bin=$PTOAS_BIN_VER"
+echo "[build] pins: pypto=$PYPTO_COMMIT pypto-lib=$PYPTO_LIB_COMMIT pto-isa=$PTO_ISA_COMMIT PTOAS=$PTOAS_COMMIT simpler=$SIMPLER_COMMIT ptoas-bin=$PTOAS_BIN_VER attn-profile=${ATTN_TASK_PROFILE:-portable}"
 
 # github clone 需经宿主可达的代理; 优先官方入口 (deploy.i.shaipower.com/httpproxy),
 # 拿不到回落 Dockerfile 内置默认。内网 (pip/gitlab/hub) 直连不走代理。
@@ -54,7 +54,7 @@ DOCKER_BUILDKIT=1 docker build \
   --build-arg PTOAS_COMMIT="$PTOAS_COMMIT" \
   --build-arg SIMPLER_COMMIT="$SIMPLER_COMMIT" \
   --build-arg PTOAS_BIN_VER="$PTOAS_BIN_VER" \
-  --build-arg ATTN_TASK_PROFILE="${ATTN_TASK_PROFILE:-a2a3}" \
+  --build-arg ATTN_TASK_PROFILE="${ATTN_TASK_PROFILE:-portable}" \
   --build-arg VLLM_PATCH_BRANCH="$VLLM_PATCH_BRANCH" \
   --build-arg VLLM_PATCH_COMMIT="$VLLM_PATCH_COMMIT" \
   "${PROXY_ARGS[@]}" \
