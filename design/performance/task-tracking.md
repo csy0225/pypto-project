@@ -60,6 +60,22 @@ producer → 数学变换/quant/route-map → transport/window
 | C2 | 迁移 V4-Flash dispatch/combine 数据流 | P1 | ✅ | codex-bc | C1 | expert-lane dispatch metadata/push/arrival/gather 与 combine scatter/wait/token FP32 reduce 已迁移；固定物理 expert lane base 修复 BS1/2/16 的 batch-extension invariance | 2026-07-28 |
 | C3 | expert-lane SPMD + whole-net 调度适配 | P2 | ✅ | codex-bc | C1, C2 | local-expert lane ownership、whole-net canonical scheduling、compile/lowered/设备回归已验证；最终镜像 Main 8-step 与 N=256 teacher-forced hidden 回归通过 | 2026-07-28 |
 | C4 | TP all-reduce: onephase mesh → reduce-scatter + **push** all-gather | P0 | ✅ | claude | — | 按 [`03-tp-allreduce-algorithm-comparison.md`](03-tp-allreduce-algorithm-comparison.md) 落地，但**该文 §5 原方案（pull 形式 all-gather）落整网即 8 卡不一致**，已就地修正。根因 = pull-after-remote-notify 跨方向握手无序，见 [`postmortems/13`](../../postmortems/13-tp-allreduce-pull-notify-race.md)。每卡远程传输 56→14、远程字节 896KB→224KB；数值 bit-identical（canonical peer order + 单 FP32 累加器 + 每元素一次 BF16 store）。回归：whole-network CI `PASS` + 3 次独立重复共 32 step，token 全对、`hidden_tp_spread` 全 `0.0`；ITL p50 −3.6%(ctx1024) / −3.9%(ctx4096)，见 [`benchmark/2026-07-28-tp-allreduce-push.md`](../../benchmark/2026-07-28-tp-allreduce-push.md)。⚠ 收益仅适用 ctx ≤ 4096：64k DFX 显示 `tp_all_reduce` 只占 span 1.84%，见 [`benchmark/2026-07-29-release-image-64k-dfx-itl.md`](../../benchmark/2026-07-29-release-image-64k-dfx-itl.md) | 2026-07-28 |
+| C5 | ~~TP all-reduce 并行扇出补齐（`pl.range`→`pl.parallel`）~~ | P2 | ❌ | claude | C4, I2 | **2026-08-05 实测证伪并关闭，收益恒为 0，不要重开。** 把三波 barrier 的 6 个 notify/wait 循环 + push all-gather 循环全改 `pl.parallel(group_size)`，在 wave5 镜像里 compile A/B：生成的 `kernels/aiv/tp_all_reduce.cpp`(431 行) 与 `ptoas/tp_all_reduce.cpp`(378 行) **逐字节相同**。原因 = 这些循环在生成码里**未被展开**（9 个真实 C `for`，`TNotify`×3/`TWait`×5 各在循环体内），而 **InCore 的 AIV codegen 不消费 `ForKind`**；`pl.parallel` 只在 Orchestration 层（切 task/block）有意义。连带推论：§2.4 把 `twophase_par` −35% 归因于 `pl.parallel` **站不住**，真实差异更可能是它的 AG 直接写 `out`（无 final copy、无 Wave3）这个结构差异。复现 `0162:/mnt/persist/chensiyu/workspace/ar-c5/compile_ab.sh {base,c5}`。产物：只保留一条守卫契约 `test_tp_all_reduce_keeps_reduce_scatter_accumulate_serial`，kernel 未改。见 §7.3② | 2026-08-05 |
+| C5′ | self-target TPUT 加 `pipeline=True` | P2 | ⬜ | — | C4, I2 | C5 里唯一未被证伪的那一半，也是当前结构内**唯一**剩下的实现层杠杆：128 KB self-publish 走 ping-pong 双缓冲（`chunk_rows/cols` 已就位，`pipeline` 语法已合法）。⚠ 该 TPUT 的**同步 drain 正是 Wave5 修间歇 `tp_spread` race 的承重件**（`decode_fwd.py:263` + PTOAS#872），`pipeline` 在 chunk 间重叠可能重开 Wave4 blocker → **必须走 Wave5 同级稳定性验收**（Main N=128×3 + batch16 + MTP，全部 `tp_spread_max=0.0`），rc=0 不算过。见 §7.4 | 2026-08-05 |
+| C6 | 消 Wave 3 + final local copy 多核化 | P2 | ⬜ | — | C4, I2 | 当前每次 all-reduce 的本地搬运（self-TPUT 128 KB + final copy 128 KB = 256 KB）**多于**跨卡搬运（224 KB）。⚠ **2026-08-05 纠错**：原「push all-gather 直接落输出、省掉 final copy」**不成立**——`local: pl.Tensor`（`decode_fwd.py:251`）不是 `pld.DistributedTensor`，peer 无法 `remote_store` 进去；final copy 只能换 `pl.spmd` 多核化（`pl.parallel` 已证伪无效），或把 `local` 提升成 window（动 90 调用点 ABI）。⚠ Wave3 是 **run 边界**护栏：层内 `win_off=(layer_idx+1)*BATCH`（`:3479`）已按层切故层间不复用，但下次 `rt.run()` 重用同 buffer——删前须证明跨 run 另有 fence。必须过 `hidden_tp_spread == 0` gate。见 §7.3③ / §7.4 | 2026-08-05 |
+| C7 | atomic-add push 版 reduce-scatter（消除远程读 + 加法链） | P3 | ⬜ | — | C4, I2, **rebase origin/main** | `pld.tensor.put(..., atomic=AtomicType.Add)`（`tensor_ops.py:291-394`）推贡献到 peer → 1 barrier → 本地读自己那块 → push → 1 barrier：**零远程读**（`postmortems/13` 结论 = push+notify 可靠、pull-after-remote-notify 有 race）、消掉 7 级串行加法依赖链、3 barrier→2。⚠ **精度**：BF16 atomic add 破坏 C4 保住的 bit-identical，而 `hidden_tp_spread == 0` gate 依赖它；缓解 = FP32 comm window + 末尾一次 BF16 cast（RS 阶段窗口字节翻倍）。⚠ 依赖上游 `9776f276`（bf16 atomic-add on A2/A3）+ `5b17dfa6`，本地落后 `origin/main` 1213 commit 尚不具备。见 §7.4 / §7.5 | 2026-08-05 |
+
+> **⚠ Track C 剩余项的共同天花板**：`tp_all_reduce` 在 ctx=65536 只占 device span **1.84%** / busy **2.33%**
+> （avg **16.1 µs**/次，`benchmark/2026-07-29-release-image-64k-dfx-itl.md:62`），**干到 0 也只降 1.84%**。
+> 且该 16 µs **含 barrier 自旋等待**（profiling 计入 kernel compute，`benchmark/2026-08-03-*.md:100`），
+> clean run 跨卡起跑阶梯 2.914 ms 全被每步第一个 barrier 吸收。
+> 「每次 40+ µs」来自 PMU（17×）/ swimlane（476×）放大 run，**不是 clean run 耗时**。
+> **分段计时已做完（2026-08-05，§7.1.1）**：排除每步第一个 barrier 后，89 个 barrier × 8 rank 的
+> `min over ranks`（自身搬运）稳定在 **39.6–44.7 µs**（p50 41.1），mean 51.1 → **自身搬运约占 80%**；
+> swim 放大 ~2.5× 折回 clean 即 **16.1 µs 基本全是自身搬运**。480 KB ÷ 单核 ~14 GB/s ≈ 34 µs 与之吻合。
+> p90 的 205 µs 长尾是 MoE 负载不均 skew 在此被吸收（straggler 在 8 rank 间轮换，无坏卡），
+> 记在 `combine_wait` 账上。**结论：靶子合法但天花板仍是 1.84%**；`combine_wait`（13.4 ms = device 24%）
+> 仍是 13× 大的目标。详见 §7.1 / §7.1.1 / §7.6。
 
 ### Track D — INT8-native W8A8（gap-5）
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
@@ -103,16 +119,25 @@ producer → 数学变换/quant/route-map → transport/window
 
 | 状态 | 数量 |
 |------|------|
-| ⬜ TODO | 6 |
+| ⬜ TODO | 9 |
 | 🟦 IN PROGRESS | 1 |
 | ✅ DONE | 13 |
+| ❌ REFUTED | 1 |
 | ⛔ BLOCKED | 0 |
-| **合计** | **20** |
+| **合计** | **24** |
 
 **base 校正后关键路径**：A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2 已 ✅；
 historical pull C2 仅作回归基线。当前 performance 看板只剩
 **B3（KV resident/in-place 的连续多轮 row-diff/liveness 证据）**处于进行中。
 Attention/Vec 与 TP all-reduce stability 已在 0162 release-qualified；其它机器仍需独立 gate。
+
+2026-08-05 新增 **C5/C6/C7**（TP all-reduce 实现层残余开销）为 ⬜ 候选，
+**均非关键路径**：共同天花板是 64K 下 span 1.84%。同日已完成两件事：
+① **分段计时**（§7.1.1）——16.1 µs 里约 **80% 是自身搬运**，不是等 peer，靶子合法；
+② **C5 实测证伪并关闭**（❌）——`pl.range`→`pl.parallel` 在 InCore 里出**逐字节相同**的
+codegen，收益恒为 0；剩下的实现层杠杆只有 **C5′**（self-TPUT `pipeline=True`，需 Wave5
+同级稳定性验收）和 **C6/C7**。`pl.parallel` 不能用来拆核，要拆核只有 `pl.spmd`。
+详见 Track C 表下的说明。
 
 ---
 
@@ -131,6 +156,9 @@ Attention/Vec 与 TP all-reduce stability 已在 0162 release-qualified；其它
 
 | 日期 | ID | 变更 | 备注 |
 |------|----|----|------|
+| 2026-08-05 | C5 → ❌ + C5′ | 分段计时完成；C5 实测证伪并关闭 | **① 分段计时（§7.1.1）**：用 `benchmark/2026-07-29-v3-64k/dfx-swim` 全 8 rank swimlane，按**程序序**配对（`task_token_raw` 高 32 位是 ring_id、跨 rank 不一致，90 个 barrier 里只有 12 个 task_id 相同，**不能按 task_id join**）。排除每步第一个 barrier 后 89×8：`min over ranks`（自身搬运）**39.6–44.7 µs**（p50 41.1）、mean 51.1 → **自身搬运 ~80%**；straggler 在 8 rank 间轮换（rank2 21 / rank1 16 / rank3 6）**无坏卡**；480 KB ÷ 单核 ~14 GB/s ≈ 34 µs 对账吻合。⇒ clean 的 16.1 µs 基本全是自身搬运，**靶子合法**。**② C5 证伪**：6 个 notify/wait 循环 + push AG 循环改 `pl.parallel` 后，wave5 镜像 compile A/B 出**逐字节相同**的 `kernels/aiv/tp_all_reduce.cpp`(431 行) 与 `ptoas/tp_all_reduce.cpp`(378 行)。循环**未被展开**（9 个真实 C `for`，`TNotify`×3 / `TWait`×5 在循环体内），**InCore 的 AIV codegen 不消费 `ForKind`** → `pl.parallel` 在 InCore 是惰性注解，只有 Orchestration 层（切 task/block）才有意义。连带：§2.4 把 `twophase_par` −35% 归因于 `pl.parallel` **站不住**（真实差异更可能是它 AG 直接写 `out`、无 final copy、无 Wave3 的结构差异），引用前需重测。**产物**：3 个 kernel 文件全部回退，只留一条守卫契约 `test_tp_all_reduce_keeps_reduce_scatter_accumulate_serial`（+16 行）；in-image 全量 unit **218 passed / 4 skipped**，two-layer compile-only **RC=0**。复现：`0162:/mnt/persist/chensiyu/workspace/ar-c5/compile_ab.sh {base,c5}`、`0162:/tmp/ar_segment2.py`。⚠ **未做 device/ITL**：0162 有 `0162-full-machine-perf.lock`（今天 19:28），另一 campaign 今天在 0–7 与 8–15 两组卡都在跑，时序测量会互相污染 |
+| 2026-08-05 | C5/C6/C7 | 复核 Wave5 后 TP all-reduce 残余瓶颈，立 3 个 ⬜ 候选并纠正两处口径 | 复核基准 `pypto-lib stepfun/develop@7099476b`。**口径纠正**：① 权威耗时 = DFX avg **16.1 µs**/次、span **1.84%**（「40+ µs」来自 PMU 17× / swimlane 476× 放大 run）；② 该 16 µs **含 barrier 自旋等待**（profiling 计入 kernel compute），clean run 跨卡 skew 2.914 ms 全被首个 barrier 吸收；③ vLLM-Ascend 的 ~10 µs 是 HCCL/SDMA 口径，不计入 AICore kernel 时间，**不可直接对比**。**算法已到下界**（224 KB/卡 = `2(P-1)/P × N`），残余全在实现层：单核 `block_num=1`（runtime 默认，`pto_submit_types.h:250-270`；48 AIV 用 1 个）、C4 落地版丢了微基准赢的并行扇出（只 final copy 用 `pl.parallel`）、本地搬运 256 KB > 跨卡 224 KB、零 compute/comm overlap。候选 C5（补并行扇出，~8 行）/ C6（消 Wave3+final copy）/ C7（atomic-add push RS，需 rebase 拿上游 `9776f276` bf16 atomic-add）。**多核化与 MC2 级融合明确不建议**（全仓零跨卡多核先例；Wave5 已立「不机械合入无稳定收益的 AR/residual/RMS 融合」）。详见 [`03-tp-allreduce-algorithm-comparison.md`](03-tp-allreduce-algorithm-comparison.md) §7 |
+| 2026-08-05 | C5/C6/C7 纠错 | 复核 §7.3 三条落地前提：推翻两处、确认一处 | ① **推翻上一行「全仓零跨卡多核先例」**：V4-Flash `origin/main:models/deepseek/v4-flash/moe.py:203-274` 就在 `pl.spmd(N_LOCAL, "dispatch_push")` 里做跨卡 `pld.tensor.put`/`remote_store`/per-block `notify`，阈值 `expected=moe_epoch * N_LOCAL`。早期结论误读了工作树 `models/deepseek/v4/`——`SKILL.md §7` 已警告那不是指定 baseline（`origin/main` 只有 `v4-flash/`，工作树只有 `v4/`，不是同一份代码）。**今后引 baseline 必须 `git show origin/main:models/deepseek/v4-flash/…`，不读工作树。** ② **推翻 C6 的「push 直接落输出」**：`local: pl.Tensor`（`decode_fwd.py:251`）不是 `pld.DistributedTensor`，peer 无法 `remote_store` 进去 → final copy 只能多核化、删不掉；Wave3 是 **run 边界**的 window 复用护栏（层内 `win_off=(layer_idx+1)*BATCH` 已按层切，跨 `rt.run()` 复用同 buffer）。③ **确认阈值风险可归零**：notify 不折进 spmd、留在其后的 `pl.at(CORE_GROUP)` scope，则 `expected=1/2/3` 一行不改。**多核化否决理由改为量级**：16.1 µs / span 1.84% 的天花板 vs 90 调用点 × task 图膨胀（按 3.5–5.2 µs/task dispatch）+ §2.5 `onephase_par` 并行反而变慢的实测反例（215→277 µs）；同期 `combine_wait` 13.4 ms / 24% 是 13× 大的靶子。**下一步 = 先做分段计时**（把 16.1 µs 拆成自身搬运 vs peer 等待），别先改代码 |
 | 2026-08-03 | I2 | Wave5 self-target TPUT source publication 关闭间歇性 TP spread，0162 release gate 转绿 | `pypto-lib@7099476b`；manifest `sha256:4acc77cd…`；Main N=128×3 均 `123/128(spread=0)`；Main batch16/MTP/64K+batch16 ITL/DFX PASS；64K p50 `49.796 ms` |
 | 2026-08-03 | I2 | 三波 completion lifetime + harness AST 对齐进入 Wave4 immutable candidate；raw token gate 转绿，稳定性仍阻塞 | `pypto-lib@d7e1381b`；64K p50 `50.204 ms`；N=128 为 `122/128(spread=2.0)`、`123/128(spread=0)`；LOW-WAIT rank2 |
 | 2026-08-02 | I1/I2 | Attention/Vec 产品实现收口并构建历史 clean canonical candidate；I1 完成，当时 I2 因 raw precision gate 阻塞 | 源码 `pypto-lib@76d96bdb` / `pypto@defa97c5`；64K p50 `50.563 ms`；N=128 三轮均 `121/128` |

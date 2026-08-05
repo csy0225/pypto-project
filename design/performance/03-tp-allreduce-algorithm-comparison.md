@@ -1,7 +1,18 @@
 # TP all-reduce 算法对比 —— step3p5 维度真机实测
 
-> **一句话结论**：step3p5 decode 里每层都要做的 `tp_all_reduce`（8 卡把各自的部分和加起来、再让每张卡都拿到完整结果），
-> 现状用的是最朴素的 **onephase（全互联 mesh）** 算法，在真机上又慢又抖。改成
+> **⚠ 时效声明（2026-08-05）**：本文 §1–§6 写于 2026-07-27，其中的「**现状**」指的是
+> **C4 落地之前**的 onephase mesh。C4 已把算法换成 reduce-scatter + push all-gather
+> （2026-07-28），Wave5 又加了 self-target TPUT（2026-08-03，`stepfun/develop@7099476b`）。
+> **算法层面现在已是最优**（每卡远程字节 224 KB = 理论下界 `2(P-1)/P × N`）。
+> 读本文请把 §1–§6 当作**算法选型的推导过程与实测依据**；
+> **当前实现、剩余瓶颈与后续候选见 [§7](#7-wave5-之后剩余瓶颈与后续候选2026-08-05-复核)**。
+>
+> 另有两处口径必须先看 §7.1，否则会把优先级排错：
+> ① `tp_all_reduce` 在 ctx=65536 只占 device span **1.84%**（不是早期误判的 74.1% wall）；
+> ② profiling 把 barrier **自旋等待计入 kernel compute**，所以「每次 40+ µs」里有一大部分是等 peer，不是它自己的算术耗时。
+
+> **一句话结论（2026-07-27 视角，已被 §7 更新）**：step3p5 decode 里每层都要做的 `tp_all_reduce`（8 卡把各自的部分和加起来、再让每张卡都拿到完整结果），
+> 当时用的是最朴素的 **onephase（全互联 mesh）** 算法，在真机上又慢又抖。改成
 > **twophase_par（reduce-scatter + all-gather，且把扇出循环并行化）** 后，device 侧耗时
 > p50 快约 **35%**、均值快约 **59%**、尾延迟（p90）好约 **66%**。
 >
@@ -774,3 +785,232 @@ done
 - `ASCEND_GLOBAL_LOG_LEVEL=3` 压掉海量 INFO 日志。
 - 每次 device 运行套 `timeout`，防止 ring 那种 hang 卡死。
 - wall-clock 那行数字忽略（是 fork 开销），只看 `device_wall.sched`。
+
+---
+
+## 7. Wave5 之后：剩余瓶颈与后续候选（2026-08-05 复核）
+
+> 复核基准：`pypto-lib stepfun/develop@7099476b`（Wave5，0162 release-qualified）。
+> 本节所有 file:line 均直读该分支源码；标注「未复验」的条目是 agent 调查结论，未逐行确认。
+
+### 7.1 先纠正两个口径
+
+**口径一：绝对耗时**。三个数字差 4 倍，只有第一个能用：
+
+| 口径 | 每次耗时 | 说明 |
+|---|---|---|
+| **DFX 逐 kernel（权威）** | **avg 16.1 µs** | `benchmark/2026-07-29-release-image-64k-dfx-itl.md:62`：count 1547、busy 24.879 ms、avg 16.1 µs、wall union 7.989 ms |
+| PMU run | 40.7 µs | 该 run 整体 17× 放大 |
+| swimlane run | p50 63.6 µs | 该 run 整体 476× 放大 |
+
+**「每次 40+ µs」来自被插桩放大的 run，不是 clean run 的耗时。**
+
+**口径二：这 16 µs 里有多少是它自己的**。Wave5 验收文档
+（`benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md:100`）明确写了：
+
+> `tp_all_reduce` 内部**自旋等待仍被 critical-path 工具计入 kernel compute**。
+> 不能把任一 rank 的长 span 直接解释为算术耗时。
+
+即这 16 µs 含「在 barrier 上等最慢 rank」。clean run 实测跨卡起跑阶梯 **2.914 ms**
+（每 rank +0.412 ms），全部被每步第一个 barrier 吸收。
+
+**与 vLLM-Ascend 的 ~10 µs 不是同一口径**：`hcclAllReduce`
+（`vllm-ascend/vllm_ascend/distributed/device_communicators/pyhccl.py:130`）跑在 SDMA 引擎上，
+不计入 AICore kernel 时间，且调用时 ranks 已被前序 collective 同步过。
+**结论：真实差距远小于 40 µs vs 10 µs。**
+
+#### 7.1.1 分段计时：那 16 µs 里 ~80% 是自身搬运，不是等 peer（2026-08-05 实测）
+
+口径二只说了「含等待」，没说占比。用 `benchmark/2026-07-29-v3-64k/dfx-swim` 的
+**全 8 rank** swimlane 直接拆开：同一个 barrier 在 8 个 rank 上是同一段程序，
+**最后到达者几乎不等**，所以 `min over ranks ≈ 自身搬运`、`max − min ≈ 最早到达者付的等待`。
+
+> ⚠ `task_token_raw` 高 32 位是 ring_id，**跨 rank 不一致**（90 个 barrier 里只有 12 个
+> task_id 恰好相同）。必须按**程序序**（起始时间排序后按序号配对），不能按 task_id join。
+
+排除 instance #0（每步第一个 barrier，吸收全部起跑 skew）后，89 个 barrier × 8 rank：
+
+| | p10 | p50 | p90 | max |
+|---|---|---|---|---|
+| **min over ranks（自身搬运）** | 39.6 | **41.1** | 42.2 | **44.7** |
+| mean over ranks | 44.6 | 51.1 | 205.1 | 320.7 |
+| max over ranks | 48.4 | 61.3 | 253.6 | 388.0 |
+| spread = max − min（等待） | 8.3 | 20.7 | 212.0 | 346.8 |
+
+- **自身搬运下限在 89 个实例 × 8 rank 上锁死在 39.6–44.7 µs**，离散度极小 →
+  这是一条**确定性的带宽/串行成本**，不是等待。p50 口径 41.1 / 51.1 = **80%**。
+- swim 对该 kernel 的放大约 2.5×（41.1 → clean 16.1），**即 clean run 的 16.1 µs 基本全是自身搬运**
+  （clean skew 总共只 2.914 ms，全被 instance #0 吸收）。
+- 对账吻合：480 KB（本地 256 + 跨卡 224）÷ 单核实测有效 ~14 GB/s ≈ **34 µs**，接近 41 µs 下限。
+- p90 的 205 µs 长尾是 **MoE 负载不均的 skew 在此处被吸收**（straggler 在 8 个 rank
+  间轮换：rank2 21 次 / rank1 16 / rank4 11 / rank0·6·7 各 9 / rank5 8 / rank3 6，
+  **无坏卡**），记在 `combine_wait` 账上，不是 all-reduce 的成本。
+
+**所以「优化 all-reduce」的靶子是合法的**（自身搬运为主），只是天花板仍只有 span 1.84%。
+脚本：`0162:/tmp/ar_segment2.py`。
+
+### 7.2 当前实现（Wave5）
+
+单个 `InCore` method，`decode_fwd.py:248-374`：
+
+```text
+self-target TPUT 发布 partial (128 KB, 8 chunk)   decode_fwd.py:264-270  ← Wave5 加，修 tp_spread race
+→ Wave 1 barrier  (7 notify + 7 wait)             decode_fwd.py:273-285
+→ reduce-scatter：pull 7×[16,512] + FP32 累加     decode_fwd.py:292-315  (112 KB in)
+→ push all-gather：7× remote_store                decode_fwd.py:321-328  (112 KB out)
+→ Wave 2 barrier  (7 notify + 7 wait)             decode_fwd.py:331-343
+→ final local copy tmp_window→local (128 KB)      decode_fwd.py:346-357
+→ Wave 3 barrier  (7 notify + 7 wait)             decode_fwd.py:361-373  ← 纯 window 生命周期
+```
+
+**90 处调用点** = 45 attention（`attention_full.py:1606` / `attention_swa.py:1000`，经 `pl.inline` 拉进 whole-net）
++ 3 dense MLP（`dense_mlp.py:228`）+ 42 MoE shared expert（`decode_fwd.py:1730` / `:2910`）。
+shape：`BATCH=16`、`HIDDEN=4096`、`TP_ALL_REDUCE_CHUNK=512`、`BATCH_TILE=16`
+（`config.py:143/350/351/494`）⇒ `[16,4096]` BF16 = 128 KB，`BATCH//BATCH_TILE=1` 所以 RS 外层只 1 轮。
+
+**算法已到下界，剩下的全是实现层开销。**
+
+### 7.3 剩余瓶颈（4 层）
+
+#### ① 单核 —— `block_num=1`，48 个 AIV 只用 1 个
+
+runtime 定义（`pypto/runtime/src/a2a3/runtime/tensormap_and_ringbuffer/runtime/pto_submit_types.h:250-270`）：
+
+> Controls how many logical **blocks (SPMD dimension)** a single task is expanded into at dispatch time.
+> Each block receives a unique `block_idx` in `[0, block_num)`.
+
+默认 `int16_t block_num_{1}`。`tp_all_reduce` 是 `InCore` 且从 Orchestration 直接调用，
+**调用点和函数上都没有 `core_num` attr** → codegen 不 emit `set_block_num` → 落默认 1。
+于是 §7.2 那 7 步（≈480 KB 搬运 + 42 个信号操作）全排在**一条指令流**上；
+同期邻居计算 kernel 用 16–32 blocks（`expert_down` 32、`expert_gate_up` 20、`qk/sv/softmax` 16），
+**47 个 AIV 空转**。
+
+⚠ 但「单核」≠「慢 48 倍」。一个核在这里的瓶颈**不是算力**（224 KB 的 FP32 加法微不足道），而是
+(a) **串行延迟链**：14 次跨 die 传输，`acc = acc + recv` 让它们互相依赖，固定往返延迟被付了 7 遍；
+(b) barrier 等待。所以修法是「让更多传输同时在飞」，不是「上 48 核」——见 ②。
+
+#### ② ~~微基准赢的并行扇出，落地版没带上~~ → **已实测证伪，收益恒为 0**
+
+> **2026-08-05 device 证伪，不要再试。** 把 `tp_all_reduce` 里三波 barrier 的
+> notify/wait（6 个循环）+ push all-gather（1 个循环）从 `pl.range(group_size)`
+> 全部改成 `pl.parallel(group_size)`，在 wave5 release 镜像里编译 A/B：
+> 生成的 `next_levels/chip_orch/kernels/aiv/tp_all_reduce.cpp`（431 行）与
+> `ptoas/tp_all_reduce.cpp`（378 行）**逐字节相同**。
+>
+> 原因：生成 kernel 里这些循环**并未被展开**（9 个真实 C `for`，3 个 `TNotify` /
+> 5 个 `TWait` 各在循环体内一份），而 **InCore 的 AIV codegen 根本不消费
+> `ForKind`** —— `Parallel` 与 `Sequential` 出同一份码。`pl.parallel` 只有在
+> **Orchestration** 层（切 task / block）才有意义，InCore 函数体里是惰性注解。
+>
+> 连带推论：§2.4 把 `twophase_par` 的 p50 −35% 归因于 `pl.parallel` **站不住**。
+> `_build_twophase` 与 `_build_twophase_par` 若只差 loop kind，就不可能有 −35%；
+> 真实差异更可能在于 `twophase_par` 的 all-gather 直接写 `out`（**没有** final
+> local copy、**没有** Wave 3），即那是**算法/结构差异**，不是并行注解。§2.4
+> 的归因需要重测才能引用。
+>
+> 复现：`0162:/mnt/persist/chensiyu/workspace/ar-c5/compile_ab.sh {base,c5}`
+> （overlay `models/step3p5` + `tests/step3p5` 进镜像，compile-only 不占卡）。
+
+`pl.parallel` 的真实语义（`pypto/python/pypto/language/dsl_api.py:262-266`）：
+
+> Behaves identically to `range()` at runtime. The distinction is used by the parser to
+> emit `ForKind.Parallel` instead of `ForKind.Sequential`.
+
+注意 "identically at runtime" 就是字面意思。落地版 final copy 那处
+`pl.parallel`（`decode_fwd.py:347`）同理也没买到任何东西。
+
+#### ③ 本地搬运比跨卡搬运还多
+
+真正的 collective 只 224 KB，但 self-TPUT 128 KB + final copy 128 KB = **256 KB 本地 HBM↔UB**，
+同样压在那一个核上。两者都是为修正确性加的（见 `postmortems/13`）。
+且 `pld.tensor.put` 漏了 `pipeline=True`（默认 `False`，`pypto/python/pypto/language/distributed/op/tensor_ops.py:349`），
+没吃到双缓冲。
+
+⚠ **但 final copy 删不掉，只能多核化**（2026-08-05 复核）：签名
+`local: pl.Tensor[[BATCH, HIDDEN], pl.BF16]`（`decode_fwd.py:251`）是**普通 `pl.Tensor`
+而非 `pld.DistributedTensor`** —— peer 无法 `remote_store` 进 `local`，
+所以「push all-gather 直接落输出、省掉 tmp_window→local 拷贝」的方案不成立。
+要么把 `local` 提升成 window（动 90 个调用点的 ABI），要么只把这个 copy 从
+`pl.parallel` 换成 `pl.spmd`。self-TPUT 的 128 KB 同理是 Wave5 修 `tp_spread` race
+的代价，不可省。
+
+#### ④ 零 overlap
+
+all-reduce 是 o_proj 之后一个独立 task，期间 47 核空转。对比 vLLM-Ascend 的三层对策，我们一层都没有：
+
+| vLLM-Ascend 机制 | 位置 | 我们的状态 |
+|---|---|---|
+| `npu_mm_all_reduce_base`（MC2 融合 matmul+allreduce） | `vllm_ascend/ops/linear_op.py:398` | 无 |
+| all_reduce + AddRMSNorm 融合 pass | `vllm_ascend/compilation/passes/allreduce_rmsnorm_fusion_pass.py` | 无 |
+| sequence parallelism：all_reduce → reduce_scatter + 1/8 宽度 norm + all_gather | `vllm_ascend/compilation/passes/sequence_parallelism.py` | 无 |
+
+### 7.4 后续候选（按性价比排，均未实施）
+
+| ID | 候选 | 预期 | 风险 |
+|----|------|------|------|
+| ~~**C5**~~ | ~~notify/wait + push all-gather `pl.range` → `pl.parallel`~~ | ❌ **2026-08-05 证伪并关闭：收益恒为 0** | 编译 A/B 产出逐字节相同（见 §7.3②）。InCore AIV codegen 不消费 `ForKind`。**不要重开。** |
+| **C5′** | 只给 self-target TPUT 加 `pipeline=True`（`chunk_rows/cols` 已就位，语法已合法） | C5 里唯一还没被证伪的那一半：128 KB 的 self-publish 走 ping-pong 双缓冲。是当前结构内**唯一**剩下的实现层杠杆 | 中高。⚠ 这个 TPUT 的**同步 drain 正是 Wave5 用来修间歇性 `tp_spread` race 的承重件**（`decode_fwd.py:263` 注释 + PTOAS#872）。`pipeline` 在 chunk 间做重叠，可能重开 Wave4 那个 blocker → **必须走 Wave5 同级别的稳定性验收**（Main N=128 × 3 轮 + batch16 + MTP，全部 `tp_spread_max = 0.0`），不能只看 rc=0 |
+| **C6** | 消 Wave 3；final copy 从 `pl.parallel` → `pl.spmd` 多核化 | 省 1/3 barrier + 拆开 128 KB 本地拷贝 | 中。⚠ **不能"push 直接落输出"**：`local` 是 `pl.Tensor` 不是 window（见 §7.3③）。⚠ Wave3 是 **run 边界**的 window 复用护栏：`win_off=(layer_idx+1)*BATCH`（`decode_fwd.py:3479`）让层内不复用，但下一次 `rt.run()` 会重用同一 buffer——删之前必须证明跨 run 有别的 fence。必须过 `hidden_tp_spread == 0` gate |
+| **C7** | atomic-add push 版 reduce-scatter：`pld.tensor.put(..., atomic=AtomicType.Add)` 推贡献到 peer（`tensor_ops.py:291-394`）→ 1 barrier → 本地读自己那块 → push → 1 barrier | **零远程读**（`postmortems/13` 的结论正是 push+notify 可靠、pull-after-remote-notify 有 race）、消掉 7 级串行加法链、3 barrier → 2 | 中高。⚠ **精度**：BF16 atomic add 会破坏 C4 保住的 bit-identical（单 FP32 累加器 + 每元素一次 BF16 store），而 `hidden_tp_spread == 0` gate 依赖它。缓解 = 用 FP32 comm window 做 atomic add、末尾一次 BF16 cast，代价是 RS 阶段窗口字节翻倍。⚠ 需先 rebase（见 §7.5） |
+
+**不建议现在做**：
+
+- **多核化（`pl.spmd(N)`）**：单点收益最大，**技术上可行、先例存在**，但**收益/风险比不成立**。
+  - ✅ **先例更正（2026-08-05 复核，推翻本文早期「全仓零先例」的说法）**：
+    DeepSeek V4-Flash `origin/main:models/deepseek/v4-flash/moe.py:203-274` 就在
+    `pl.spmd(N_LOCAL, name_hint="dispatch_push")` 里做跨卡 `pld.tensor.put` +
+    `pld.tile.remote_store` + per-block `pld.system.notify`。早期结论来自只看
+    工作树 `models/deepseek/v4/` 的调查——那正是 `pypto-dev-constraints/SKILL.md §7`
+    警告「不是指定 V4-Flash baseline」的目录（`origin/main` 只有 `v4-flash/`，
+    工作树只有 `v4/`，两者不是同一份代码）。**引用 baseline 必须走
+    `git show origin/main:models/deepseek/v4-flash/…`，不能读工作树。**
+  - V4-Flash 也给出了「同 rank N 个核并发 AtomicAdd 打乱阈值」的解法：notify 折进
+    push scope，wait 侧阈值随之放大到 `expected=moe_epoch * N_LOCAL`（`moe.py:250-278`）。
+    step3p5 侧更省事的做法是**不折叠** notify——把 notify/wait 留在 spmd 之后的
+    `pl.at(CORE_GROUP)` scope，`expected=1/2/3` 一行不改，阈值风险归零。
+  - ❌ **真正的否决理由是量级**：单次只有 **16.1 µs / span 1.84%**，而 1 个 task 拆 N 个
+    task × 90 个调用点会把 task 图撑大（每 step +数百 task，按 3.5–5.2 µs/task 的
+    dispatch 开销算，很可能**吃掉甚至反超**收益）；§2.5 的 `onephase_par`
+    已经给过「并行化反而更慢」的实测反例（p50 215→277 µs）。
+    同期 `combine_wait` 占 device 时间 **13.4 ms / 24%**，是 13× 大的靶子。
+  - ⚠ **但 §7.1.1 的分段计时已把「等待为主」这条退路堵死**：clean run 的 16.1 µs
+    基本全是自身搬运（480 KB 单核，下限 39.6–44.7 µs 极稳），且 §7.3② 证伪后
+    **`pl.spmd` 是当前结构内唯一还能真正拆核的手段**（`pl.parallel` 无效）。
+    所以 ① 从「先测再说」变成「**唯一有理论收益但成本高**」：要动就得接受
+    90 个调用点的 task 图膨胀，并用实测 ITL 判生死，不能靠推理。
+- **MC2 级别的计算/通信重叠与 AR+residual+RMS 融合**：天花板最高但工程量最大，
+  且 Wave5 已立规矩（`benchmark/2026-08-03-*.md` 末尾）：
+  **「不机械合入无稳定收益的 all-reduce/residual/RMS 融合」**——必须先有实测收益再合。
+- §5 已否决的三条不再重试：`pld.tensor.allreduce` intrinsic（mesh 爆 UB、ring 结果错 `max_diff=77`、
+  PTOAS#797 禁止放进 for 循环）、手写 ring（14 barrier + P=4/8 死锁 + 缺 `pipe_barrier(PIPE_ALL)` 等价物）、
+  `onephase_par`。
+
+### 7.5 上游已解锁的能力（本地尚未具备）
+
+本地 `pypto` 落后 `origin/main` **1213 个 commit**，下列 commit **本地都还没有**：
+
+| commit | 日期 | 内容 | 对我们的意义 |
+|---|---|---|---|
+| `9776f276` | 2026-07-03 | **bf16 atomic-add 在 A2/A3 打开**（A5 不支持，`SupportsBf16AtomicAdd()` 门控） | 解锁 **C7** |
+| `5b17dfa6` | 2026-07-08 | 修 L3 put atomic add barrier | C7 配套 |
+| `eb87bf2f` | 2026-07-09 | ring allreduce composite intrinsic `mode="ring"`（NCCL 式 RS+AG） | §5 判 ring intrinsic 结果错，可重测 |
+| `2893c112` | 2026-07-08 | all_to_all push-based composite intrinsic（InCore only） | EP dispatch/combine 可能受益 |
+| `075a7753` | 2026-07-07 | `benchmark()` 支持 L3 distributed program | **能正经测 collective**，不用再 grep STRACE |
+| `726f678a` / `7dd39b49` | 2026-07-03 | soft/hard syncall 规则 | 多核化前置 |
+| `9f8ab9a8` | 2026-07-06 | 解耦 `pl.spmd` inline body 与 TaskId capture | 多核化相关 |
+
+`pto-isa` / `PTOAS` / `simpler` 近期**无**通信相关更新（PTOAS 只有 A5 PIPE_V barrier legalization，
+不覆盖 A2/A3 那个 `pipe_barrier(PIPE_ALL)` 缺口）。
+
+### 7.6 天花板（决定要不要做）
+
+`tp_all_reduce` 在 ctx=65536 只占 device span **1.84%** / busy **2.33%**。
+**即使把 collective 干到 0，64K ITL 也只降 1.84%。** 上一轮 C4 实测正是 ctx≤4096 −3.6%、64K 预期 <1%。
+
+因此建议顺序：
+
+1. **先测，别先改**：把 3 个 wave 拆成独立时间戳，把「自己的耗时」和「等 peer 的耗时」分开
+   （可用 §7.5 的 `075a7753` `benchmark()`）。如果 16 µs 里大部分是等 —— 真正该打的是**上游负载不均**
+   （`combine_wait` 13.4 ms = device 时间 24%），不是这个 collective。
+2. 自身耗时确实占大头再走 **C5 → C6 → C7**；C7 需先 rebase 拿 bf16 atomic-add。
+
