@@ -22,10 +22,15 @@ BUILD_JOBS=${BUILD_JOBS:-2}
 GH=${GH:-/data/chensiyu/secrets/github.env}
 GL=${GL:-/data/chensiyu/secrets/gitlab.env}
 IMG=${IMG:-hub.i.basemind.com/stepcast/vllm-pypto:${IMAGE_TAG}}
-BASE=${BASE:-hub.i.basemind.com/stepcast/stepcast:0.19.0-081dd47dd175-fbfe288fe1ee-2026.06.09-141938}
+BASE=${BASE:-hub.i.basemind.com/stepcast/vllm-pypto@sha256:3d6392588fe9fb6ce4f5852100667d24f09d70f262dbd0ebe6c45b380f49573a}
 
 [ -f "$GH" ] || { echo "缺 GitHub token 文件: $GH"; exit 1; }
 [ -f "$GL" ] || { echo "缺 GitLab token 文件: $GL"; exit 1; }
+
+# The historical StepCast base recorded a literal GitLab token in OCI history.
+# Pull and audit the digest-pinned sanitized base before allowing a build.
+docker pull "$BASE" >/dev/null
+python3 audit_image_credentials.py "$BASE" "$GH" "$GL"
 
 # ptoas-bin: fork 无 release asset,从 0162 验证过的二进制 bake 进 context。
 PTOAS_BIN_SRC=${PTOAS_BIN_SRC:-/data/chensiyu/hw_project/pypto/workspace/ptoas-bin}
@@ -71,4 +76,5 @@ DOCKER_BUILDKIT=1 docker build \
   -f Dockerfile \
   .
 echo "[build] done: $IMG"
+python3 audit_image_credentials.py "$IMG" "$GH" "$GL"
 echo "[build] 推送 (可选): docker push $IMG"

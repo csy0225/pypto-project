@@ -5,7 +5,7 @@
 # 构建规格由 builds/*.env 提供；所有仓 pin 都必须通过 build args 传入，
 # 禁止把可变的 stepfun/develop branch 当作 release source。
 # =============================================================================
-ARG BASE=hub.i.basemind.com/stepcast/stepcast:0.19.0-081dd47dd175-fbfe288fe1ee-2026.06.09-141938
+ARG BASE=hub.i.basemind.com/stepcast/vllm-pypto@sha256:3d6392588fe9fb6ce4f5852100667d24f09d70f262dbd0ebe6c45b380f49573a
 FROM ${BASE}
 
 SHELL ["/bin/bash", "-lc"]

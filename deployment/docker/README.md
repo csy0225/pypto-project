@@ -156,6 +156,15 @@ docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260803-attn
   不带参数默认用最新 spec。**加新 build 见 [§9 组织方式](#9-组织方式--加新-build)**。
 
 - `GH`/`GL` 是含 PAT 的文件,以 BuildKit `--secret` 传入,**不落镜像层**。
+  构建前后还会执行 `audit_image_credentials.py`，同时检查当前 credential
+  精确值与常见 literal-token 模式；任何命中都会阻止发布，且日志只记录长度与
+  SHA256 前缀，不打印 credential。
+- 原始 StepCast base
+  `stepcast:0.19.0-081dd47dd175-fbfe288fe1ee-2026.06.09-141938`
+  的 OCI history 含历史 GitLab token，禁止再直接作为 release base。当前使用
+  history-free、rootfs/config 等价的 digest pin：
+  `hub.i.basemind.com/stepcast/vllm-pypto@sha256:3d6392588fe9fb6ce4f5852100667d24f09d70f262dbd0ebe6c45b380f49573a`
+  （config `sha256:f4c87b469ec42f308340f26ede123a6cc42f726b16b64f82c8b34f12bd990387`）。
 - build.sh 做了三件网络相关的事(devbox 内网特性):
   1. `DOCKER_BUILDKIT=1 docker build --network=host`(走宿主路由到代理);
   2. 从官方入口 `deploy.i.shaipower.com/httpproxy` 取代理并以 `--build-arg` 传入
