@@ -80,15 +80,25 @@ RUN source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
     ${PIP} install --no-cache-dir "cmake==3.31.6" \
         "scikit-build-core>=0.10.0" "nanobind>=2.0.0" "ninja>=1.11.0" && \
     ${PIP} install --no-cache-dir --no-build-isolation -e ${WS}/pypto
-# simpler's runtime compiler currently passes an explicit
-# ``cmake --parallel cpu_count`` and therefore overrides
-# CMAKE_BUILD_PARALLEL_LEVEL. Bridge it to the release build setting only
-# while compiling, then restore the pinned source so the image stays clean.
+# simpler has three nested concurrency levels: runtime variants, host/aicpu/
+# aicore targets, and each target's cmake build. Bridge all three to the
+# release build setting only while compiling, then restore the pinned source
+# so the image stays clean.
 RUN runtime_compiler=${WS}/pypto/runtime/simpler_setup/runtime_compiler.py && \
+    build_runtimes=${WS}/pypto/runtime/simpler_setup/build_runtimes.py && \
+    runtime_builder=${WS}/pypto/runtime/simpler_setup/runtime_builder.py && \
     grep -Fq 'str(min(multiprocessing.cpu_count(), 32)),' "${runtime_compiler}" && \
+    grep -Fq 'ThreadPoolExecutor(max_workers=len(tasks) or 1)' "${build_runtimes}" && \
+    grep -Fq 'ThreadPoolExecutor(max_workers=4)' "${runtime_builder}" && \
     sed -i \
       's#str(min(multiprocessing.cpu_count(), 32)),#os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", str(min(multiprocessing.cpu_count(), 32))),#' \
       "${runtime_compiler}" && \
+    sed -i \
+      's#ThreadPoolExecutor(max_workers=len(tasks) or 1)#ThreadPoolExecutor(max_workers=min(len(tasks) or 1, int(os.environ.get("MAX_JOBS", str(len(tasks) or 1)))))#' \
+      "${build_runtimes}" && \
+    sed -i \
+      's#ThreadPoolExecutor(max_workers=4)#ThreadPoolExecutor(max_workers=min(4, int(os.environ.get("MAX_JOBS", "4"))))#' \
+      "${runtime_builder}" && \
     source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
     export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
     git config --global http.version HTTP/1.1 && \
@@ -96,8 +106,14 @@ RUN runtime_compiler=${WS}/pypto/runtime/simpler_setup/runtime_compiler.py && \
     export PTO_ISA_ROOT=${WS}/pto-isa && \
     ${PIP} install --no-cache-dir --no-build-isolation -e ${WS}/pypto/runtime && \
     cd ${WS}/pypto && ${PYTHON} -m simpler_setup.build_runtimes --platforms a2a3 && \
-    git -C ${WS}/pypto/runtime checkout -- simpler_setup/runtime_compiler.py && \
-    git -C ${WS}/pypto/runtime diff --exit-code -- simpler_setup/runtime_compiler.py
+    git -C ${WS}/pypto/runtime checkout -- \
+      simpler_setup/runtime_compiler.py \
+      simpler_setup/build_runtimes.py \
+      simpler_setup/runtime_builder.py && \
+    git -C ${WS}/pypto/runtime diff --exit-code -- \
+      simpler_setup/runtime_compiler.py \
+      simpler_setup/build_runtimes.py \
+      simpler_setup/runtime_builder.py
 
 # vLLM Track-B patch (tail-only Main + MTP proposer/boot fixes).
 RUN --mount=type=secret,id=gl_token \
