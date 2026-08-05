@@ -1441,9 +1441,12 @@ TypeError: RunConfig.__init__() got an unexpected keyword argument
 正式 PyPTO 修复为：
 
 ```text
-release/attn-final-dfx-20260805
+pypto stepfun/develop
 8e92b46808f9f7c09b6431ad4691503f09c12ee5
 ```
+
+该提交先在 `release/attn-final-dfx-20260805` 隔离验证，随后已从其直接父提交
+`defa97c5` fast-forward 合入远端 `stepfun/develop`。
 
 R2 已固定该 pin、attention 源码 `91c7f46e`、`a2a3` profile 和
 `BUILD_JOBS=1`。按用户要求，R2 构建已暂停且无残留编译进程；当前没有 R2
