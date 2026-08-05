@@ -18,6 +18,7 @@ ARG PTOAS_COMMIT=fc8c6caee561914b4fb991dfc8427bb63194269e
 ARG SIMPLER_COMMIT=216e7632267ae815c484cdeba7991c87fabf3086
 ARG PTOAS_BIN_VER=v0.50
 ARG ATTN_TASK_PROFILE=portable
+ARG BUILD_JOBS=2
 ARG VLLM_PATCH_BRANCH=csy/pypto-tail-mtp-integration
 ARG VLLM_PATCH_COMMIT=1b3e538c35999e62b6d24e0651b3a85b7d16c826
 ARG GH_PROXY=http://proxy.i.shaipower.com:3128
@@ -69,8 +70,8 @@ ENV PTO_ISA_ROOT=${WS}/pto-isa
 ENV PTOAS_ROOT=${WS}/ptoas-bin
 ENV LD_LIBRARY_PATH=${WS}/ptoas-bin/lib:${LD_LIBRARY_PATH}
 ENV PATH=${WS}/ptoas-bin/bin:${PATH}
-ENV CMAKE_BUILD_PARALLEL_LEVEL=2
-ENV MAX_JOBS=2
+ENV CMAKE_BUILD_PARALLEL_LEVEL=${BUILD_JOBS}
+ENV MAX_JOBS=${BUILD_JOBS}
 RUN source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
     export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
     git config --global http.version HTTP/1.1 && \
@@ -79,13 +80,24 @@ RUN source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
     ${PIP} install --no-cache-dir "cmake==3.31.6" \
         "scikit-build-core>=0.10.0" "nanobind>=2.0.0" "ninja>=1.11.0" && \
     ${PIP} install --no-cache-dir --no-build-isolation -e ${WS}/pypto
-RUN source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
+# simpler's runtime compiler currently passes an explicit
+# ``cmake --parallel cpu_count`` and therefore overrides
+# CMAKE_BUILD_PARALLEL_LEVEL. Bridge it to the release build setting only
+# while compiling, then restore the pinned source so the image stays clean.
+RUN runtime_compiler=${WS}/pypto/runtime/simpler_setup/runtime_compiler.py && \
+    grep -Fq 'str(min(multiprocessing.cpu_count(), 32)),' "${runtime_compiler}" && \
+    sed -i \
+      's#str(min(multiprocessing.cpu_count(), 32)),#os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", str(min(multiprocessing.cpu_count(), 32))),#' \
+      "${runtime_compiler}" && \
+    source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
     export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
     git config --global http.version HTTP/1.1 && \
     git config --global --add safe.directory '*' && \
     export PTO_ISA_ROOT=${WS}/pto-isa && \
     ${PIP} install --no-cache-dir --no-build-isolation -e ${WS}/pypto/runtime && \
-    cd ${WS}/pypto && ${PYTHON} -m simpler_setup.build_runtimes --platforms a2a3
+    cd ${WS}/pypto && ${PYTHON} -m simpler_setup.build_runtimes --platforms a2a3 && \
+    git -C ${WS}/pypto/runtime checkout -- simpler_setup/runtime_compiler.py && \
+    git -C ${WS}/pypto/runtime diff --exit-code -- simpler_setup/runtime_compiler.py
 
 # vLLM Track-B patch (tail-only Main + MTP proposer/boot fixes).
 RUN --mount=type=secret,id=gl_token \

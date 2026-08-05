@@ -161,8 +161,10 @@ docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260803-attn
   2. 从官方入口 `deploy.i.shaipower.com/httpproxy` 取代理并以 `--build-arg` 传入
      (github clone/release 经 `proxy.i.shaipower.com:3128`;内网 pip 镜像/gitlab/hub 直连不走代理);
   3. `ptoas-bin` 从 0162 验证过的二进制打进 build context(fork 无 release asset)。
-- 编译限并行 `CMAKE_BUILD_PARALLEL_LEVEL=2 / MAX_JOBS=2`(devbox dockerd 在 memcg 下, 17GB/5 核,
-  全并行编 pypto 会 OOM 打挂 dockerd)。
+- 编译并发由 spec 的 `BUILD_JOBS` 控制，并同步到
+  `CMAKE_BUILD_PARALLEL_LEVEL / MAX_JOBS`；`simpler` runtime 中显式
+  `cmake --parallel` 也由构建期桥接遵守该值，之后恢复固定 commit 的源码。
+  17GB/5 核且无 swap 的 devbox 应使用 `BUILD_JOBS=1`，避免并行编译耗尽内存。
 
 ---
 
