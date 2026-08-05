@@ -8,9 +8,9 @@
 > 目标：把整网 canonical hidden-only 入口
 > `models.step3p5.decode_fwd:whole_decode_step3p5` 接入 vLLM serving decode 路径，
 > 完成 PyPTO 后端替换。
-> 关联：[`../../planning/phases/28-n1-live-integration.md`](../../planning/phases/28-n1-live-integration.md)、
-> [`../../reference/canonical-test.md`](../../reference/canonical-test.md)、
-> [`../../develop/N1/N1-STABLE-ENV-0162-20260717.md`](../../develop/N1/N1-STABLE-ENV-0162-20260717.md)。
+> 关联：[`../../planning/phases/28-live-integration.md`](../../planning/phases/28-live-integration.md)、
+> [`../../reference/canonical-test.md`](../../reference/canonical-test.md) 和
+> [`../../deployment/version-matrix.md`](../../deployment/version-matrix.md)。
 
 本文是 **落地任务导向的详细设计**：说明 vLLM 内如何截获、PyPTO 如何交互、模型/缓存/metadata/buffer 边界在哪里，并把每个可交付项拆成可执行任务。
 
@@ -446,7 +446,7 @@ tail-only 改动属于 vLLM-Ascend backend seam，不应改 upstream generic vLL
 
 | 层 | 仓库/路径 | 归属 | 补丁类别 |
 |---|---|---|---|
-| integration docs/runbooks | `pypto-project/phases`, `develop/N1` | manifest、任务、验证 | integration repo |
+| integration docs/runbooks | `planning/phases/28-live-integration.md`, `deployment/` | manifest、任务、验证 | integration repo |
 | whole-net holder/sidecar/KV importer | `pypto-lib/tools/step3p5/*` | PyPTO live backend | model/product patch |
 | canonical whole-net Main | `pypto-lib/models/step3p5/decode_fwd.py:whole_decode_step3p5` | PyPTO model code | canonical product path |
 | vLLM hook/autoload | `vllm-ascend` backend patch or `/logs/pypto_patch` self-contained backend | backend seam | Class C |
@@ -457,130 +457,50 @@ tail-only 改动属于 vLLM-Ascend backend seam，不应改 upstream generic vLL
 
 ---
 
-## 9. 任务拆解表
+## 9. 当前任务拆解（2026-08-05）
 
-### A. 环境与基线
+历史 0234/N1 bring-up、socket v1 和旧 branch pin 已从活跃任务表移除。当前执行状态只在
+[`../../planning/phases/28-live-integration.md`](../../planning/phases/28-live-integration.md)
+维护。
 
-| ID | 任务 | 主要文件/命令 | 依赖 | 验收 |
-|---|---|---|---|---|
-| A1 | 0234 清洁环境 manifest | `develop/N1/collect-0234-manifest.sh` | 无 | manifest 中只有单一 CANN、单一 Python/PYTHONPATH，五仓 pin 和 binary hash 明确 |
-| A2 | canonical A/B runner 环境净化 | `develop/N1/run-0234-canonical-ab.sh` | A1 | 使用 `env -i`，禁止混入 beta/non-GA 多套路径；trap 可恢复 runtime binary |
-| A3 | 0234 stable binary + CANN A/B | staged 0162 runtime + beta/non-GA CANN | A2 | 每组 fresh exporter + worker，有 rc/argmax/dmesg/manifest |
-| A4 | checkpoint 全量 manifest | checkpoint 60/62 文件 sha256 | A1 | 与 0162 SSOT 差异解释清楚，不再只比首尾 shard |
-
-### B. vLLM 截获与 fallback
-
-| ID | 任务 | 主要文件/接口 | 依赖 | 验收 |
-|---|---|---|---|---|
-| B1 | backend autoload 入口 | self-contained `pypto_whole_decode_backend.py` 或 vLLM-Ascend patch | A1 | `PYPTO_WHOLE_DECODE=1` 时 patch install；flag off 零影响 |
-| B2 | collective-consistent gate | `Step3p5Model.forward` hook | B1 | sidecar absent/profile/prefill 时全 rank fallback，无 broadcast 死锁 |
-| B3 | `compute_logits` tail hook | `Step3p5ForCausalLM.compute_logits` | B1 | 用 vLLM final norm + lm_head；tail-only logits 与 vanilla 一致 |
-| B4 | pure-decode 判定 | metadata shim | B2 | prefill/chunked/spec/profiling 均 fallback；decode qlen=1 才走 PyPTO |
-
-### C. Sidecar / protocol / holder
-
-| ID | 任务 | 主要文件 | 依赖 | 验收 |
-|---|---|---|---|---|
-| C1 | socket protocol v1 固化 | `whole_decode_sidecar.py` | 无 | offline selftest 覆盖 BF16/INT32/多 tensor |
-| C2 | holder padding setter | `whole_decode_holder.py` | C1 | 每 step zero hidden/meta padding；T=1/T=16 均正确 |
-| C3 | resident RoPE | `whole_decode_holder.py` | C2 | 不再通过 socket 传整张 rope 表；positions-only 驱动 |
-| C4 | holder run telemetry | holder/sidecar | C2 | 输出 dt、argmax_debug、shape、NaN guard、valid token count |
-
-### D. KV pool 与 PyPTO KV importer
-
-| ID | 任务 | 主要文件 | 依赖 | 验收 |
-|---|---|---|---|---|
-| D1 | vLLM K-major/V-major KV pool | vLLM-Ascend KV allocator seam | A1 | 每 rank one pool，L0..L44 K 连续、V 连续 |
-| D2 | KV IPC key/map export | vLLM-Ascend backend | D1 | 生成 `pypto_kvpool.key.rank*` 和 map json |
-| D3 | KV map validator | `pypto_kv_ipc.py` | D2 | dtype/head_dim/num_layers/512B/no-overlap/contiguous 全校验 |
-| D4 | build stacked flat KV | `pypto_kv_ipc.py` | D3 | 返回 `K,V [tp,45*slots,128]` DeviceTensor/StackedDeviceTensor |
-| D5 | vLLM/PyPTO KV live smoke | synthetic + real vLLM | D4 | PyPTO 读到 vLLM prefill 写入的同一 slot 数据 |
-
-### E. Metadata bridge
-
-| ID | 任务 | 主要文件 | 依赖 | 验收 |
-|---|---|---|---|---|
-| E1 | ForwardContext 探针 | vLLM hook report | B1 | 当前 image 中 block_table/slot_mapping/seq_lens 字段路径固定记录 |
-| E2 | metadata extractor shim | vLLM backend patch | E1 | 输出固定 PyPTO ABI tensors，不暴露 vLLM 内部对象 |
-| E3 | padding / batch contract tests | offline unit | E2 | T=1、T=2、T=16、padding rows 均通过 |
-| E4 | fallback consistency tests | vLLM local | E2 | metadata 缺失时所有 ranks fallback，服务不挂 |
-
-### F. Whole-net live KV ABI
-
-| ID | 任务 | 主要文件 | 依赖 | 验收 |
-|---|---|---|---|---|
-| F1 | whole-net live KV rows 常量 | canonical `decode_fwd.py` / holder config | D4 | standalone storage 不被污染；live pool 为 `45*slots` |
-| F2 | attention row formula 复核 | canonical attention + `decode_fwd.py` layer slice | F1 | `layer_base = layer_idx * slots_per_layer`，层间不 alias |
-| F3 | canonical source contract | `test_main_hidden_only_contract.py` + `test_performance_bc_contract.py` | F2 | 唯一 Main、KV InOut、无 retired generator/selector |
-| F4 | standalone canonical 回归 | 0162 clean image | F3 | live hidden/token gate 不回退 |
-
-### G. Native W8A8 与 HBM closure
-
-| ID | 任务 | 主要文件 | 依赖 | 验收 |
-|---|---|---|---|---|
-| G1 | decoder 权重唯一副本审计 | vLLM + PyPTO HBM logs | A1 | vLLM 不再持有 45 层 decoder params 常驻副本 |
-| G2 | tail-only stub/loader | vLLM-Ascend Step3p5 patch | B3 | 只加载 embed/final_norm/lm_head，forward hook 仍可运行 |
-| G3 | HBM budget smoke | `npu-smi` + process stats | G2 | exporter + sidecar + vLLM tail < 64GB/card，有 headroom |
-| G4 | W8A8 guard | PyPTO loader/checks | G1 | routed weights INT8/scale FP32；无 BF16 dequant 权重路径 |
-
-### H. Live serving 验证
-
-| ID | 任务 | 命令/场景 | 依赖 | 验收 |
-|---|---|---|---|---|
-| H1 | sidecar 单独启动 | `whole_decode_sidecar --serve` | C/D/F | holder build+prepare once，no crash |
-| H2 | vLLM 8001 fallback health | sidecar absent | B | health=200，fallback count 增加，无死锁 |
-| H3 | vLLM + sidecar single request | greedy temp=0 | B/C/D/E/F/G | 首个 pure decode step 走 PyPTO，返回 token |
-| H4 | multi-batch padding | 2/4/16 req decode | E/G | valid rows 正确，padding 不污染 logits/KV |
-| H5 | live A/B | 8001 PyPTO vs 8000 vanilla | H3/H4 | L3 greedy top-1 >= 95%；L1/L2 hidden 指标作为辅证 |
-| H6 | 0234 soak | clean env repeated run | H5 | 无 stall/NaN/507018；失败时按 manifest 定位单变量 |
-
----
+| ID | 任务 | 主要边界 | 验收 |
+|---|---|---|---|
+| A1 | 固定被测对象 | source commit、image digest、checkpoint、cards、profile | manifest 可复核；不使用本地 branch 名推断 tip |
+| A2 | R2 immutable gate | pypto `8e92b468`、pypto-lib `91c7f46e`、`BUILD_JOBS=1` | build/audit PASS；digest 已发布；无源码挂载 |
+| B1 | 独立 live front 接管 | vLLM hook、collective-consistent gate、fallback 可观测 | 真实 online request 明确进入 PyPTO Main |
+| C1 | paged-KV bridge | per-layer K/V、block table、slot mapping、seq lens | 多步、dynamic batch、inactive row、历史 row 均正确 |
+| D1 | Main→MTP 同代 gate | 配对 hidden/oracle、acceptance state | token/hidden/finite/TP spread 全通过 |
+| E1 | HBM closure | vLLM 权重、IPC 权重、PyPTO working set ownership | 峰值有账本；无重复 decoder 权重或隐式 fallback |
+| F1 | production immutable gate | precision、liveness、MTP、ITL/DFX | 同一 digest 完整准出 |
 
 ## 10. 验证矩阵
 
-| 阶段 | 目的 | 必跑项 | PASS 标准 |
-|---|---|---|---|
-| static | 防止语法/格式错误 | `py_compile`, `git diff --check` | rc=0 |
-| generator | 防止手改 generated code | strip/regenerate/byte compare | cmp rc=0 |
-| unit | 协议/KV/metadata 算术 | sidecar selftest, KV validator selftest, metadata padding selftest | 全 PASS |
-| standalone | 确认 whole-net 未回退 | canonical P42 token 6127 | rc=0, RUN done, argmax=303 |
-| env A/B | 确认 0234 单变量 | CANN/runtime/checkpoint manifest | 每次结果绑定 manifest |
-| live fallback | 服务可启动 | sidecar absent / profiling | vLLM health=200，无死锁 |
-| live single | 单请求 decode | PyPTO hook + sidecar | token 返回、无 NaN、KV slot 正确 |
-| live batch | padding/multi-batch | T=2/4/16 | valid rows 正确 |
-| live A/B | token-exact 准出 | 8001 vs 8000 greedy | top-1 >= 95% |
+| 层级 | 必须验证 |
+|---|---|
+| Source | exact commits、clean tree、唯一 Main、retired symbol 不存在 |
+| Offline | protocol/schema、metadata shape/dtype、KV bounds、fallback 决策 |
+| Standalone device | Main 多步 precision、batch1～16、TP spread、无 stall |
+| Live integration | online request 接管、paged-KV、dynamic batch、MTP、HBM |
+| Release | immutable digest、credential/pin audit、Main/MTP、ITL/DFX |
 
----
+准出标准见
+[`../../reference/canonical-test.md`](../../reference/canonical-test.md)。
 
 ## 11. 失败排查顺序
 
-1. **先查测试对象是否一致**：源码 pin、runtime binary、CANN、PTOAS、checkpoint、环境变量、设备是否与 manifest 一致。
-2. **再查是否违反框架约束**：单 whole-net、RAW-only 非别名、comm window distinct、512B signal isolation、KV 512B alignment、padding 初始化。
-3. **再查 ABI 是否错位**：vLLM metadata 字段、slot_mapping、block_table stride、K/V offset、layer_idx base、dtype。
-4. **最后查局部代码逻辑**：attention row、RoPE position、W8A8 scale、broadcast/fallback、sidecar tensor copy。
-
----
+1. 先确认被测 digest/commit/dirty diff，不使用历史 N1 manifest。
+2. 确认请求是否进入 PyPTO，还是 fallback/shadow/profile-noop。
+3. 检查 metadata/KV ownership、shape、dtype、active rows 和跨 step lifetime。
+4. 再检查 collective、signal/window、TP spread 和残留进程。
+5. 最后做 kernel/数值局部定位；不能用增大 timeout、重试或 BF16 fallback 作为修复。
 
 ## 12. 推荐落地顺序
 
-```mermaid
-flowchart TD
-    A["A: 0234 clean manifest + canonical A/B"] --> B["B: vLLM hook + collective fallback"]
-    A --> C["C: sidecar/holder protocol hardening"]
-    B --> E["E: metadata bridge"]
-    C --> E
-    A --> D["D: K-major/V-major KV pool + importer"]
-    D --> F["F: whole-net live KV ABI"]
-    E --> F
-    F --> G["G: tail-only HBM closure"]
-    G --> H["H: live serving A/B"]
+```text
+R2 immutable attention gate
+-> independent live-front takeover
+-> paged-KV + dynamic batch
+-> paired Main-to-MTP gate
+-> HBM ownership closure
+-> production immutable release gate
 ```
-
-第一批推荐提交边界：
-
-1. **docs-only**：本文档 + runbook 更新。
-2. **offline plumbing**：sidecar protocol、KV map validator、metadata extractor unit，不触碰 generated whole-net。
-3. **vLLM seam**：autoload/hook/fallback/tail-only stub，小而独立。
-4. **KV allocator**：vLLM K-major/V-major pool + export map。
-5. **whole-net live variant**：generator-owned KV ABI 改动 + canonical 回归。
-6. **HBM closure + live A/B**：tail-only loader/stub + 0234 serving 验证。

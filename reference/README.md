@@ -8,7 +8,7 @@ canonical 测试、pypto runtime 框架视图、编程 API、kernel 约束的参
 
 | 文档 | 用途 |
 |------|------|
-| [`canonical-test.md`](canonical-test.md) | **N=1 whole-net 唯一验收金标准 SSOT**（P42 → token 6127 → argmax 303）。任何"跑通/精度"结论只能由本测试给出。 |
+| [`canonical-test.md`](canonical-test.md) | **Step3p5 whole-net 唯一验收金标准 SSOT**。区分 precision、liveness、immutable image 与 performance gate。 |
 | [`4plus1/`](4plus1/README.md) | pypto runtime 框架 4+1 视图（02 逻辑 / 03 开发 / 04 过程 / 05 物理）。 |
 | [`pypto-programming-api.md`](pypto-programming-api.md) | pypto frontend 编程 API 速查（`pl.range` / `pl.slice` / `pl.program` / collective 等）。 |
 | [`cache-line-signal-isolation.md`](cache-line-signal-isolation.md) | 跨卡 signal / cache-line 隔离探针与诊断方法。 |

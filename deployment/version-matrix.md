@@ -20,6 +20,8 @@
 
 R1 不得用于最终交付，也不得通过源码挂载绕过。R2 恢复后必须完成 digest-only
 镜像审计、bs1/64K 前两层 DFX 和同 digest 整网 50 次 ITL，才能新增正式组合。
+当前 GitHub 远端 `csy0225/pypto:stepfun/develop` 已指向 `8e92b468`；
+不得再用本地旧 N1 同名分支或历史文档推断 pypto tip。
 详见
 [`../benchmark/2026-08-05-attention-canonical-r1-r2.md`](../benchmark/2026-08-05-attention-canonical-r1-r2.md)。
 

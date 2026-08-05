@@ -26,7 +26,7 @@ pypto-lib stepfun/develop
   91c7f46ee949045e2fce807276412b48d8121763
 
 pypto stepfun/develop
-  defa97c526fec7e8f032dbbfcc39c820add02bf7
+  8e92b46808f9f7c09b6431ad4691503f09c12ee5
 
 machine/profile
   0162 / Ascend A2A3 / PYPTO_STEP3P5_ATTN_TASK_PROFILE=a2a3
@@ -39,6 +39,10 @@ machine/profile
 
 这不表示其它架构或未来 backend 没有空间。换架构后必须重新做 task-grain、
 tile、resource mapping、batch 和 immutable gate。
+
+镜像边界：Wave5 仍是最后一个 0162 release-qualified 镜像；2026-08-05 R1
+已废弃，R2 build 已暂停且尚无 digest/最终 DFX/整网 ITL。源码结论不能自动升级
+为镜像准出结论。
 
 ## 2. 最终 workload 与任务模型
 

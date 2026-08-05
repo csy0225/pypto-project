@@ -1,7 +1,7 @@
 # =============================================================================
 # vllm-pypto 可复现环境 (Ascend 910B / step3p5)
 #
-# 0724 blessed image 的固定环境 + canonical-only Step3p5 loop-form Main。
+# History-free canonical base + immutable Step3p5 source pins.
 # 构建规格由 builds/*.env 提供；所有仓 pin 都必须通过 build args 传入，
 # 禁止把可变的 stepfun/develop branch 当作 release source。
 # =============================================================================
@@ -10,15 +10,16 @@ FROM ${BASE}
 
 SHELL ["/bin/bash", "-lc"]
 
-# Release pins are overridden by the selected build spec.
-ARG PYPTO_COMMIT=ca21ab5fcfd8203165928428302d273c377db5c6
-ARG PYPTO_LIB_COMMIT=53eb7212c29c9bd015ee060cd9924a13ea781ae0
+# Safe defaults follow the last release-qualified Wave5 image. Every candidate
+# and release build still passes an explicit builds/*.env file.
+ARG PYPTO_COMMIT=defa97c526fec7e8f032dbbfcc39c820add02bf7
+ARG PYPTO_LIB_COMMIT=7099476b7c4f13112b159e237e7a64344803caf0
 ARG PTO_ISA_COMMIT=ecb6c303f797749f811a494742c3c08156aacabb
 ARG PTOAS_COMMIT=fc8c6caee561914b4fb991dfc8427bb63194269e
-ARG SIMPLER_COMMIT=216e7632267ae815c484cdeba7991c87fabf3086
+ARG SIMPLER_COMMIT=e2efebcbd190302609c0775d2984f409f5f42c76
 ARG PTOAS_BIN_VER=v0.50
 ARG ATTN_TASK_PROFILE=portable
-ARG BUILD_JOBS=2
+ARG BUILD_JOBS=1
 ARG VLLM_PATCH_BRANCH=csy/pypto-tail-mtp-integration
 ARG VLLM_PATCH_COMMIT=1b3e538c35999e62b6d24e0651b3a85b7d16c826
 ARG GH_PROXY=http://proxy.i.shaipower.com:3128
@@ -28,7 +29,7 @@ ENV WS=/workspace
 ENV PYTHON=/usr/local/python3.11.14/bin/python3
 ENV PIP="/usr/local/python3.11.14/bin/python3 -m pip"
 
-# Keep only the CANN release used by the 0724 image.
+# Keep only the validated CANN release.
 RUN rm -rf /usr/local/Ascend/cann-8.5.1 && \
     ln -sfn /usr/local/Ascend/cann-9.0.0-beta.1 /usr/local/Ascend/cann
 

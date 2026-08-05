@@ -20,6 +20,6 @@ vLLM 与 pypto worker 同 8 卡共驻的设计文档。live single-handoff 集�
 ## 相关
 
 - 整网侧：[`../whole-net/`](../whole-net/README.md)
-- Phase 28（live 集成）：[`../../planning/phases/28-n1-live-integration.md`](../../planning/phases/28-n1-live-integration.md)
+- Phase 28（live 集成）：[`../../planning/phases/28-live-integration.md`](../../planning/phases/28-live-integration.md)
 - KV-IPC 路径参考：[`../../reference/zero-copy-ipc-route.md`](../../reference/zero-copy-ipc-route.md)
 - 部署（co-tenancy 运行时）：[`../../deployment/`](../../deployment/README.md)

@@ -77,3 +77,7 @@ unset PAT
 6. **生产整网只允许单个 `@pl.program`**（多 program 有 co-prepare 死锁墙，见 [`postmortems/08-multiprogram-coprepare-deadlock.md`](postmortems/08-multiprogram-coprepare-deadlock.md)）；**native W8A8 不回退 BF16-dequant**。
 7. **验收以 canonical 为准**：[`reference/canonical-test.md`](reference/canonical-test.md)。**精度准出 = 多步 decode 逐 token vs vanilla（N=128 ≥95%）**；单 token `argmax==303` 仅为首 token 冒烟/liveness。性能优化回归走 `.claude/skills/pypto-perf-regression/`。
 8. **强开发约束先读 skill**：`.claude/skills/pypto-dev-constraints/`；整网 hang 排查：`.claude/skills/pypto-whole-net-hang-debug/`。
+9. **当前状态不得从本地 branch 名推断**：先读带日期的 [`STATUS.md`](STATUS.md) /
+   [`planning/handoff.md`](planning/handoff.md)，再用 GitHub 远端 ref 核对 exact commit。
+   `develop/N1/`、旧 phase、旧 benchmark、case-study skill 和本地同名分支都只能作为
+   历史证据；若它们与当前 SSOT 冲突，以远端 ref + 当前版本矩阵为准，并立即修正文档。

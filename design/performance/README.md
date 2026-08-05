@@ -1,14 +1,14 @@
 # Performance 性能优化专项
 
-> **2026-08-03 current-source override（优先于下方历史快照）**：当前 attention/Vec
-> 与 TP all-reduce stability 源码为
-> `pypto-lib stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0`，
-> 配套 pypto 为 `stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。
+> **2026-08-05 current-source override（优先于下方历史快照）**：当前源码为
+> `pypto-lib stepfun/develop@91c7f46ee949045e2fce807276412b48d8121763`，
+> 配套 pypto 为
+> `stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。
 > A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2 已完成；B3 仍在进行。
-> Wave5 在 0162 release-qualified：Main N=128×3 均 `123/128` 且 TP spread=0，
-> 64K immutable ITL p50 为 `49.796 ms`。下方 2026-07-27 状态、65 ms 分账和
-> 旧依赖关系保留为
-> 历史分析，不能覆盖 [`task-tracking.md`](task-tracking.md) 的当前状态。
+> Wave5 仍是最后一个 0162 release-qualified 镜像；R1 已废弃，包含 immutable
+> swimlane 修复的 R2 构建已暂停、尚未发布或验证。下方 2026-07-27 状态、65 ms
+> 分账和旧依赖关系只作历史分析，不能覆盖
+> [`task-tracking.md`](task-tracking.md) 的当前状态。
 
 > **2026-07-27 当前目标快照**：已完成并保留完成态的优化为 **A1、B1、B2**。
 > historical fixed-slot pull C2仅作为回归基线；目标通信架构已改为直接迁移

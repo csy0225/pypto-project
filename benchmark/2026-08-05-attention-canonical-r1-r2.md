@@ -79,10 +79,6 @@ pypto commit  8e92b46808f9f7c09b6431ad4691503f09c12ee5
 test          88 passed, 3 skipped
 ```
 
-该提交最初在 `release/attn-final-dfx-20260805` 上完成隔离验证；确认其父提交就是
-远端 `stepfun/develop` 的 `defa97c5` 后，已将 `stepfun/develop` fast-forward
-到同一 `8e92b468`。release 分支仅作为构建时的历史锚点，不再是唯一承载分支。
-
 R2 构建规格：
 
 ```text

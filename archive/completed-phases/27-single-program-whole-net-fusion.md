@@ -1,11 +1,13 @@
 # Phase 27 —— N=1 整网融合（单 @pl.program 全 45 层 + tail）
 
+> **历史归档（2026-07）**：本文所有“当前/release/stable”只指 Phase 27 当时，
+> 不得用于选择今天的 branch、pin、镜像或 blocker。当前状态见根 `STATUS.md`。
+>
 > **独立攻关线**，与 Phase 25（Option-C 多程序 whole-model orchestration）并行、互不干扰。
 > 分支：pypto-lib `feat/whole-net-n1-fusion`。
 > 最终 release 验证机：`gpu-a910x-0162`，devices `8..15`。
-> 本文较早的 0234 环境重建与历史 bisect 章节保留作历史证据；当前 release
-> 状态以本文顶部与 `N1-CANONICAL-TEST.md` 为准。
-> 0162 clean 环境的唯一 stable 版本记录见
+> 本文较早的 0234 环境重建与历史 bisect 章节保留作历史证据；当时 release
+> 状态和 0162 clean 环境快照见
 > [`develop/N1/N1-STABLE-ENV-0162-20260717.md`](../../develop/N1/N1-STABLE-ENV-0162-20260717.md)。
 
 ## Pin snapshot（升级栈，2026-07-09 从 0162 只读 bundle 导入 + 重建）

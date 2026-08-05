@@ -1,26 +1,29 @@
 # 04 · Attention 优化专项（step3p5 full / SWA flash decode）
 
-> **最终实现覆盖说明（2026-08-03）**：本文已合并原
-> `attention/attention-tiling-and-partitioning.md` 的最终 task/tile 设计。§0–§9
+> **最终实现覆盖说明（更新至 2026-08-05）**：本文是 attention task/tile
+> 设计的唯一入口。§0–§9
 > 保留专项探索过程，包含早期 fixed-24 lane、四阶段 split、standalone Pass-A/B/C
 > 与 cast 默认关闭等历史状态；**这些内容不得再作为当前实现说明。** 当前权威状态以
 > [§12](#12-wave5-source-publication-稳定性收口2026-08-03) 和
-> [§13](#13-当前最终实现task-切分与-tile-profile合并文档) 为准：
+> [§13](#13-当前最终实现task-切分与-tile-profile) 为准：
 > logical task 数按 active workload 推导，runtime 再映射到物理 AIC/AIV；
 > 5–10 us 仅是 task-grain 搜索起点；Full 的 SV 与 segment-local recurrence 已融合，
 > 只保留必要的 `full_online_softmax_reduce/finalize`；Full/SWA out-proj cast 默认都融合。
-> 当前源码为 `pypto-lib stepfun/develop@7099476b` 与
-> `pypto stepfun/develop@defa97c5`。Wave5 以 self-target TPUT 显式发布 all-reduce
+> 当前源码为 `pypto-lib stepfun/develop@91c7f46e` 与
+> `pypto stepfun/develop@8e92b468`。Wave5 以 self-target TPUT 显式发布 all-reduce
 > source partial，已完成 immutable audit、Main/MTP compile、Main N=128×3、
 > Main batch16、MTP batch1/batch16×2、64K/batch16 ITL/DFX，状态为
-> **0162 release-qualified**；其它机器/架构未由本轮独立证明。
+> 最后一个 **0162 release-qualified** 镜像；R1 已废弃，R2 build 已暂停、
+> 未发布/验证。
 >
 > **性质**：LLD 专项。聚焦 decode 阶段 flash-attention kernel 本体（`attention_full.py` /
 > `attention_swa.py`）的重写路线，独立于 README 主表里的 Track A–H。收敛后其中的子项会以
 > `PERF-*` ID 回填 [`task-tracking.md`](task-tracking.md)。
 >
-> **当前源码基线**：pypto-lib `stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0`，
-> pypto `stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`；canonical Main =
+> **当前源码基线**：pypto-lib
+> `stepfun/develop@91c7f46ee949045e2fce807276412b48d8121763`，
+> pypto `stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`；
+> canonical Main =
 > `models/step3p5/decode_fwd.py:whole_decode_step3p5`。正文中的旧 file:line 只对应当时快照，
 > 不能覆盖当前源码。
 >
@@ -1038,11 +1041,10 @@ AR+residual/RMS/projection 融合不合 canonical。
 完整证据见
 [`../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md`](../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md)。
 
-## 13. 当前最终实现：task 切分与 tile profile（合并文档）
+## 13. 当前最终实现：task 切分与 tile profile
 
-本节合并原 `attention/attention-tiling-and-partitioning.md`，作为当前实现的单一
-设计入口。§0–§9 的早期实验、fixed-lane probe 和失败方案仍保留用于解释为什么
-最终没有选择那些路线，但不能覆盖本节。
+本节是当前实现的单一设计入口。§0–§9 的早期实验、fixed-lane probe 和失败方案
+仅用于解释为什么最终没有选择那些路线，不能覆盖本节。
 
 ### 13.1 核心抽象：workload-derived tasks，而不是固定核心数
 
@@ -1327,7 +1329,7 @@ pypto-lib stepfun/develop
 91c7f46ee949045e2fce807276412b48d8121763
 
 pypto stepfun/develop
-defa97c526fec7e8f032dbbfcc39c820add02bf7
+8e92b46808f9f7c09b6431ad4691503f09c12ee5
 ```
 
 最终源码验证为 `218 passed, 3 skipped`。compile-only 还会读取真实生成的
@@ -1444,9 +1446,6 @@ TypeError: RunConfig.__init__() got an unexpected keyword argument
 pypto stepfun/develop
 8e92b46808f9f7c09b6431ad4691503f09c12ee5
 ```
-
-该提交先在 `release/attn-final-dfx-20260805` 隔离验证，随后已从其直接父提交
-`defa97c5` fast-forward 合入远端 `stepfun/develop`。
 
 R2 已固定该 pin、attention 源码 `91c7f46e`、`a2a3` profile 和
 `BUILD_JOBS=1`。按用户要求，R2 构建已暂停且无残留编译进程；当前没有 R2

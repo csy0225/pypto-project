@@ -1,5 +1,10 @@
 # N=1 原生 W8A8 routed boundary 最终设计（2026-07-16）
 
+> **历史归档。** 本文描述 2026-07 的 N1 routed-boundary 对象，不是当前
+> Main、collective、branch 或 pin 说明。当前设计与状态见
+> [`../../STATUS.md`](../../STATUS.md) 和
+> [`../../design/whole-net/`](../../design/whole-net/README.md)。
+
 ## 1. 固定约束
 
 ```text

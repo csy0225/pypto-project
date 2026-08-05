@@ -11,8 +11,8 @@ description: >
 
 # step3p5 性能优化回归 runbook
 
-> **单一入口**：设计在 [`design/performance/`](../../design/performance/README.md)，状态在
-> [`task-tracking.md`](../../design/performance/task-tracking.md)，性能数据在
+> **单一入口**：设计在 [`design/performance/`](../../../design/performance/README.md)，状态在
+> [`task-tracking.md`](../../../design/performance/task-tracking.md)，性能数据在
 > `$WS/pypto-lib/docs/step3p5/perf-baseline.md`。本 skill 只讲"改完之后按什么顺序回归 + 更哪些文档"。
 >
 > **三条铁律**：① 路径**全走环境变量**，勿硬编码主机路径；② 精度**只认多步 decode**（多步已含首
@@ -65,7 +65,7 @@ description: >
 
 ## Step 1 · Liveness 冒烟（快，先过这关）
 
-确认 whole-net 跑通 + 首 token 对 + 不 hang。命令模板见 [`reference/canonical-test.md §3`](../../reference/canonical-test.md)，
+确认 whole-net 跑通 + 首 token 对 + 不 hang。命令模板见 [`reference/canonical-test.md §3`](../../../reference/canonical-test.md)，
 **把其中的主机路径按环境变量替换**（`$WS`、`$CKPT`、`--device "$DEVICES"`）。必须同时满足：
 
 ```text
@@ -167,8 +167,8 @@ unset PAT
 
 ## 相关
 
-- 设计索引：[`design/performance/README.md`](../../design/performance/README.md)
+- 设计索引：[`design/performance/README.md`](../../../design/performance/README.md)
 - 镜像构建：`$PYPTO_PROJECT/deployment/docker/`（`Dockerfile` 定义 `WS=/workspace` 等 baked env）
 - 强开发约束：`.claude/skills/pypto-dev-constraints/`
 - 整网 hang 排查：`.claude/skills/pypto-whole-net-hang-debug/`
-- 金标准：[`reference/canonical-test.md`](../../reference/canonical-test.md)
+- 金标准：[`reference/canonical-test.md`](../../../reference/canonical-test.md)

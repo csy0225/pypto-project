@@ -3,16 +3,18 @@
 > 每个子任务一张卡片：current-source问题实证 / producer-to-lifetime链路 / 五类差异归属 / capacity与layout / 如何生效 / 参考 / 改法 / 验证 / 落地边界。shape只用于容量和layout说明，不得单独用于架构判断。
 > HLD 见 [`01-system-design.md`](01-system-design.md)，状态见 [`task-tracking.md`](task-tracking.md)。
 >
-> **2026-08-03 current-source override（优先于下方历史正文）**：`P/` 当前必须读
-> `pypto-lib stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0`；动态 SPMD
-> codegen 修复为 `pypto stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。
+> **2026-08-05 current-source override（优先于下方历史正文）**：`P/` 当前必须读
+> `pypto-lib stepfun/develop@91c7f46ee949045e2fce807276412b48d8121763`；
+> 配套 PyPTO 为
+> `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。
 > 唯一 Main 是
 > `P/models/step3p5/decode_fwd.py:whole_decode_step3p5`。0724 unroll source、
 > rollback selector、自定义 Main module/name 参数和旧 opt compatibility
 > package/aliases 已删除。Attention/Vec 与 Wave5 TP all-reduce stability 已通过
 > immutable audit/smoke/Main+MTP compile、Main N=128×3、Main batch16、MTP
 > batch1/batch16×2、64K/batch16 ITL/DFX；N=128 三轮均 `123/128` 且 TP spread=0，
-> 当前为 0162 release-qualified。下方基于旧 unroll/generator 的内容
+> Wave5 仍是最后一个 0162 release-qualified 镜像；当前 R2 构建暂停、未验证。
+> 下方基于旧 unroll/generator 的内容
 > 只用于解释设计起点，不是可执行 base。
 >
 > 路径约定：`P/` = active `pypto-lib/`；`REF/` =

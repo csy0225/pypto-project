@@ -6,12 +6,11 @@
 
 | Phase | 主题 | 状态 |
 |-------|------|------|
-| [`27-n1-whole-net-fusion.md`](27-n1-whole-net-fusion.md) | N=1 整网融合（单 `@pl.program` 全 45 层 + tail） | ✅ standalone gate closed（`argmax=303==vLLM` golden 复现） |
-| [`28-n1-live-integration.md`](28-n1-live-integration.md) | N=1 整网 → vLLM live single-handoff 集成 | 🟡 live（live 8001 仍 stall） |
+| [`28-live-integration.md`](28-live-integration.md) | 单程序整网 → vLLM live single-handoff 集成 | 🟡 live front / paged-KV / MTP / HBM 待闭环 |
 
 ## 归档
 
-Phase 20 / 21 / 22（×3）/ 23 / 24 / 25 已完成并移入
+Phase 20 / 21 / 22（×3）/ 23 / 24 / 25 / 27 已完成并移入
 [`../../archive/completed-phases/`](../../archive/completed-phases/)。
 Phase 01-19 的压缩 summary 在
 [`../../archive/prototype-phase-01-19-summary.md`](../../archive/prototype-phase-01-19-summary.md)。

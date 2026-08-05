@@ -6,9 +6,10 @@ containerd/nerdctl)。**
 
 ---
 
-## 0. 当前镜像状态（2026-08-03）
+## 0. 当前镜像状态（2026-08-05）
 
-最新构建是 **Wave5 canonical release（0162 release-qualified）**：
+最后一个已发布且验证通过的镜像仍是
+**Wave5 canonical release（0162 release-qualified）**：
 
 ```text
 tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260803-attn-final-wave5
@@ -16,7 +17,7 @@ manifest: sha256:4acc77cdce05c40fff7fdbcedb5612fa49c2edc847a534c218389ddc08667b3
 config:   sha256:4f2539c17fe60e61062bd27d96082a707e581b81fe716208c1bca4139dfd7394
 ```
 
-pins：
+Wave5 镜像内 pins（不是当前源码 tip）：
 
 ```text
 pypto      defa97c526fec7e8f032dbbfcc39c820add02bf7
@@ -33,6 +34,19 @@ reduce-scatter + push all-gather 与三波 lifetime。镜像 audit/smoke/Main+MT
 compile、Main N=128×3、Main batch16、MTP batch1/batch16×2、64K/batch16 ITL/DFX
 全 PASS。Main N=128 三轮均 `123/128` 且 TP spread=0；64K p50 `49.796 ms`。
 部署/回归必须按 manifest 核对，不能只看 tag。
+
+当前源码已经前进到：
+
+```text
+pypto      stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5
+pypto-lib  stepfun/develop@91c7f46ee949045e2fce807276412b48d8121763
+```
+
+2026-08-05 R1 因 immutable prepared-swimlane 接口缺失而废弃；R2 已固定上述
+源码和 `BUILD_JOBS=1`，但按用户要求暂停 build，当前
+**UNPUBLISHED / UNVERIFIED**，没有 digest、最终 swimlane 或整网 ITL。
+详见
+[`../../benchmark/2026-08-05-attention-canonical-r1-r2.md`](../../benchmark/2026-08-05-attention-canonical-r1-r2.md)。
 
 本轮 immutable 验证只挂载 driver(ro)、checkpoint(ro)、output(rw)，无宿主源码；
 0162 只使用 cards `0–7`，未操作 cards `8–15` 及 PID `2045390–2045397`。

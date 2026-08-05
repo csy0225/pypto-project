@@ -1,7 +1,8 @@
 # 整网集成设计 Whole-Net Design
 
-单 `@pl.program` 全 45 层 step3p5 整网的设计文档。N=1 standalone 已关 gate（Phase 27）；
-N≥6 整网仍有随机 stall（见 `../../postmortems/07-whole-net-scheduler-timeout.md`）。
+单 `@pl.program` 全 45 层 step3p5 整网的设计文档。Phase 27 是已归档的历史
+single-program bring-up；当前产品入口和准出状态以根 `STATUS.md` 与
+`reference/canonical-test.md` 为准。
 
 ## 内容
 
@@ -19,5 +20,6 @@ N≥6 整网仍有随机 stall（见 `../../postmortems/07-whole-net-scheduler-t
 ## 相关
 
 - vLLM 集成侧：[`../vllm-pypto/`](../vllm-pypto/README.md)
-- N=1 验收金标准：[`../../reference/canonical-test.md`](../../reference/canonical-test.md)
-- Phase 27（N=1 fusion）：[`../../planning/phases/27-n1-whole-net-fusion.md`](../../planning/phases/27-n1-whole-net-fusion.md)
+- 当前验收金标准：[`../../reference/canonical-test.md`](../../reference/canonical-test.md)
+- Phase 27（历史单程序整网融合）：
+  [`../../archive/completed-phases/27-single-program-whole-net-fusion.md`](../../archive/completed-phases/27-single-program-whole-net-fusion.md)

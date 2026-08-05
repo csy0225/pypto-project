@@ -2,7 +2,7 @@
 name: pypto-runtime-install
 description: >
   从零在一台 Ascend 910B 硬件上装好 pypto 运行时环境的分步 runbook（参照 0162
-  2026-07-26 release）。当用户拿到新机器/新 pod、拉了 GitHub 仓库代码，问"接下来
+  当前版本矩阵）。当用户拿到新机器/新 pod、拉了 GitHub 仓库代码，问"接下来
   装环境的步骤是什么 / 怎么跑起来 / 怎么避免装错"时使用。覆盖：Phase 16 三剑合璧
   版本核验、5 仓库拉取与 pin、Python venv、pip install -e、simpler runtime 构建、
   ptoas-bin、三件套激活、smoke/L3/canonical 验证，以及每步的高频踩坑与规避。
@@ -12,14 +12,14 @@ description: >
 
 > 目标：**用户拿到一台硬件 → 拉仓库 → 按本文步骤把 pypto 运行时装到能跑
 > smoke + 多卡 allreduce + 单卡 ST**。每步都给"正确做法 + 高频踩坑"。
-> 参照 `gpu-a910x-0162` 上 2026-07-26 immutable release pins。
+> 默认参照 `gpu-a910x-0162` 上最后一个 release-qualified 的 Wave5 pins。
+> 2026-08-05 R2 是开发候选，build 已暂停且未验证，不能当 release 环境安装。
 >
 > **权威出处（出问题先查这几篇）**：
-> - 版本硬绑定：[`deployment/phase16-three-pillars.md`](../../deployment/phase16-three-pillars.md)
-> - 版本兼容矩阵：[`deployment/version-matrix.md`](../../deployment/version-matrix.md)
-> - 机器恢复/升级：[`deployment/machine-recovery.md`](../../deployment/machine-recovery.md)
-> - 唯一可复现环境 SSOT：[`develop/N1/N1-STABLE-ENV-0162-20260717.md`](../../develop/N1/N1-STABLE-ENV-0162-20260717.md)
-> - 多卡 IPC 报错复盘：[`postmortems/01-multirank-ipc-507899-507018.md`](../../postmortems/01-multirank-ipc-507899-507018.md)
+> - 版本硬绑定：[`deployment/phase16-three-pillars.md`](../../../deployment/phase16-three-pillars.md)
+> - 版本兼容矩阵：[`deployment/version-matrix.md`](../../../deployment/version-matrix.md)
+> - 机器恢复/升级：[`deployment/machine-recovery.md`](../../../deployment/machine-recovery.md)
+> - 多卡 IPC 报错复盘：[`postmortems/01-multirank-ipc-507899-507018.md`](../../../postmortems/01-multirank-ipc-507899-507018.md)
 
 ---
 
@@ -44,7 +44,7 @@ binary + 1 个 venv：
 `7.8.0.7.220` + CANN `9.0.0-beta.1`(**非 GA**) —— Phase 16 三剑合璧，缺一不可。
 
 > **两种装法**：
-> - **一键可复现镜像（推荐，无需手工装 5 仓）**：[`deployment/docker/`](../../deployment/docker/)
+> - **一键可复现镜像（推荐，无需手工装 5 仓）**：[`deployment/docker/`](../../../deployment/docker/)
 >   的 Dockerfile 已把 immutable 5 仓 pin + ptoas-bin v0.50 + 固定 commit 的 vLLM
 >   Track-B 补丁 bake 好
 >   （base = stepcast ascend 镜像，自带 CANN beta.1 + vLLM）。`bash deployment/docker/build.sh`
@@ -59,11 +59,10 @@ binary + 1 个 venv：
 > - 可跑的 **model / test 脚本在代码仓 `$WS/pypto-lib`**（`tests/step3p5/**`、`models/step3p5/**`），
 >   **不在 `pypto-project`**（后者是跟踪/设计/复盘 doc 仓，无可跑脚本）。跑任何
 >   `python -m tests...` / `python -m models...` 前 **先 `cd $WS/pypto-lib`**。
-> - **当前 release 必须按 commit pin checkout**，不能把各仓当前 branch tip
->   当作同一测试对象。pypto-lib release branch 是 `stepfun/develop`，
->   其余组件沿用 0724 pins。
+> - **release 必须按 commit pin checkout**，不能把各仓 branch tip 或本地同名
+>   分支当作同一测试对象。当前源码 tip 与最后 release-qualified 镜像不是一回事。
 > - whole-net 入口名 / CI 逐 step token 期望，以当前 pinned pypto-lib 的
->   `tests/step3p5/ci/WHOLE_NETWORK_CI.md` + 本仓 [`reference/canonical-test.md`](../../reference/canonical-test.md)
+>   `tests/step3p5/ci/WHOLE_NETWORK_CI.md` + 本仓 [`reference/canonical-test.md`](../../../reference/canonical-test.md)
 >   为准（canonical 金标准 = `argmax=303` / token `6127`）。
 
 ---
@@ -77,7 +76,7 @@ binary + 1 个 venv：
 
 agent 执行要点：
 - 按 Step 顺序，每步先跑"检查"命令，达标才继续；不达标按该步「踩坑」修。
-- Phase A 里 driver/firmware/CANN 的 **sudo / 一次性操作**若不达标：**先停下告诉用户**（可能要 root、走 [`machine-recovery.md`](../../deployment/machine-recovery.md)），**不要擅自装驱动**。
+- Phase A 里 driver/firmware/CANN 的 **sudo / 一次性操作**若不达标：**先停下告诉用户**（可能要 root、走 [`machine-recovery.md`](../../../deployment/machine-recovery.md)），**不要擅自装驱动**。
 - 最终**反馈模板**（回给用户）：
   ```
   环境: 可用 ✅ / 不可用 ❌
@@ -97,7 +96,7 @@ npu-smi info                       # 看 8/16 张卡 health=OK、HBM=65536MB
 ```
 
 - ✅ 达标 → 去 Step 2。
-- ❌ 版本低 / 卡不全 → **先按 [`deployment/machine-recovery.md`](../../deployment/machine-recovery.md) 升级 driver+firmware（成对升，重启）**，别继续往下装。
+- ❌ 版本低 / 卡不全 → **先按 [`deployment/machine-recovery.md`](../../../deployment/machine-recovery.md) 升级 driver+firmware（成对升，重启）**，别继续往下装。
 
 > **踩坑**：
 > - driver+firmware **必须成对**，`support_shmem_map_exbus` cap 由两者共同 gate；只升一个 → 跨卡 IPC `aclrtIpcMemImportByKey 507899`。
@@ -114,7 +113,7 @@ test -f /usr/local/Ascend/cann/set_env.sh && echo OK
 > **踩坑（最容易错的一条）**：
 > - **绝对不能用 CANN GA**。GA 的 TDT 不把 `Ascend-aicpu_extend_syskernels.tar.gz`
 >   推到 AICPU 端 → simpler init `507018 (BootstrapDispatcher)`。必须 beta.1
->   /non-GA。详见 [`phase16-three-pillars.md`](../../deployment/phase16-three-pillars.md) "CANN GA failure mode"。
+>   /non-GA。详见 [`phase16-three-pillars.md`](../../../deployment/phase16-three-pillars.md) "CANN GA failure mode"。
 > - 集群自动化可能把 CANN 悄悄 revert 成 GA →**装前先备份** beta.1，坏了从备份恢复 symlink。
 > - 不要"顺手升级 CANN"，除非 Huawei 出了新 beta/GA 且验证过。
 
@@ -128,12 +127,11 @@ export WS=/data/chensiyu/hw_project/pypto/workspace   # 换成你的持久盘路
 mkdir -p "$WS" && cd "$WS"
 
 git clone https://github.com/csy0225/pypto.git
-git -C pypto checkout ca21ab5fcfd8203165928428302d273c377db5c6
-git -C pypto submodule update --init runtime
-git -C pypto/runtime checkout 216e7632267ae815c484cdeba7991c87fabf3086
+git -C pypto checkout defa97c526fec7e8f032dbbfcc39c820add02bf7
+git -C pypto submodule update --init --recursive runtime
 
 git clone https://github.com/csy0225/pypto-lib.git
-git -C pypto-lib checkout 53eb7212c29c9bd015ee060cd9924a13ea781ae0
+git -C pypto-lib checkout 7099476b7c4f13112b159e237e7a64344803caf0
 
 git clone https://github.com/csy0225/pto-isa.git
 git -C pto-isa checkout ecb6c303f797749f811a494742c3c08156aacabb
@@ -142,17 +140,19 @@ git clone https://github.com/csy0225/PTOAS.git
 git -C PTOAS checkout fc8c6caee561914b4fb991dfc8427bb63194269e
 ```
 
-**当前 release pin**（2026-07-26；与 0724 镜像一致，仅 pypto-lib 前进到
-B2 release）：
+**默认安装 profile：Wave5 release-qualified（2026-08-03）**：
 
 | 仓库 | 参考 commit |
 |------|-------------|
-| pypto | `ca21ab5f` |
-| pypto-lib | `53eb7212`（`stepfun/develop`；唯一 Main=`models.step3p5.decode_fwd:whole_decode_step3p5`） |
-| simpler (pypto/runtime submodule) | `216e7632` |
+| pypto | `defa97c5` |
+| pypto-lib | `7099476b`（唯一 Main=`models.step3p5.decode_fwd:whole_decode_step3p5`） |
+| simpler (pypto/runtime submodule) | `e2efebcb` |
 | pto-isa | `ecb6c303` |
 | PTOAS (src) | `fc8c6cae` |
 | ptoas-bin | `v0.50`（binary，见 Step 5） |
+
+当前开发源码为 pypto `8e92b468` / pypto-lib `91c7f46e`，只用于 R2
+开发验证；在 R2 获得 digest 和 immutable gate 前，不替换上表 release profile。
 
 > **踩坑**：
 > - **只拉 pypto-lib 不构成同一测试对象**——pypto 的 `StackedDeviceTensor`/`import_ipc_all`、simpler 的 forked-child ACL IPC import、runtime build 产物缺一都跑不通。5 仓要一起对齐。
@@ -193,18 +193,8 @@ python -c "import simpler" 2>/dev/null || pip install --no-build-isolation -e "$
 > - **不要传 `CMAKE_BUILD_TYPE=Release`**——会撞 `tensor.h buffer_elems -Werror=unused-variable`，用 cmake dev default 即可。
 > - rebase / 换 pin 后第一次 build 先清缓存：`rm -rf "$WS"/pypto/build/cp311-* "$WS"/pypto/build/cache "$WS"/pypto/build/lib`。
 > - Python 必须 3.11（venv 名 `.venv311`）。
-> - **当前 simpler pin：用 `216e7632`**。以下 `36957c6b`/`c7fdc574`
->   内容是 2026-07-23 历史故障说明，不是 current pin。
->   ⚠ **别用 `c7fdc574`**（曾经的 develop tip，已废弃/回退）：它 = `36957c6b` + 9 个 WIP
->   commit，其中 Phase-24 `import_ipc` 半成品的 python bindings **编不过**——① `orchestrator.cpp:41`
->   调 `get_worker(...)` 但 header 只有 `get_worker_by_id`（同文件 35/47/53 都是 `get_worker_by_id`，
->   41 是笔误）；② `control_import_ipc` 在 cpp 有 3 处定义（WorkerEndpoint/LocalMailboxEndpoint/
->   WorkerThread）但 header 无声明。**2026-07-23 已把 develop 回退到 36957c6b**（原 c7fdc574 存
->   simpler tag `backup/stepfun-develop-c7fdc574-20260723`，可恢复），pypto develop gitlink 同步到
->   36957c6b（commit `8af501fc`）。36957c6b 含全部 N1/Phase-16 patch（`SIMPLER_COMM_NO_HCCL`
->   co-tenancy + `ENABLE_PEER_ACCESS` 跨卡 IPC + `--no-as-needed`），且 canonical 20/20 跑过。
->   **别退 origin/main `7ccd2a5a`**：它缺 no-HCCL/peer-access → 回退 507899/co-tenancy。
->   c7fdc574 的 import_ipc facade 已被 pure-Python `CTRL_IMPORT_IPC` 取代，canonical 不需要它。
+> - simpler 必须由 pypto 的 submodule gitlink 固定；Wave5 应解析为 `e2efebcb`。
+>   不要从旧 N1 stable-env、旧 branch tip 或手工平级 clone 选择 runtime pin。
 
 ## Step 5 · 构建 simpler runtime (a2a3) + ptoas-bin 就位
 
@@ -265,15 +255,15 @@ python examples/workers/l3/allreduce_distributed/main.py -p a2a3 -d 0-1
 
 - 报 `507899` → driver/firmware 没到位（回 Step 1）。
 - 报 `507018 (BootstrapDispatcher)` → CANN 是 GA（回 Step 2）。
-- 决策树见 [`postmortems/01-multirank-ipc-507899-507018.md`](../../postmortems/01-multirank-ipc-507899-507018.md)。
+- 决策树见 [`postmortems/01-multirank-ipc-507899-507018.md`](../../../postmortems/01-multirank-ipc-507899-507018.md)。
 
 **② 权威 CI smoke（需 checkpoint + cards 8–15）—— 通过即"环境可用"**
 
-在 **pinned pypto-lib `53eb7212`** 上跑 CI runner（preflight ckpt/PTO-ISA/cards →
+在 **pinned pypto-lib `7099476b`** 上跑 CI runner（preflight ckpt/PTO-ISA/cards →
 whole-net 8-step → MTP → 清理 exporter；详见 `pypto-lib/tests/step3p5/ci/WHOLE_NETWORK_CI.md`）：
 
 ```bash
-cd "$WS/pypto-lib"          # 确认 HEAD=53eb7212
+cd "$WS/pypto-lib"          # 确认 HEAD=7099476b
 python -m tests.step3p5.ci.run_whole_network_ci \
   --ckpt /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp \
   --devices 8,9,10,11,12,13,14,15 \
@@ -282,7 +272,7 @@ python -m tests.step3p5.ci.run_whole_network_ci \
 ```
 
 **期望（通过判据）**：
-- canonical 金标准：`argmax=303` / token `6127`（见 [`reference/canonical-test.md`](../../reference/canonical-test.md)）。
+- canonical 金标准：`argmax=303` / token `6127`（见 [`reference/canonical-test.md`](../../../reference/canonical-test.md)）。
 - Main 必须且只能是
   `models.step3p5.decode_fwd:whole_decode_step3p5`。
 - retired unroll source、rollback selector、自定义 Main module/name 参数、
@@ -303,11 +293,11 @@ python -m tests.step3p5.ci.run_whole_network_ci \
 > canonical-test.md）→ **环境可用 ✅**，按 §用法 反馈模板回报。缺 checkpoint / 只有部分卡 →
 > 至少跑 ① 并注明"CI smoke 待 ckpt"。
 
-## Step 8 · （深入）N=1 canonical 复现细节
+## Step 8 · （深入）canonical 复现细节
 
 Phase B ② 的更细粒度复现（fresh exporter pool + worker、清理铁律、环境变量、
-逐 rank 检查）见 [`reference/canonical-test.md`](../../reference/canonical-test.md) 与
-[`N1-STABLE-ENV`](../../develop/N1/N1-STABLE-ENV-0162-20260717.md) §6。
+逐 rank 检查）只以 [`reference/canonical-test.md`](../../../reference/canonical-test.md)
+和当前 pinned 源码内 CI 文档为准。`develop/N1/` 仅为历史案例，不提供当前 pin。
 
 > **踩坑**：exporter 仍存活时**严禁** `rm -rf "$OUT"`（会把 IPC pool 生命周期问题误诊成 kernel stall）；先 `touch "$OUT/STOP"` + `wait` 各 exporter PID 再清 marker。
 
@@ -327,7 +317,6 @@ Phase B ② 的更细粒度复现（fresh exporter pool + worker、清理铁律�
 | `CMake configuration not found` | venv 缺 cmake | `pip install cmake==3.31.6`（Step 5） |
 | ccec `'cstdint' file not found` | 缺 libstdc++-12-dev | `apt-get install libstdc++-12-dev`（Step 5） |
 | a2a3 HOST 编译 `PLATFORM_ONBOARD_SCHEDULER_TIMEOUT_MS` 未定义 | 旧 fork 状态 a2a3 `platform_config.h` 缺该宏（a5 有），common `device_runner_base.cpp` 引用 | 拉当前 pin（已修=10000）；或在 a2a3 header 补 `constexpr int32_t PLATFORM_ONBOARD_SCHEDULER_TIMEOUT_MS = 10000;`。仅 compile-time，不影响旧 `.so` 运行（Step 5） |
-| simpler `c7fdc574` python bindings 编不过 | 2026-07-23 历史半成品 | current release 直接用 `216e7632`（Step 4） |
 | ptoas parse error | pypto/PTOAS/ptoas-bin 混搭 | 恢复 current pins + ptoas-bin v0.50（Step 5） |
 | 跑通一次后结果变/污染 | monkey-patch 后 stale `.pyc` | `find models/step3p5 -name "*.py" -exec touch {} +`（Step 6） |
 | git push/pull 130s 超时 | 内网 HTTP/2 | `git -c http.version=HTTP/1.1 ...`（Step 3） |

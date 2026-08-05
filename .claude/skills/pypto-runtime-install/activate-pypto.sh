@@ -34,13 +34,12 @@ if [ -f "$WS/.venv311/bin/activate" ]; then
   source "$WS/.venv311/bin/activate"
 fi
 
-# 3) pto-isa + canonical 运行时参数（对齐 N1-STABLE-ENV §6.1）
+# 3) pto-isa + current whole-net runtime capacity defaults
 export PTO_ISA_ROOT="$WS/pto-isa"
 export PYTHONPATH="$WS/pypto/python:$WS/pypto-lib:${PYTHONPATH:-}"
 export PTO2_RING_HEAP=4294967296
 export PTO2_RING_TASK_WINDOW=131072
 export PTO2_RING_DEP_POOL=131072
-export P_FAITHFUL_MOE_LAYERS=42
 
 echo "[activate-pypto] WS=$WS"
 echo "  python           = $(command -v python || echo MISSING)"

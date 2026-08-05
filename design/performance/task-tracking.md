@@ -7,13 +7,13 @@
 
 ---
 
-> **⚠ 2026-08-03 current-source override**：attention/Vec 产品实现权威 pin 为
-> `pypto-lib stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0` 与
-> `pypto stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。Wave5
+> **⚠ 2026-08-05 current-source override**：attention/Vec 产品实现权威 pin 为
+> `pypto-lib stepfun/develop@91c7f46ee949045e2fce807276412b48d8121763` 与
+> `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。Wave5
 > 以 self-target TPUT 发布 source partial，并保持既有三波 lifetime；immutable
 > audit/smoke/Main+MTP compile、Main N=128×3、Main batch16、MTP batch1/batch16×2、
-> 64K/batch16 ITL/DFX 均通过，当前为 **0162 release-qualified**。其它机器/架构
-> 未由本轮独立证明。下方历史 override 不覆盖 I1/I2。
+> 64K/batch16 ITL/DFX 均通过，仍是最后一个 **0162 release-qualified** 镜像。
+> R1 已废弃；R2 build 暂停且未发布/验证。下方历史 override 不覆盖 I1/I2。
 
 > **历史 2026-07-28 release override**：active base =
 > **`stepfun/develop @ 563fe62a`**。唯一 release Main 为
@@ -94,7 +94,7 @@ producer → 数学变换/quant/route-map → transport/window
 ### Track I — Attention / Vec 收尾与 canonical 发布
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| I1 | workload-derived attention、Full 层次归约、out-proj cast、dense Vec 收尾 | P0 | ✅ | codex | A1, C4, H1 | `pypto-lib stepfun/develop@7099476b`（attention/Vec 内容自 `76d96bdb` 起保持）：logical task 按 active workload 推导；Full SV 合并 segment recurrence，只保留 reduce/finalize；Full/SWA out-proj cast 默认融合；dense RMS direct BF16 reread、dense down-proj cast fusion 保留；AR+residual、residual+RMS stats、RMS+projection、gate/up+SiLU 等无稳定收益方案不合入。active-batch=16/异构 context、source/compile/device/DFX 已完成。最终 task/tile 设计已合并到 [`04-attention-optimization.md`](04-attention-optimization.md) §13 | 2026-08-03 |
+| I1 | workload-derived attention、Full 层次归约、out-proj cast、dense Vec 收尾 | P0 | ✅ | codex | A1, C4, H1 | `pypto-lib stepfun/develop@7099476b`（attention/Vec 内容自 `76d96bdb` 起保持）：logical task 按 active workload 推导；Full SV 合并 segment recurrence，只保留 reduce/finalize；Full/SWA out-proj cast 默认融合；dense RMS direct BF16 reread、dense down-proj cast fusion 保留；AR+residual、residual+RMS stats、RMS+projection、gate/up+SiLU 等无稳定收益方案不合入。active-batch=16/异构 context、source/compile/device/DFX 已完成。当前 task/tile 设计见 [`04-attention-optimization.md`](04-attention-optimization.md) §13 | 2026-08-03 |
 | I2 | TP all-reduce immutable release stability gate | P0 | ✅ | codex | I1 | Wave3/4 先闭合 final-read lifetime 并对齐 harness AST；Wave5 `7099476b` 再以 self-target synchronous TPUT 发布 source partial，并同步 Main/MTP/harness/返回值 lineage。manifest `sha256:4acc77cd…`：audit/smoke/Main+MTP compile、Main N=128 预定义三轮均 `123/128` 且 spread=0、Main batch16、MTP batch1/batch16×2、64K/batch16 ITL/DFX 全 PASS；64K p50 `49.796 ms`。machine scope=`0162 release-qualified`。见 [`../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md`](../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md) | 2026-08-03 |
 
 ---
