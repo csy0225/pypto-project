@@ -23,13 +23,13 @@
 
 ```text
 pypto-lib stepfun/develop
-  7099476b7c4f13112b159e237e7a64344803caf0
+  91c7f46ee949045e2fce807276412b48d8121763
 
 pypto stepfun/develop
   defa97c526fec7e8f032dbbfcc39c820add02bf7
 
 machine/profile
-  0162 / Ascend A2A3
+  0162 / Ascend A2A3 / PYPTO_STEP3P5_ATTN_TASK_PROFILE=a2a3
 ```
 
 当前可以下的结论：
@@ -80,10 +80,23 @@ A2A3 资源按：
 | head dim | 128 | 128 |
 | KV storage block | 128 tokens | 128 tokens |
 | 最大有效 KV blocks | context 决定；64K 为 512 | window 512，即最多约 4 |
-| storage batch capacity | 16 | 16 |
+| storage batch capacity | 默认 16；编译时可配置，已验证 32 | 默认 16；编译时可配置，已验证 32 |
 
-`BATCH=16` 是 capacity；实际 logical tasks 由 active rows 和每行真实
-`seq_len` 推导。
+默认 `BATCH=16` 是 capacity；实际 logical tasks 由 active rows 和每行真实
+`seq_len` 推导。batch32 验证使用 compile-time capacity=32，不是在 capacity=16
+的二进制上越界运行。
+
+profile 选择是显式的：
+
+```text
+portable (默认): QK/softmax/online=22/12/16，reduce fan-in=8，uniform O(1)=0
+a2a3:            QK/softmax/online=22/12/22，reduce fan-in=8，四项 uniform O(1)=1
+```
+
+`--platform a2a3` 不会隐式选择 attention profile。做 A2A3 release A/B 时必须设置
+`PYPTO_STEP3P5_ATTN_TASK_PROFILE=a2a3`，并清除 QK、softmax、online、reduce
+fan-in 及四个 uniform-O(1) 单项 override；否则单项环境变量优先级更高，会把
+“profile A/B”污染成混合配置。
 
 ## 3. Full 与 SWA 的最终任务图
 
@@ -132,15 +145,15 @@ scratch、dispatch 和依赖，没有收益证据。
 
 ### 4.1 QK / block-softmax
 
-64K、batch1 时：
+64K、batch1 的校准历史：
 
 ```text
-grain 16/12/16:
+QK/softmax/online grain 16/12/16:
   QK/SV 约 32 个 AIC logical tasks
   QK/SV task body 接近 10 us
   进入 2 waves
 
-grain 24/12/24:
+QK/softmax/online grain 24/12/24:
   QK/SV 约 22 个 AIC logical tasks
   task body 约 15–17 us
   保持 1 wave
@@ -148,7 +161,7 @@ grain 24/12/24:
 
 `24/12/24` 的 device makespan 曾优于 `16/12/16`，证明“单 task 越接近
 5–10 us 越好”不成立。随后三轮稳定性中，`22/12/22` 与 `24/12/24`
-差异已接近噪声；当前 QK 最终选择 22，softmax 选择 12。
+差异已接近噪声；显式 A2A3 profile 最终选择 `22/12/22`。
 
 ### 4.2 SV + segment recurrence
 
@@ -161,7 +174,7 @@ SV segment work
 + normalize/store
 ```
 
-online grain 扫描中：
+早期 online grain 扫描中：
 
 | grain | task p50 | tasks/waves | 主要结果 |
 |---:|---:|---:|---|
@@ -169,19 +182,33 @@ online grain 扫描中：
 | 14 | 约 17 us | 37 / 1 | 与 grain16 接近 |
 | 16 | 约 19 us | 32 / 1（当时 Pass-A/AIV 口径） | 五轮 reference median 最优约 0.7 us |
 
-最终选择 grain=16、reduce fan-in=8。这个结论来自整条依赖链，不可用旧 QK/SV
-单独 sweep 的“单 wave 优先”机械覆盖。
+该结果促成 portable fallback 使用 online grain=16。完成 TaskId chain、task-major
+uniform O(1) mapping 和 fixed-total-context 多 batch 复测后，0162 的显式 A2A3
+profile 改为 online grain=22、reduce fan-in=8。这个结论来自整条依赖链，不可用
+旧 QK/SV standalone sweep 或单轮最低值机械覆盖。
 
 ### 4.3 batch 与异构 context
 
 异构两行 `65536 / 8192` 的 task 数等于逐 row `ceil` 求和，而不是按最大
-context 给两行铺满。uniform batch16/64K 的 online grain 16/24 差异约
-0.17%，不足以增加 batch-aware 产品分支。
+context 给两行铺满。最终 A2A3 profile 在 **fixed-total-context=64K** 下的结果为：
+
+| active batch | per-row context | 两层 p50 |
+|---:|---:|---:|
+| 1 | 65536 | 3.7839 ms |
+| 4 | 16384 | 3.7675 ms |
+| 8 | 8192 | 3.7599 ms |
+| 12 | 5504 / 5376 | 3.8710 ms |
+| 16 | 4096 | 3.9480 ms |
+| 32 | 2048 | 4.8368 ms |
+
+batch16 另做 200 measured iterations：p50 `3.9192 ms`、p99 `7.4785 ms`、
+max `11.7102 ms`，每轮输出 `unique_count=1`、exact、finite、TP spread=0。
+少量 p99/max 长尾属于系统/collective 到达抖动，不能据此引入 batch-aware 数学分支。
 
 经验：
 
 - capacity 不等于 workload；
-- batch16 必须验证，但不能为单轮微小差异硬编码数学路径；
+- batch16 必须验证；capacity 扩到 32 后还要重新检查 task-count、tile 和内存边界；
 - 服务 workload 改变时，应补多轮 profile，再生成独立 architecture/workload profile。
 
 ## 5. online softmax 的融合边界
@@ -323,9 +350,34 @@ focused harness -> 参数筛选与机制证明
 canonical whole-net -> 数值、跨 rank、端到端和发布判断
 ```
 
+最新 bs16/64K DFX（rank2 是本轮 LOW-WAIT reference）：
+
+```text
+/mnt/persist/chensiyu/workspace/attn-opt/out/
+attn_a2a3_profile_64k_bs16_dfx_8_15_50x_20260805/
+build_output/TwoLayerAttnPerf_20260805_072659/
+dfx_outputs/rank2/d0/l2_swimlane_records.json
+```
+
+rank2 makespan 为 `1055.5 us`，四次 TP all-reduce 的 critical-path span 合计
+约 `185.24 us`。其它 rank 的数百毫秒 all-reduce 主要是 peer-arrival spin wait
+被计入 kernel duration，不能解释为通信算术时间。
+
 ## 9. 验证与收尾证据
 
-最终 0162 结果：
+最终源码验证：
+
+```text
+py_compile / git diff --check / English-only = PASS
+pytest = 218 passed, 3 skipped
+```
+
+compile-only 不能只看编译返回码。harness 会读取真实生成的
+`orchestration/chip_orch.cpp`，验证 Full/SWA 每个 stage 的动态 launch bound、
+launch/scalar SSA 一致性、TaskId publication 和完整依赖链；最终 checker 返回空错误
+列表。这样可阻止“Python 图有依赖、lowering 后依赖丢失”的假 PASS。
+
+此前 canonical whole-net release gate：
 
 ```text
 Main N=128:
@@ -370,6 +422,7 @@ ITL:
 | 去 bias 的 fusion 计时 | 仍约 +5.2% | 回退主要是 16-row softmax，非 bias 本身 |
 | runtime active tensor 首维 | dynamic-shape 风险高 | “只算 active”和“只分配 active”是两件事 |
 | SWA 复制 Full 层次归约 | 无收益依据 | 短 window 优先 task 密度 |
+| Full/SWA RoPE packed staging | bs12 独立 40 轮 `unique_count=40` 且明显错误 | 早期速度不能覆盖逐迭代稳定性；最终图隔离 A/B 前保持 NO-GO |
 | AR + residual，grain 512 | 明显变慢 | 通信 chunk 不能代替 Vec grain |
 | RMSNorm + projection | focused 小幅变快，破坏 split | 局部收益不足以扩大 mixed-kernel 风险 |
 | gate/up + SiLU fusion | task 少但 batch16/wall 无稳定收益 | kernel count 不是目标函数 |

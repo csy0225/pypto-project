@@ -1085,7 +1085,7 @@ A2A3 上已经出现过 task body 接近 10 us 但因多一 wave 而慢于约 15
 | `HEAD_DIM` | 128 | 128 |
 | KV cache block | 128 tokens | 128 tokens |
 | 最大有效 KV blocks | context 决定；64K 为 512 | window 512 tokens，即最多 4 |
-| storage batch capacity | 16 | 16 |
+| storage batch capacity | 默认 16；编译时可配置，已验证 32 | 默认 16；编译时可配置，已验证 32 |
 
 必须区分：
 
@@ -1156,9 +1156,12 @@ QK 使用 AIC、softmax 使用 AIV，wave 必须按两类资源分别计算。
 因此历史 Pass-A 已消失。A2A3 profile：
 
 ```text
-SV + segment recurrence blocks/task = 16
+SV + segment recurrence blocks/task = 22
 reduce fan-in                        = 8
 ```
+
+这里的 22 是显式 `a2a3` profile；默认 `portable` fallback 仍为 16。两者都按
+实际 workload 计算 task 数，不表示固定使用 22 或 16 个物理核心。
 
 两个后继 kernel 仍需保留：
 
@@ -1209,25 +1212,27 @@ FP32 matmul accumulator
 
 独立开关仍保留，便于新架构发现 mixed-kernel 不合适时回退。
 
-### 13.6 active batch=16 与异构 context
+### 13.6 active batch=1–32 与异构 context
 
-`BATCH=16` 只决定 tensor/ABI capacity。logical tasks 由 `active_tokens` 和
-每行 `seq_lens` 推导；inactive rows 不参与 attention/KV metadata 工作。
+默认 `BATCH=16` 只决定 tensor/ABI capacity。logical tasks 由 `active_tokens` 和
+每行 `seq_lens` 推导；inactive rows 不参与 attention/KV metadata 工作。batch32
+使用 compile-time capacity=32，不在 capacity=16 的二进制上越界运行。
 
-已验证：
+除 active-batch=16、ctx=1 和异构 16-row `ceil` 求和外，最终显式 A2A3 profile
+还完成了 **fixed-total-context=64K** 验证：
 
-- active-batch=16、ctx=1：16 行 finite/nonzero，TP spread=0；
-- 异构 16-row context：task 数按各行 `ceil` 求和；
-- uniform batch16/64K online grain：
-
-| grain | logical tasks | 两层 wall p50 |
+| active batch | per-row context | 两层 p50 |
 |---:|---:|---:|
-| 16 | 512 | 5.5590 ms |
-| 24 | 352 | 5.5494 ms |
-| 32 | 256 | 5.6126 ms |
+| 1 | 65536 | 3.7839 ms |
+| 4 | 16384 | 3.7675 ms |
+| 8 | 8192 | 3.7599 ms |
+| 12 | 5504 / 5376 | 3.8710 ms |
+| 16 | 4096 | 3.9480 ms |
+| 32 | 2048 | 4.8368 ms |
 
-16 与 24 相差约 0.17%，不足以新增 batch-aware 产品分支。若未来 batch16 是主服务
-点，应补多轮 median，再形成独立 architecture/workload profile。
+所有点 exact、finite、TP spread=0，逐迭代输出 `unique_count=1`。batch16 的 200
+轮稳定性结果为 p50 `3.9192 ms`、p99 `7.4785 ms`、max `11.7102 ms`。少量长尾
+是系统/collective 到达抖动信号，不足以新增 batch-aware 数学路径。
 
 ### 13.7 all-reduce 与 Vec 邻接优化边界
 
@@ -1267,19 +1272,35 @@ transfer grain=512 是通信 profile，不应机械继承给 residual Vec epilog
 dispatch 覆盖。真正的 persistent worker/device-side work queue 需要修改 runtime ABI；
 当前证据不支持为了它替换现有模式。
 
-### 13.9 A2A3 当前 profile 与跨架构校准
+### 13.9 portable / A2A3 profile 与跨架构校准
 
 ```text
-Full QK blocks/task                    = 22
-Full block-softmax blocks/task         = 12
-Full SV+segment recurrence blocks/task = 16
-Full online reduce fan-in              = 8
-Full/SWA out-proj matmul N              = 64
-Full/SWA out-proj tiles/task            = 3
-Full/SWA vector N                       = 128
-Full/SWA out-proj cast fusion           = 1
-TP all-reduce transfer chunk            = 512
+                              portable(default)  a2a3(explicit)
+Full QK blocks/task                    22              22
+Full block-softmax blocks/task         12              12
+Full SV+segment recurrence blocks/task 16              22
+Full online reduce fan-in               8               8
+four uniform O(1) mappings              0               1
 ```
+
+两者当前共享的 out-proj/collective 默认值：
+
+```text
+Full/SWA out-proj matmul N             = 64
+Full/SWA out-proj tiles/task           = 3
+Full/SWA vector N                      = 128
+Full/SWA out-proj cast fusion          = 1
+TP all-reduce transfer chunk           = 512
+```
+
+`--platform a2a3` 不隐式选择 attention profile。0162 A2A3 运行必须显式设置：
+
+```text
+PYPTO_STEP3P5_ATTN_TASK_PROFILE=a2a3
+```
+
+八个 QK/softmax/online/reduce 单项 override 的优先级高于 profile；做可信 profile
+A/B 前必须清除它们，避免得到未命名的混合配置。
 
 新架构必须重新 sweep。建议目标：
 
@@ -1296,3 +1317,37 @@ subject to:
   finite + TP consistency
   canonical precision gate
 ```
+
+### 13.10 lowering、DFX 与负面候选门禁
+
+权威源码：
+
+```text
+pypto-lib stepfun/develop
+91c7f46ee949045e2fce807276412b48d8121763
+
+pypto stepfun/develop
+defa97c526fec7e8f032dbbfcc39c820add02bf7
+```
+
+最终源码验证为 `218 passed, 3 skipped`。compile-only 还会读取真实生成的
+`orchestration/chip_orch.cpp`，检查 Full/SWA 各 stage 的动态 launch bound、
+launch/scalar SSA 一致性、TaskId publication 和完整 dependency chain；checker
+必须返回空列表，不能只用“编译成功”替代 lowering 合同。
+
+最新 bs16/64K DFX 的 LOW-WAIT reference：
+
+```text
+/mnt/persist/chensiyu/workspace/attn-opt/out/
+attn_a2a3_profile_64k_bs16_dfx_8_15_50x_20260805/
+build_output/TwoLayerAttnPerf_20260805_072659/
+dfx_outputs/rank2/d0/l2_swimlane_records.json
+```
+
+rank2 makespan 为 `1055.5 us`，四次 TP all-reduce 的 critical-path span 合计约
+`185.24 us`。其它 rank 的数百毫秒 collective 主要是 peer-arrival spin wait 被
+计入 kernel duration。
+
+Full/SWA RoPE packed staging 保持 **NO-GO**：bs12 独立 40 轮出现
+`unique_count=40` 和明显数值错误，且早期速度数据未包含最终 TaskId chain。
+在最终图上完成隔离 A/B 和逐迭代稳定性证明前，不得恢复该候选。
