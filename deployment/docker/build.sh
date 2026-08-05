@@ -54,6 +54,7 @@ DOCKER_BUILDKIT=1 docker build \
   --build-arg PTOAS_COMMIT="$PTOAS_COMMIT" \
   --build-arg SIMPLER_COMMIT="$SIMPLER_COMMIT" \
   --build-arg PTOAS_BIN_VER="$PTOAS_BIN_VER" \
+  --build-arg ATTN_TASK_PROFILE="${ATTN_TASK_PROFILE:-a2a3}" \
   --build-arg VLLM_PATCH_BRANCH="$VLLM_PATCH_BRANCH" \
   --build-arg VLLM_PATCH_COMMIT="$VLLM_PATCH_COMMIT" \
   "${PROXY_ARGS[@]}" \

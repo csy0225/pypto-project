@@ -17,6 +17,7 @@ ARG PTO_ISA_COMMIT=ecb6c303f797749f811a494742c3c08156aacabb
 ARG PTOAS_COMMIT=fc8c6caee561914b4fb991dfc8427bb63194269e
 ARG SIMPLER_COMMIT=216e7632267ae815c484cdeba7991c87fabf3086
 ARG PTOAS_BIN_VER=v0.50
+ARG ATTN_TASK_PROFILE=a2a3
 ARG VLLM_PATCH_BRANCH=csy/pypto-tail-mtp-integration
 ARG VLLM_PATCH_COMMIT=1b3e538c35999e62b6d24e0651b3a85b7d16c826
 ARG GH_PROXY=http://proxy.i.shaipower.com:3128
@@ -111,6 +112,18 @@ ENV PATH=${WS}/ptoas-bin/bin:/usr/local/python3.11.14/bin:/usr/local/Ascend/nnal
     CMAKE_PREFIX_PATH=/usr/local/Ascend/cann-9.0.0-beta.1/toolkit/tools/tikicpulib/lib/cmake:/usr/local/Ascend/cann-9.0.0-beta.1/lib64/cmake
 ENV PYPTO_PROG_BUILD_DIR=/tmp/pypto_build_output
 ENV PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072
+ENV PYPTO_STEP3P5_ATTN_TASK_PROFILE=${ATTN_TASK_PROFILE}
+RUN for name in \
+      PYPTO_STEP3P5_FULL_ATTN_QK_BLOCKS_PER_TASK \
+      PYPTO_STEP3P5_FULL_ATTN_SOFTMAX_BLOCKS_PER_TASK \
+      PYPTO_STEP3P5_FULL_ATTN_ONLINE_SOFTMAX_BLOCKS_PER_TASK \
+      PYPTO_STEP3P5_FULL_ATTN_ONLINE_SOFTMAX_PARTIALS_PER_REDUCE_TASK \
+      PYPTO_STEP3P5_FULL_ATTN_QK_UNIFORM_O1 \
+      PYPTO_STEP3P5_FULL_ATTN_SOFTMAX_UNIFORM_O1 \
+      PYPTO_STEP3P5_FULL_ATTN_ONLINE_SOFTMAX_UNIFORM_O1 \
+      PYPTO_STEP3P5_FULL_ATTN_ONLINE_SOFTMAX_REDUCE_UNIFORM_O1; do \
+      test -z "${!name+x}"; \
+    done
 RUN ln -sfn bin/ptoas ${WS}/ptoas-bin/ptoas && \
     sed -i 's#/usr/local/Ascend/cann-8.5.1#/usr/local/Ascend/cann-9.0.0-beta.1#g' /etc/profile 2>/dev/null || true; \
     printf '%s\n' \
