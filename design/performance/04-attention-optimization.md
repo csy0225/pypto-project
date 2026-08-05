@@ -1351,3 +1351,73 @@ rank2 makespan 为 `1055.5 us`，四次 TP all-reduce 的 critical-path span 合
 Full/SWA RoPE packed staging 保持 **NO-GO**：bs12 独立 40 轮出现
 `unique_count=40` 和明显数值错误，且早期速度数据未包含最终 TaskId chain。
 在最终图上完成隔离 A/B 和逐迭代稳定性证明前，不得恢复该候选。
+
+### 13.11 Attention bubble 收尾判断与后续优化方向
+
+#### 当前判断
+
+针对当前 Step3p5、0162/A2A3 profile 和已验证的 batch/context 范围：
+
+> **Full/SWA attention 核心计算中主要的、可避免的调度 bubble 已经闭环；
+> 但不能把该结论扩写为“swimlane 上不应再有任何空白”或“所有架构均已最优”。**
+
+最新 bs16/fixed-total-context=64K 的 rank2 LOW-WAIT DFX 中，Full 主链为：
+
+| stage | stage span |
+|---|---:|
+| `full_qk_matmul` | `24.16 us` |
+| `full_softmax` | `15.50 us` |
+| `full_sv_matmul`（含 segment-local recurrence） | `37.28 us` |
+| `full_online_softmax_reduce` | `4.02 us` |
+| `full_online_softmax_finalize` | `3.72 us` |
+| `full_out_proj_matmul`（cast fused） | `24.84 us` |
+
+旧图中的 standalone `full_online_softmax` 百微秒级 span、Pass-A/B/C 和独立
+decode out-proj cast 已不再存在。observed critical path 的 runtime stall 为
+`233 us`，全部分类为 `data-wait`；没有 `core-wait` 或 `front-gap`。这说明此前由
+错误 task mapping、stage chain 不完整或 dispatch packing 引起的主要调度空洞已消除。
+
+#### 仍可见但不应直接视为缺陷的空白
+
+1. **bs16 的不满尾 wave**：每行 32 个 KV blocks，在 grain=22 时 QK/SV 合计
+   32 个 logical tasks，映射到 24 AIC 必然形成第二个不满 wave。rank2 的 QK/SV
+   AIC packing efficiency 分别约 `54.7%` / `61.0%`。更粗 grain 的单-wave
+   候选已经 sweep，未得到稳定 wall-time 收益；因此当前不增加 batch-specific
+   数学或调度分支。
+2. **reduce/finalize 的低占用**：两个 stage 均只有 16 个 per-row tasks，无法铺满
+   48 AIV，但 span 仅约 `4.02 us` / `3.72 us`。它们承担跨 segment partial 的
+   write-disjoint reduction 和最终 normalize/store，是必要 RAW/liveness 边界。
+3. **stage 间 data-wait**：QK、softmax、SV、reduce、finalize 的显式 TaskId chain
+   会在图上形成依赖等待。机械删除依赖会恢复并发写 race 或读取未完成 scratch；
+   这种等待不能仅凭 swimlane 空白判定为可优化 bubble。
+
+因此评审 bubble 时必须同时检查 task count、AIC/AIV wave、packing、stall kind 和
+端到端 wall time；不能用“核心未全满”或“kernel 之间有空白”作为单独合入依据。
+
+#### 后续优化优先级
+
+1. **P0：immutable 镜像复核，而不是继续改 attention 数学。**
+   最终 canonical 镜像必须以 digest-only 方式复采同一 workload 的 ITL/DFX，
+   确认 source-mounted focused 结果没有被镜像环境、profile 或 override 改写。
+2. **P1：RoPE + KV-cache staging。**
+   当前两层 observed critical path 中，Full/SWA `rope_kv_cache` compute 分别约
+   `128 us` / `120 us`，已比单个 QK/softmax/online stage 更突出。它是 attention
+   邻接路径中最值得继续研究的方向；但现有 packed-staging 候选有 bs12
+   `40/40` 轮输出不唯一和明显数值错误，必须先闭环 ownership、lifetime、逐迭代
+   determinism 和 canonical precision，不能直接恢复。
+3. **P2：按真实服务分布重新校准 architecture/workload profile。**
+   只有当某个 batch/context 分布占主导，且交替多轮 A/B 显示收益稳定超过噪声和
+   维护成本时，才考虑新增 profile；不要为了消除 bs16 的可视尾 wave 写入模型语义。
+4. **P3：跨 stage producer-consumer pipeline。**
+   理论上可让部分 QK 完成后提前启动对应 softmax/SV，但必须解决不同 grain 的
+   dependency mapping、scratch lifetime 和 write ownership。历史 QK+softmax+PV
+   融合受 cube boxed 16-row softmax 限制，曾回退约 `5%–7%`；后续方案不能简单
+   恢复该融合形态。
+5. **P4：attention 邻接 collective/overlap。**
+   最新两层 LOW-WAIT DFX 中四次 TP all-reduce critical-path span 合计约
+   `185 us`，已高于任一单独 attention core stage。若目标是整网 ITL，应优先评估
+   通信到达和安全 overlap；但不得破坏现有 source-publication、三波 lifetime
+   close、rank ownership 和固定 reduction order。
+
+在新的可信 A/B 证据出现前，当前 canonical 建议为：**attention 核心图收尾，
+RoPE/KV-cache 作为独立后续任务，整网继续优先看 collective 与可证明的 overlap。**
