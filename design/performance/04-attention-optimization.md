@@ -1421,3 +1421,35 @@ decode out-proj cast 已不再存在。observed critical path 的 runtime stall 
 
 在新的可信 A/B 证据出现前，当前 canonical 建议为：**attention 核心图收尾，
 RoPE/KV-cache 作为独立后续任务，整网继续优先看 collective 与可证明的 overlap。**
+
+### 13.12 2026-08-05 immutable R1 失败与 R2 暂停状态
+
+上述源码/源码挂载结果不等于最终镜像准出。2026-08-05 的第一次 canonical
+镜像（R1）在 0162 上完成了 bs1/context=65536 前两层 attention 的 50 次 timing
+和数值检查，但 prepared swimlane 采集需要的
+`l2_swimlane_reuse_dep_gen` 未包含在镜像内 PyPTO pin 中：
+
+```text
+TypeError: RunConfig.__init__() got an unexpected keyword argument
+'l2_swimlane_reuse_dep_gen'
+```
+
+因此 R1 必须标记为 **REVOKED**；它没有生成最终可交付的
+`l2_swimlane_records.json`，也不能用源码挂载或 runtime overlay 绕过。R1 的
+两层 timing（p50 `3.7181 ms`）只作为失败前诊断数据，不是最终整网 ITL。
+
+正式 PyPTO 修复为：
+
+```text
+release/attn-final-dfx-20260805
+8e92b46808f9f7c09b6431ad4691503f09c12ee5
+```
+
+R2 已固定该 pin、attention 源码 `91c7f46e`、`a2a3` profile 和
+`BUILD_JOBS=1`。按用户要求，R2 构建已暂停且无残留编译进程；当前没有 R2
+manifest/config digest、swimlane 或整网 ITL，不能借用 R1/Wave5 数据填充。
+
+恢复后的 P0 顺序固定为：串行完成 R2 构建与镜像审计 → push 并固定 digest →
+0162 digest-only、无源码挂载地采 bs1/64K 两层 DFX → 在同一 digest 上采整网
+50 次 ITL。完整失败证据和准出门禁见
+[`../../benchmark/2026-08-05-attention-canonical-r1-r2.md`](../../benchmark/2026-08-05-attention-canonical-r1-r2.md)。

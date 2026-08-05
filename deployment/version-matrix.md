@@ -5,6 +5,24 @@
 
 ## 已验证组合
 
+### 2026-08-05 attention canonical R1/R2 状态（尚未发布）
+
+> **R1 REVOKED；R2 BUILD PAUSED / UNPUBLISHED / UNVERIFIED。**
+> 这一节是失败/待验证状态登记，不是新的“已验证组合”。
+
+| 项目 | R1 | R2 |
+|---|---|---|
+| pypto | `defa97c526fec7e8f032dbbfcc39c820add02bf7` | `8e92b46808f9f7c09b6431ad4691503f09c12ee5` |
+| pypto-lib | `91c7f46ee949045e2fce807276412b48d8121763` | 同 R1 |
+| profile | `a2a3` | `a2a3` |
+| image | manifest `sha256:fb613c2d5a74592f248c6d923e3ada6582edbe40349ada530017e622ca735b23` | 尚未生成 |
+| 状态 | 两层 timing/数值通过；immutable DFX 因缺 `l2_swimlane_reuse_dep_gen` 失败，无最终 swimlane | 正式接口修复已 pin；`BUILD_JOBS=1` 构建按用户要求暂停 |
+
+R1 不得用于最终交付，也不得通过源码挂载绕过。R2 恢复后必须完成 digest-only
+镜像审计、bs1/64K 前两层 DFX 和同 digest 整网 50 次 ITL，才能新增正式组合。
+详见
+[`../benchmark/2026-08-05-attention-canonical-r1-r2.md`](../benchmark/2026-08-05-attention-canonical-r1-r2.md)。
+
 ### 最新 Wave5 canonical release（2026-08-03）
 
 > **发布状态：RELEASE-QUALIFIED ON 0162。** 其它机器/架构未由本轮独立证明。
