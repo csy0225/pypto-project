@@ -62,6 +62,33 @@ sudo -n "$NC" run --rm --net host \
   "$IMG" bash -lc 'bash /workspace/pypto-image-audit.sh' \
   > "$OUT/image_audit.log" 2>&1
 grep -Fx "IMAGE_IMMUTABLE_AUDIT=PASS" "$OUT/image_audit.log" >/dev/null
+python3 - "$OUT/image_audit.log" "$OUT/image_audit_invocation.json" "$IMG" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+log_path = Path(sys.argv[1])
+output_path = Path(sys.argv[2])
+image_ref = sys.argv[3]
+digest = hashlib.sha256(log_path.read_bytes()).hexdigest()
+output_path.write_text(
+    json.dumps(
+        {
+            "audit_log_sha256": digest,
+            "image_ref": image_ref,
+            "passed": True,
+            "phase": "pre-source-mount",
+            "schema": "step3p5.moe.pre-mount-image-audit.v1",
+            "source_mount": False,
+        },
+        indent=2,
+        sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+PY
 
 for index in 0 1 2 3 4 5 6 7; do
   if fuser "/dev/davinci${index}" >/dev/null 2>&1; then

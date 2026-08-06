@@ -217,6 +217,108 @@ def _runtime_artifact_hashes(
     return marker_hashes, key_hashes
 
 
+def _write_dfx_raw_evidence(
+    run: Path,
+    *,
+    batch: int,
+    image_ref: str,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Create the minimal complete raw tree used by publication fixtures."""
+    _write_text(
+        run / "image_audit.log",
+        "\n".join(
+            (
+                "[audit] pin pypto      "
+                "8e92b46808f9f7c09b6431ad4691503f09c12ee5 clean",
+                "[audit] pin pypto-lib  "
+                "c9af5790d5fe450e14fd43c88099b87539089d17 clean",
+                "[audit] git credential scrub: PASS",
+                "[audit] attention profile: a2a3",
+                "[audit] prepared swimlane reuse capability: "
+                "{'available': True, 'constructed': True, 'required': '1'}",
+                "[audit] build jobs: 2 (resource only)",
+                "IMAGE_IMMUTABLE_AUDIT=PASS",
+            )
+        )
+        + "\n",
+    )
+    audit_sha = _sha256(run / "image_audit.log")
+    _write_json(
+        run / "image_audit_invocation.json",
+        {
+            "audit_log_sha256": audit_sha,
+            "image_ref": image_ref,
+            "passed": True,
+            "phase": "pre-source-mount",
+            "schema": "step3p5.moe.pre-mount-image-audit.v1",
+            "source_mount": False,
+        },
+    )
+    _write_json(
+        run / "capability_report.json",
+        {
+            "attention_profile": "a2a3",
+            "image_commits": {
+                "pypto": "8e92b46808f9f7c09b6431ad4691503f09c12ee5",
+                "pypto_lib": (
+                    "c9af5790d5fe450e14fd43c88099b87539089d17"
+                ),
+            },
+            "image_ref": image_ref,
+            "pypto_git_head": (
+                "8e92b46808f9f7c09b6431ad4691503f09c12ee5"
+            ),
+            "reuse_capability": {
+                "environment_present": True,
+                "environment_value": "1",
+                "fields_available": True,
+                "required": True,
+                "required_fields": [
+                    "enable_dep_gen",
+                    "enable_l2_swimlane",
+                    "l2_swimlane_reuse_dep_gen",
+                ],
+                "reuse_config_constructed": True,
+            },
+            "schema": "step3p5.moe-image-capability.v1",
+        },
+    )
+    raw = run / "runtime" / f"bs{batch}" / "dfx_raw"
+    dep_hashes: dict[str, str] = {}
+    swim_hashes: dict[str, str] = {}
+    for rank in range(8):
+        dispatch = raw / f"rank{rank}" / "d0"
+        _write_json(dispatch / "deps.json", {"rank": rank, "tasks": []})
+        _write_json(
+            dispatch / "l2_swimlane_records.json",
+            {"metadata": {"num_cores": 72, "core_types": []}, "tasks": []},
+        )
+        _write_json(dispatch / "name_map.json", {"callable_id_to_name": {}})
+        _write_text(dispatch / "critical_path_report.md", "# fixture\n")
+        _write_json(
+            dispatch / "merged_swimlane_fixture.json",
+            {
+                "traceEvents": [
+                    {
+                        "dur": 1.0,
+                        "name": f"rank{rank}-task",
+                        "ph": "X",
+                        "ts": 0.0,
+                    }
+                ]
+            },
+        )
+        dep_relative = f"dfx_outputs/rank{rank}/d0/deps.json"
+        swim_relative = (
+            f"dfx_outputs/rank{rank}/d0/l2_swimlane_records.json"
+        )
+        dep_hashes[dep_relative] = _sha256(dispatch / "deps.json")
+        swim_hashes[swim_relative] = _sha256(
+            dispatch / "l2_swimlane_records.json"
+        )
+    return dep_hashes, swim_hashes
+
+
 def _write_normal_run(
     campaign: Path,
     *,
@@ -399,6 +501,11 @@ def _campaign(
             )
             kv_hashes = _write_kv_maps(runtime, batch, nonce)
             marker_hashes, key_hashes = _runtime_artifact_hashes(runtime)
+            dep_hashes, swim_hashes = _write_dfx_raw_evidence(
+                run,
+                batch=batch,
+                image_ref=image_ref,
+            )
             validation: dict = {
                 "schema": "step3p5.five-layer-moe-case-validation.v1",
                 "passed": True,
@@ -460,6 +567,11 @@ def _campaign(
                     },
                     "workload": workload,
                     "timing": {"iters": 1, "warmup": 2},
+                    "dfx": {
+                        "dep_gen_artifacts": dep_hashes,
+                        "dep_gen_preserved_after_swim": True,
+                        "swimlane_artifacts": swim_hashes,
+                    },
                     "source": {
                         "source_manifest_sha256": (
                             source_manifest_sha256
@@ -583,19 +695,25 @@ def _campaign(
                         "expert_release_enforced": enforced,
                     }
                 )
+            dfx_report = {
+                "profile": profile,
+                "source_policy": source_policy,
+                "rank_contract": {
+                    "expected": [f"rank{rank}/d0" for rank in range(8)],
+                    "actual": [f"rank{rank}/d0" for rank in range(8)],
+                    "exact": True,
+                },
+                "structural_contracts": {"pass": True},
+                "slice_contract": {
+                    "expected_equals_observed": True,
+                },
+                "routed_slice_profiles": {"pass": True},
+                "expert_kernel_release": expert_release,
+                "admission": admission,
+            }
             _write_json(
                 batch_dir / "dfx_analysis" / "moe_dfx_report.json",
-                {
-                    "profile": profile,
-                    "source_policy": source_policy,
-                    "structural_contracts": {"pass": True},
-                    "slice_contract": {
-                        "expected_equals_observed": True,
-                    },
-                    "routed_slice_profiles": {"pass": True},
-                    "expert_kernel_release": expert_release,
-                    "admission": admission,
-                },
+                dfx_report,
             )
             _write_text(
                 batch_dir
@@ -603,6 +721,24 @@ def _campaign(
                 / "moe_critical_path_report.md",
                 f"# {run_name}\n",
             )
+            pre_mount = analyzer._validate_pre_mount_image_audit(
+                run,
+                image_ref=image_ref,
+            )
+            capability = analyzer._validate_capability_report(
+                run,
+                image_ref=image_ref,
+                mode="dfx",
+            )
+            validation["pre_mount_image_audit"] = pre_mount
+            validation["capability_report"] = capability
+            validation["dfx_raw_evidence"] = (
+                analyzer._validate_dfx_raw_evidence(
+                    batch_dir,
+                    dfx_artifacts=case_report["dfx"],
+                )
+            )
+            _write_json(run / "artifact_validation.json", validation)
     if matched_policy is not None:
         _write_text(
             campaign / "dfx_campaign_spec.txt",
@@ -796,11 +932,13 @@ def _matched_policy(root: Path) -> dict:
         normal_performance,
         {
             "schema": "step3p5.five-layer-moe-64k-performance.v2",
+            "passed": True,
             "measurement_integrity_passed": True,
             "correctness_report_passed": True,
             "hidden_hash_exact_across_selected_rounds": True,
             "image_ref": image_ref,
             "rounds": [1, 2, 3],
+            "performance_non_regression_all_batches": True,
             "batches": {
                 str(batch): {
                     "context_len_per_sequence": 65536,
@@ -809,6 +947,7 @@ def _matched_policy(root: Path) -> dict:
                         str(round_id): {}
                         for round_id in (1, 2, 3)
                     },
+                    "candidate_p50_non_regression": True,
                     **{
                         source_kind: {
                             "rounds": [

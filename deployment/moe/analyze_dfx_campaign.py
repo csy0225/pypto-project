@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import re
+import statistics
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,9 @@ from validate_five_layer_route_case import (
 from validate_five_layer_case import (
     DFX_POLICIES,
     _seal_authority_record,
+    _validate_capability_report,
+    _validate_dfx_raw_evidence,
+    _validate_pre_mount_image_audit,
     _validate_map as validate_kv_map,
     _validate_runtime_markers as validate_runtime_markers,
     load_matched_dfx_policy,
@@ -216,6 +220,31 @@ def _record(
     host_nonce = _read_text(run / "run_nonce.txt")
     if not _hex_sha(host_nonce):
         raise AssertionError(f"{run.name}: invalid run nonce")
+    pre_mount_audit = _validate_pre_mount_image_audit(
+        run,
+        image_ref=host_image_ref,
+    )
+    capability = _validate_capability_report(
+        run,
+        image_ref=host_image_ref,
+        mode="dfx",
+    )
+    raw_evidence = _validate_dfx_raw_evidence(
+        batch_dir,
+        dfx_artifacts=case.get("dfx"),
+    )
+    if validation.get("pre_mount_image_audit") != pre_mount_audit:
+        raise AssertionError(
+            f"{run.name}: pre-mount audit validation hash mismatch"
+        )
+    if validation.get("capability_report") != capability:
+        raise AssertionError(
+            f"{run.name}: capability validation hash mismatch"
+        )
+    if validation.get("dfx_raw_evidence") != raw_evidence:
+        raise AssertionError(
+            f"{run.name}: raw DFX validation hash mismatch"
+        )
     if case.get("source_kind") != source:
         raise AssertionError(f"{run.name}: source kind mismatch")
     if case.get("mode") != "dfx":
@@ -460,6 +489,9 @@ def _record(
         f"runtime/bs{batch}/{analysis_name}/moe_critical_path_report.md": (
             critical_path
         ),
+        "image_audit.log": run / "image_audit.log",
+        "image_audit_invocation.json": run / "image_audit_invocation.json",
+        "capability_report.json": run / "capability_report.json",
         **{
             f"runtime/bs{batch}/{name}": batch_dir / name
             for name in hidden_hashes
@@ -475,6 +507,21 @@ def _record(
             for relative in runtime_hashes
         },
     }
+    for rank, rank_evidence in raw_evidence["sha256_by_rank"].items():
+        raw_prefix = f"runtime/bs{batch}/dfx_raw/rank{rank}/d0"
+        for name in (
+            "deps.json",
+            "name_map.json",
+            "l2_swimlane_records.json",
+            "critical_path_report.md",
+        ):
+            evidence_paths[f"{raw_prefix}/{name}"] = (
+                batch_dir / "dfx_raw" / f"rank{rank}" / "d0" / name
+            )
+        merged_name = rank_evidence["merged_swimlane"]["name"]
+        evidence_paths[f"{raw_prefix}/{merged_name}"] = (
+            batch_dir / "dfx_raw" / f"rank{rank}" / "d0" / merged_name
+        )
     result = {
         "run": run.name,
         "analysis_dir": analysis_name,
@@ -488,6 +535,9 @@ def _record(
         "workload": case.get("workload"),
         "timing": case.get("timing"),
         "run_nonce": host_nonce,
+        "pre_mount_image_audit": pre_mount_audit,
+        "capability_report": capability,
+        "dfx_raw_evidence": raw_evidence,
         "runtime_marker_sha256": marker_hashes,
         "kv_key_sha256_by_rank": key_hashes,
         "evidence_sha256": {
@@ -744,10 +794,15 @@ def _validate_matched_authority(
     if (
         normal_performance.get("schema")
         != "step3p5.five-layer-moe-64k-performance.v2"
+        or normal_performance.get("passed") is not True
         or normal_performance.get("measurement_integrity_passed") is not True
         or normal_performance.get("correctness_report_passed") is not True
         or normal_performance.get(
             "hidden_hash_exact_across_selected_rounds"
+        )
+        is not True
+        or normal_performance.get(
+            "performance_non_regression_all_batches"
         )
         is not True
         or normal_performance.get("image_ref") != authority["image_ref"]
@@ -766,10 +821,14 @@ def _validate_matched_authority(
             or item.get("active_total_context_tokens")
             != batch * CONTEXT_LEN
             or set(item.get("paired_rounds", {})) != {"1", "2", "3"}
+            or item.get("candidate_p50_non_regression") is not True
         ):
             raise AssertionError(
                 f"authority normal performance BS{batch} mismatch"
             )
+        actual_by_source: dict[str, list[dict[str, Any]]] = {
+            source_kind: [] for source_kind in SOURCES
+        }
         for source_kind in SOURCES:
             rounds = item.get(source_kind, {}).get("rounds")
             if not isinstance(rounds, list) or len(rounds) != 3:
@@ -831,12 +890,25 @@ def _validate_matched_authority(
                         f"authority normal evidence drift: "
                         f"{source_kind} r{round_id} BS{batch}"
                     )
+                actual_by_source[source_kind].append(actual)
                 nonce = actual["run_nonce"]
                 if nonce in normal_run_nonces:
                     raise AssertionError(
                         f"duplicate authority normal run nonce: {nonce}"
                     )
                 normal_run_nonces.add(nonce)
+        baseline_p50 = statistics.median(
+            record["p50_ms"] for record in actual_by_source["baseline"]
+        )
+        candidate_p50 = statistics.median(
+            record["p50_ms"] for record in actual_by_source["candidate"]
+        )
+        if candidate_p50 > baseline_p50:
+            raise AssertionError(
+                f"authority normal performance regressed at BS{batch}: "
+                f"baseline median p50={baseline_p50}, "
+                f"candidate median p50={candidate_p50}"
+            )
     if len(normal_run_nonces) != len(BATCHES) * len(SOURCES) * 3:
         raise AssertionError(
             "authority normal run nonces are not unique across 36 runs"
