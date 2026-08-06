@@ -1359,6 +1359,9 @@ PYPTO_STEP3P5_ATTN_TASK_PROFILE=a2a3
 ATTN_TASK_PROFILE=a2a3 deployment/docker/build.sh ...
 ```
 
+当前验证不再设置 `MAX_JOBS=1` 或其它等价的单线程限制，镜像构建使用脚本默认并发。
+这只是构建资源策略的更新，不改变 attention profile 或运行时 task 粒度。
+
 Dockerfile 会把该 build arg 固化为镜像内
 `PYPTO_STEP3P5_ATTN_TASK_PROFILE=a2a3`，smoke/audit 再核对运行时值。默认 build
 继续使用 `portable`，避免把 0162 参数错误外推到其它架构。
