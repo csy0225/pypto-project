@@ -10,16 +10,20 @@
 > 旧依赖关系保留为
 > 历史分析，不能覆盖 [`task-tracking.md`](task-tracking.md) 的当前状态。
 >
-> **2026-08-04 L0–L4 focused MoE 专项完成**：调优对象严格裁剪为
+> **2026-08-06 L0–L4 focused MoE 当前状态**：调优对象严格裁剪为
 > `L0 Full+dense → L1/L2 SWA+dense → L3 SWA+MoE → L4 Full+MoE`，且 L4
 > 消费真实 L3 输出。最终将 routed fused gate/up 拆为独立 gate、up 和 activation，
 > 使用 `row=16, K=512, N=64`，并将 down 设为 `N=256`；L43/L44 specialization
-> 保持原配置。0162 cards `8–15` 上，同口径 `5 warmup + 30 measured` p50
-> `12.1777→10.7677 ms`（**-11.58%**），两套输入的完整 `hidden_l3/hidden_l4`
-> 均 BF16 bit-exact、finite、TP spread=0。gate/up AIC p50 从约 `144 µs`
-> 降到 `12.7–12.9 µs`。证据在
-> `/mnt/persist/chensiyu/workspace/moe-opt/l0-l4/final`。该结论不是 whole-net、
-> 64K 或 L43/L44 发布结论；详见 [`05-moe-optimization.md`](05-moe-optimization.md)。
+> 保持原配置。产品实现已合入
+> `pypto-lib stepfun/develop@7928a2751930b04c866788a396a7337b62c6d32f`。
+> 0162 cards `8–15` 已完成 BS=`1,2,4,7,8,16`、每 sequence 独立 64K 的三轮
+> counterbalanced normal campaign；六档 `hidden_l3/hidden_l4` 均 BF16 bit-exact、
+> finite、TP spread=0，candidate p50 reduction 分别为
+> `0.04/6.629/12.113/3.652/9.229/11.135%`。formal matched-source DFX、
+> route-aware publication gate 和最终 all-rank swimlane 尚待完成；证据根目录为
+> `/mnt/persist/chensiyu/workspace/moe-opt/tmp/moe-formal-act-n64-20260806-v1`。
+> 该结论不是 45 层 whole-net 或 L43/L44 发布结论；详见
+> [`05-moe-optimization.md`](05-moe-optimization.md)。
 
 > **2026-07-27 当前目标快照**：已完成并保留完成态的优化为 **A1、B1、B2**。
 > historical fixed-slot pull C2仅作为回归基线；目标通信架构已改为直接迁移

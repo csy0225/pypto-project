@@ -6,7 +6,40 @@ containerd/nerdctl)。**
 
 ---
 
-## 0. 当前镜像状态（2026-08-03）
+## 0. 当前镜像状态（2026-08-06）
+
+MoE formal campaign 当前使用 **DFX validation substrate**：
+
+```text
+tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260805-latest-dfx-8e92b468
+manifest: sha256:b43e704ae878283575b77178501371bdb47848c4db97b2db6dbc3d7007a4995d
+spec:     builds/stepfun-develop-20260805-latest-dfx-8e92b468.env
+```
+
+pins / capabilities：
+
+```text
+pypto      8e92b46808f9f7c09b6431ad4691503f09c12ee5
+pypto-lib  56b3d477953ab1e2df87213aef3a536c64051dcc
+pto-isa    ecb6c303f797749f811a494742c3c08156aacabb
+PTOAS      fc8c6caee561914b4fb991dfc8427bb63194269e
+simpler    e2efebcbd190302609c0775d2984f409f5f42c76
+attention  a2a3
+l2 swimlane prepared dep-gen reuse  required
+BUILD_JOBS 2
+```
+
+该镜像修复了上一版 `defa97c5`/portable/缺
+`l2_swimlane_reuse_dep_gen` 的 substrate 错误。`BUILD_JOBS=2` 已实际构建成功；
+它只控制构建资源，不是 correctness/DFX gate，不再强制写成 `1`。
+`/workspace/pypto-image-audit.sh` 和 `/workspace/pypto-smoke.sh` 会同时检查 immutable
+pin、attention profile 和 prepared swimlane reuse capability。MoE candidate 产品源码
+通过冻结 source tree 挂载进行 matched A/B；因此镜像内 pypto-lib pin 仍是 control
+base `56b3d477`，最终产品实现另已合入
+`pypto-lib stepfun/develop@7928a2751930b04c866788a396a7337b62c6d32f`。
+
+该对象是 L0-L4 MoE formal validation substrate，不替代下方 Wave5 45 层 canonical
+release 结论。
 
 最新构建是 **Wave5 canonical release（0162 release-qualified）**：
 
@@ -113,9 +146,9 @@ Wave3（`d58b6be7`、`124/128`、spread=0）只用于演进对账。当前判定
 
 ## 2. 构建(devbox；通用流程，示例以当前 release 为准)
 
-> 下面的构建流程适用于所有 immutable spec。旧的 2026-07-29 baseline 仍保留在
-> 历史 spec 中；若目标是复现当前 release，应使用
-> `builds/stepfun-develop-20260803-attn-final-wave5.env`。
+> 下面的构建流程适用于所有 immutable spec。若目标是复现当前 MoE DFX substrate，
+> 使用 `builds/stepfun-develop-20260805-latest-dfx-8e92b468.env`；若目标是复现
+> 2026-08-03 Wave5 whole-net release，使用对应 Wave5 spec。
 
 > ### ⚠ 两条硬性流程要求（均为踩过的坑，见 [`postmortems/14`](../../postmortems/14-image-dirty-worktree-unreproducible-pins.md)）
 >
@@ -147,9 +180,9 @@ Wave3（`d58b6be7`、`124/128`、spread=0）只用于演进对账。当前判定
 cd deployment/docker
 # 每次构建的 pins+tag 在一个 spec 文件里(builds/<tag>.env),配方共用单一 Dockerfile。
 GH=/data/chensiyu/secrets/github.env GL=/data/chensiyu/secrets/gitlab.env \
-bash build.sh builds/stepfun-develop-20260803-attn-final-wave5.env
+bash build.sh builds/stepfun-develop-20260805-latest-dfx-8e92b468.env
 # ⚠ 先做 §2(a) 的本地核对，PASS 之后才 push
-docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260803-attn-final-wave5
+docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260805-latest-dfx-8e92b468
 ```
 
 - `build.sh <spec>` 读 spec 里的 pins,以 `--build-arg` 传进 Dockerfile,`-t` 用 `IMAGE_TAG`。
@@ -161,8 +194,8 @@ docker push hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260803-attn
   2. 从官方入口 `deploy.i.shaipower.com/httpproxy` 取代理并以 `--build-arg` 传入
      (github clone/release 经 `proxy.i.shaipower.com:3128`;内网 pip 镜像/gitlab/hub 直连不走代理);
   3. `ptoas-bin` 从 0162 验证过的二进制打进 build context(fork 无 release asset)。
-- 编译限并行 `CMAKE_BUILD_PARALLEL_LEVEL=2 / MAX_JOBS=2`(devbox dockerd 在 memcg 下, 17GB/5 核,
-  全并行编 pypto 会 OOM 打挂 dockerd)。
+- `BUILD_JOBS` 同时设置 `CMAKE_BUILD_PARALLEL_LEVEL` / `MAX_JOBS`。当前 DFX 镜像以
+  `BUILD_JOBS=2` 成功构建；必要时可按 devbox 资源降为 1，但该值不参与设备准出。
 
 ---
 

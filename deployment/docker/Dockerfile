@@ -19,12 +19,17 @@ ARG SIMPLER_COMMIT=216e7632267ae815c484cdeba7991c87fabf3086
 ARG PTOAS_BIN_VER=v0.50
 ARG VLLM_PATCH_BRANCH=csy/pypto-tail-mtp-integration
 ARG VLLM_PATCH_COMMIT=1b3e538c35999e62b6d24e0651b3a85b7d16c826
+ARG ATTN_TASK_PROFILE=portable
+ARG BUILD_JOBS=2
+ARG REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN=0
 ARG GH_PROXY=http://proxy.i.shaipower.com:3128
 ARG NO_PROXY_HOSTS=basemind.com,shaipower.com,shaipower,127.0.0.1,localhost,.svc
 
 ENV WS=/workspace
 ENV PYTHON=/usr/local/python3.11.14/bin/python3
 ENV PIP="/usr/local/python3.11.14/bin/python3 -m pip"
+ENV PYPTO_STEP3P5_ATTN_TASK_PROFILE=${ATTN_TASK_PROFILE}
+ENV PYPTO_REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN=${REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN}
 
 # Keep only the CANN release used by the 0724 image.
 RUN rm -rf /usr/local/Ascend/cann-8.5.1 && \
@@ -54,7 +59,10 @@ RUN --mount=type=secret,id=gh_token \
     git -C ${WS}/pypto-lib remote set-url origin "https://github.com/csy0225/pypto-lib.git" && \
     git -C ${WS}/pto-isa remote set-url origin "https://github.com/csy0225/pto-isa.git" && \
     git -C ${WS}/PTOAS remote set-url origin "https://github.com/csy0225/PTOAS.git" && \
+    test "$(git -C ${WS}/pypto rev-parse HEAD)" = "${PYPTO_COMMIT}" && \
     test "$(git -C ${WS}/pypto-lib rev-parse HEAD)" = "${PYPTO_LIB_COMMIT}" && \
+    test "$(git -C ${WS}/pto-isa rev-parse HEAD)" = "${PTO_ISA_COMMIT}" && \
+    test "$(git -C ${WS}/PTOAS rev-parse HEAD)" = "${PTOAS_COMMIT}" && \
     test "$(git -C ${WS}/pypto/runtime rev-parse HEAD)" = "${SIMPLER_COMMIT}"
 
 # ptoas-bin is the v0.50 payload verified with the 0724 environment.
@@ -68,8 +76,8 @@ ENV PTO_ISA_ROOT=${WS}/pto-isa
 ENV PTOAS_ROOT=${WS}/ptoas-bin
 ENV LD_LIBRARY_PATH=${WS}/ptoas-bin/lib:${LD_LIBRARY_PATH}
 ENV PATH=${WS}/ptoas-bin/bin:${PATH}
-ENV CMAKE_BUILD_PARALLEL_LEVEL=2
-ENV MAX_JOBS=2
+ENV CMAKE_BUILD_PARALLEL_LEVEL=${BUILD_JOBS}
+ENV MAX_JOBS=${BUILD_JOBS}
 RUN source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
     export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
     git config --global http.version HTTP/1.1 && \
@@ -111,6 +119,22 @@ ENV PATH=${WS}/ptoas-bin/bin:/usr/local/python3.11.14/bin:/usr/local/Ascend/nnal
     CMAKE_PREFIX_PATH=/usr/local/Ascend/cann-9.0.0-beta.1/toolkit/tools/tikicpulib/lib/cmake:/usr/local/Ascend/cann-9.0.0-beta.1/lib64/cmake
 ENV PYPTO_PROG_BUILD_DIR=/tmp/pypto_build_output
 ENV PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072
+ENV PYPTO_IMAGE_PYPTO_COMMIT=${PYPTO_COMMIT} \
+    PYPTO_IMAGE_PYPTO_LIB_COMMIT=${PYPTO_LIB_COMMIT} \
+    PYPTO_IMAGE_PTO_ISA_COMMIT=${PTO_ISA_COMMIT} \
+    PYPTO_IMAGE_PTOAS_COMMIT=${PTOAS_COMMIT} \
+    PYPTO_IMAGE_SIMPLER_COMMIT=${SIMPLER_COMMIT} \
+    PYPTO_IMAGE_VLLM_PATCH_COMMIT=${VLLM_PATCH_COMMIT} \
+    PYPTO_IMAGE_PTOAS_BIN_VER=${PTOAS_BIN_VER} \
+    PYPTO_IMAGE_BUILD_JOBS=${BUILD_JOBS}
+LABEL com.stepfun.pypto.pypto-commit=${PYPTO_COMMIT} \
+      com.stepfun.pypto.pypto-lib-commit=${PYPTO_LIB_COMMIT} \
+      com.stepfun.pypto.pto-isa-commit=${PTO_ISA_COMMIT} \
+      com.stepfun.pypto.ptoas-commit=${PTOAS_COMMIT} \
+      com.stepfun.pypto.simpler-commit=${SIMPLER_COMMIT} \
+      com.stepfun.pypto.vllm-patch-commit=${VLLM_PATCH_COMMIT} \
+      com.stepfun.pypto.attention-profile=${ATTN_TASK_PROFILE} \
+      com.stepfun.pypto.build-jobs=${BUILD_JOBS}
 RUN ln -sfn bin/ptoas ${WS}/ptoas-bin/ptoas && \
     sed -i 's#/usr/local/Ascend/cann-8.5.1#/usr/local/Ascend/cann-9.0.0-beta.1#g' /etc/profile 2>/dev/null || true; \
     printf '%s\n' \
@@ -120,6 +144,8 @@ RUN ln -sfn bin/ptoas ${WS}/ptoas-bin/ptoas && \
   'export LD_LIBRARY_PATH=$WS/ptoas-bin/lib:$LD_LIBRARY_PATH' \
   'export PATH=$WS/ptoas-bin/bin:/usr/local/python3.11.14/bin:$PATH' \
   'export PYTHONPATH=$WS/vllm-pypto:$WS/pypto/python:$WS/pypto/runtime/python:$PYTHONPATH' \
+  'export PYPTO_STEP3P5_ATTN_TASK_PROFILE='"${ATTN_TASK_PROFILE}" \
+  'export PYPTO_REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN='"${REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN}" \
   'export PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072' \
   > /etc/profile.d/pypto-env.sh; \
     test ! -e /usr/local/Ascend/cann-8.5.1; \
@@ -129,5 +155,6 @@ RUN ln -sfn bin/ptoas ${WS}/ptoas-bin/ptoas && \
 
 WORKDIR ${WS}
 COPY pypto-smoke.sh /workspace/pypto-smoke.sh
+COPY pypto-image-audit.sh /workspace/pypto-image-audit.sh
 ENTRYPOINT ["/bin/bash", "-c", "source /usr/local/Ascend/ascend-toolkit/set_env.sh && source /usr/local/Ascend/cann-9.0.0-beta.1/share/info/ascendnpu-ir/bin/set_env.sh && source /usr/local/Ascend/nnal/atb/set_env.sh && exec \"$@\"", "--"]
 CMD ["/bin/bash", "-l"]

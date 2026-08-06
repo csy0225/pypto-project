@@ -4,7 +4,7 @@
 > 每日流水在 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)；
 > 整体规划在 [`planning/roadmap.md`](planning/roadmap.md)；接力面在
 > [`planning/handoff.md`](planning/handoff.md)。
-> **最后更新：2026-08-03。**
+> **最后更新：2026-08-06。**
 
 ## 两条线（项目结构）
 
@@ -18,6 +18,41 @@
    - vLLM 侧集成在 fork `vllm/`（`PYPTO_STEP3P5_TAIL_ONLY` 主网 tail-only +
      `PyPtoMetadataOnlyStep3p5DecoderLayer` + MTP-proposer 挂点 + MTP3 `hf_overrides` boot fix，
      commit `1b3e538c`）+ `vllm-ascend/` fork。
+
+> **2026-08-06 MoE focused 当前真相**：
+>
+> ```text
+> scope:
+>   physical layers L0-L4 only
+> workload:
+>   BS=1,2,4,7,8,16
+>   context_len_per_sequence=65536
+> code:
+>   pypto-lib stepfun/develop
+>   7928a2751930b04c866788a396a7337b62c6d32f
+> image:
+>   hub.i.basemind.com/stepcast/vllm-pypto@
+>   sha256:b43e704ae878283575b77178501371bdb47848c4db97b2db6dbc3d7007a4995d
+> evidence:
+>   /mnt/persist/chensiyu/workspace/moe-opt/tmp/
+>   moe-formal-act-n64-20260806-v1
+> ```
+>
+> 产品实现已将普通 routed expert 调整为 receive row16、gate/up K512/N64、
+> activation N64、down N256；L43/L44 specialization 保持原 row32/down N128。
+> formal normal campaign 已完成 36/36 fresh-process run、correctness finalize 和
+> counterbalance。BS1/2/4/7/8/16 的 candidate median-round p50 reduction 分别为
+> `0.04/6.629/12.113/3.652/9.229/11.135%`，六档 `hidden_l3/hidden_l4`
+> 均 BF16 bit-exact、finite、TP spread=0；每个 sequence 独立使用 64K context。
+>
+> 当前未完成项是 formal matched-source DFX 12 runs、route-aware publication
+> reanalysis 和最终 all-rank swimlane。2026-08-04 的 context=1 DFX 仅为 task-grain
+> 诊断证据，不是最终 64K DFX。publication seal 已收紧为：外部钉住旧 normal
+> evidence manifest、旧 validation 必须存在且为普通文件、递归类型严格比较。
+> 0162 上 36/36 idempotent seal 已 PASS；authority 为
+> `authority/normal_seal_authority_v1.json`，SHA256
+> `16ac43432d0462e34bb939b11fb71e146cb2b9c2b068d9c3c5eec9901faa54be`。
+> 在反向复审转为 GO 前，不发布最终 DFX/swimlane 路径。
 
 > **2026-08-03 当前真相：Attention/Vec 与 TP all-reduce 稳定性已在 Wave5
 > immutable 镜像完成 0162 发布 gate。**

@@ -1,17 +1,22 @@
 # 05 · MoE 优化专项：L0–L4 focused network
 
-> **状态（2026-08-04）**：L0–L4 focused MoE 优化已在 0162 完成实现、精度、
-> 性能和 DFX 验证。本文只覆盖五层裁剪网络，不把结果外推为 45 层 whole-net、
-> 64K、prefill、L43/L44 specialization 或其它机器的发布结论。
+> **状态（2026-08-06）**：L0–L4 focused MoE 产品实现已合入
+> `pypto-lib stepfun/develop@7928a2751930b04c866788a396a7337b62c6d32f`。
+> 0162 上六档 BS=`1,2,4,7,8,16` 的 formal normal campaign 已完成 36/36 fresh
+> process run、完整 `hidden_l3/hidden_l4` golden、精度 finalize 和三轮
+> counterbalance；每个 sequence 都独立使用 `context_len=65536`。
 >
-> **最终 DFX**：
-> `/mnt/persist/chensiyu/workspace/moe-opt/l0-l4/final/dfx/candidate/`
+> **当前发布边界**：formal matched-source DFX、route-aware publication gate 和最终
+> all-rank swimlane 尚未完成，不能把 2026-08-04 的 context=1 诊断 DFX 路径写成最终
+> 64K DFX。本文只覆盖五层裁剪网络，不把结果外推为 45 层 whole-net、prefill、
+> L43/L44 specialization 或其它机器的发布结论。
 >
-> **最终 8-rank merged swimlane**：
-> `/mnt/persist/chensiyu/workspace/moe-opt/l0-l4/final/dfx/candidate/swimlane/rank{0..7}/d0/merged_swimlane_*.json`
+> **formal campaign 根目录**：
+> `/mnt/persist/chensiyu/workspace/moe-opt/tmp/moe-formal-act-n64-20260806-v1`
 >
-> **最终产物根目录**：
-> `/mnt/persist/chensiyu/workspace/moe-opt/l0-l4/final`
+> **当前 authoritative normal 报告**：
+> `.../campaign/matrix_correctness_report.json` 和
+> `.../campaign/matrix_performance_report.json`
 
 ---
 
@@ -37,22 +42,21 @@ L4  Full Attention + MoE   （直接消费真实 hidden_l3）
 5. L43/L44 specialization 明确保留原 `row=32, down N=128`；
 6. 保留 `combine_scatter → combine_wait → combine_reduce` 的真实依赖。
 
-主要结果：
+当前 formal normal 结果：
 
-| 指标 | Baseline | Candidate | 结果 |
-|---|---:|---:|---:|
-| repeated-token p50，5 warmup + 30 measured | `12.1777 ms` | `10.7677 ms` | **-11.58%** |
-| repeated-token mean | `12.8490 ms` | `10.8234 ms` | `-15.76%` |
-| L3 fused gate/up → split gate、up AIC p50 | `143.5 µs` | `12.9 / 12.7 µs` | 进入目标 `10–30 µs/task` |
-| L4 fused gate/up → split gate、up AIC p50 | `144.1 µs` | `12.8 / 12.8 µs` | 进入目标 `10–30 µs/task` |
-| L3 max combine wait | `1597.6 µs` | `1059.8 µs` | routed producer 尾部缩短 |
-| L4 max combine wait | `1590.3 µs` | `1063.9 µs` | routed producer 尾部缩短 |
-| `hidden_l3` / `hidden_l4` | — | BF16 bit-exact | PASS |
+| BS | Baseline median-round p50 | Candidate median-round p50 | reduction |
+|---:|---:|---:|---:|
+| 1 | `12.9437 ms` | `12.9385 ms` | `0.04%` |
+| 2 | `13.7780 ms` | `12.8646 ms` | `6.629%` |
+| 4 | `15.2757 ms` | `13.4254 ms` | `12.113%` |
+| 7 | `16.1510 ms` | `15.5611 ms` | `3.652%` |
+| 8 | `15.8222 ms` | `14.3619 ms` | `9.229%` |
+| 16 | `18.8267 ms` | `16.7303 ms` | `11.135%` |
 
-`combine_wait` 仍长，但它不是约 1 ms 的 wait 算术：最长 wait 出现在本地
-routed receive tile 为 0 的 rank，表示该 rank 正在等待远端 routed compute / scatter
-完成。各 rank 的 DFX 时钟独立归一化，没有共同外部时钟锚点，禁止直接跨 rank
-相减 timestamp 后宣布远端到达延迟。
+六档均满足 `hidden_l3/hidden_l4` BF16 bit-exact、finite、TP spread=0，且
+`performance_non_regression_all_batches=true`。早期诊断 DFX 中 gate/up task 已从约
+`144 µs` 降至 `12.7–12.9 µs`；combine wait 仍暴露远端 producer/route-skew 尾部，
+但 formal 64K DFX 未完成前不发布最终 wait 或 swimlane 结论。
 
 ---
 
@@ -77,15 +81,15 @@ expert、combine 和 TP all-reduce 函数。
 
 ```text
 repo:
-  /data/chensiyu/hw_project/pypto/workspace/pypto-lib-moe-opt
+  /data/chensiyu/hw_project/pypto/workspace/pypto-lib-moe-final-20260806
 branch:
   moe-opt
 base:
-  stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0
+  stepfun/develop@56b3d477953ab1e2df87213aef3a536c64051dcc
 final commit:
-  505e2c6b8d7c015e2e75a6799cf2b9f335db5543
+  7928a2751930b04c866788a396a7337b62c6d32f
 candidate decode_fwd.py SHA256:
-  2475c77c18273868b2d0bf56cd93c6c70819aafb9ce7fc49db05e6f26ca2b447
+  7884da7c33a2d338fd36097676a5fafbcc2795c845409868ff0ce40cbb2bc2f9
 ```
 
 实现及验证文件：
@@ -114,66 +118,53 @@ devices:
 checkpoint:
   /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp
 image:
-  hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260803-attn-final-wave5
-manifest:
-  sha256:4acc77cdce05c40fff7fdbcedb5612fa49c2edc847a534c218389ddc08667b32
+  hub.i.basemind.com/stepcast/vllm-pypto@sha256:b43e704ae878283575b77178501371bdb47848c4db97b2db6dbc3d7007a4995d
+image PyPTO:
+  8e92b46808f9f7c09b6431ad4691503f09c12ee5
+attention profile:
+  a2a3
+l2_swimlane_reuse_dep_gen:
+  available and required for formal DFX
 ```
 
-正式 A/B 使用相同的 Wave5 image 和相同的 **comm-only force-VMM-IPC runtime
-override**：
-
-```text
-libhost_runtime.so SHA256:
-  ee81f95ddebdee2acd23221abdef8e3ced3a0dcb8761a13154dde633be546695
-```
-
-该 override 只用于 focused IPC 通信接线，baseline/candidate 完全一致；不能与
-STATUS.md 中“不挂载 override 的 immutable whole-net release gate”混为同一个对象。
+formal normal A/B 使用同一 digest-pinned image；baseline/candidate 只切换冻结 source
+tree。镜像审计要求 PyPTO=`8e92b468`、attention=`a2a3` 且
+`l2_swimlane_reuse_dep_gen` 存在，避免再次回退到旧 `defa97c5`/portable substrate。
 
 ---
 
 ## 2. Golden 与精度合同
 
-### 2.1 Repeated-token golden
-
-输入为 16 个 token `6127`：
+### 2.1 六档 64K golden
 
 ```text
-/mnt/persist/chensiyu/workspace/moe-opt/l0-l4/final/golden/repeated/
+/mnt/persist/chensiyu/workspace/moe-opt/tmp/
+  moe-formal-act-n64-20260806-v1/campaign/golden/heterogeneous-64k/bs{1,2,4,7,8,16}/
 ```
 
-| 文件 | SHA256 |
-|---|---|
-| `hidden_l3.pt` | `4f2cbcfc8557347030ad390327941db33555327f96e76aacff2e406f5dc98cb7` |
-| `hidden_l4.pt` | `1e179669c2f66bf41713996fdf506409987b1d1efad5c6bd4b2e40de223cf3f1` |
+| BS | `manifest.json` SHA256 |
+|---:|---|
+| 1 | `b169691fa0703c890f7a41523dec2a39226c33fd57f34fcaea74cd3aba8dcd22` |
+| 2 | `f1ac1026c41f2a372e0224193c124d481c88c7c305d90e0afe52ca770fd0bdbc` |
+| 4 | `bdee4f56a9283be06f1a5a0402596a287a2af8b7526797480f0e05653923727d` |
+| 7 | `1aa70db3de8d2ae564fff691b4b9b609e5ad3e6f330f2033bb7265e305aa9338` |
+| 8 | `e5b1b38e88c3c67397005c63151e8a1e261079b9a3188a4efeed89cda934a7f9` |
+| 16 | `fcb04b11570b1395e35fadee6b42885691c2dac1e71d3b0c7d5e2e2648c36c09` |
 
-### 2.2 Heterogeneous-token golden
-
-```text
-input = 6127,303,1207,19384,872,428,4231,2636,
-        6178,410,1,2,3,4,5,6
-```
-
-```text
-/mnt/persist/chensiyu/workspace/moe-opt/l0-l4/final/golden/heterogeneous/
-```
-
-| 文件 | SHA256 |
-|---|---|
-| `hidden_l3.pt` | `8f893262c7da7611aa45ad32b62293ee33952cd60f09162976badacd0da0377b` |
-| `hidden_l4.pt` | `cdb38438ead8d1df7c389a4cfc047c1a875f5114c1fafefd7157c5004dbca748` |
-
-两组 golden 均满足：
+每档 golden 都来自独立 fresh-process baseline run，并满足：
 
 ```text
-shape = [8, 16, 4096]
+shape = [8, active_batch, 4096]
 dtype = torch.bfloat16
 finite = true
-nonzero active rank/rows = 128 / 128
+nonzero active rank/rows = 8 * active_batch
 max TP spread = 0.0
+context_len_per_sequence = 65536
+blocks_per_sequence = 512
 ```
 
-candidate 对 baseline 的 L3、L4 均为 `max_abs=0`、`bad_ratio=0`、bit-exact。
+candidate 对 baseline 的 L3、L4 均为 `max_abs=0`、`bad_ratio=0`、bit-exact，
+并通过 batch-extension invariance。
 精度比较使用完整 hidden state，不以 token argmax 代替中间层精度。
 
 ---
@@ -348,7 +339,11 @@ resource overflow。
 
 ---
 
-## 6. Candidate DFX 结果
+## 6. 早期诊断 DFX 结果（非最终 formal DFX）
+
+本节保留 2026-08-04 的短 workload 诊断数据，用于说明 gate/up task-grain 选择和
+combine wait 的解释方法。它不是六档独立 64K formal DFX，也不能作为最终 DFX 报告
+或 all-rank swimlane 发布路径。
 
 ### 6.1 L3
 
@@ -393,33 +388,42 @@ row tile 减半使 receive tile 数翻倍是预期，不表示路由 token 翻�
 
 ## 7. 性能 A/B
 
-### 7.1 主准出：repeated-token
+### 7.1 主准出：六档独立 64K
 
-双方均为同一 substrate、`active_batch=16`、`context_len=1`、16 个 token `6127`、
-`5 warmup + 30 measured`：
-
-```text
-baseline p50 = 12.177705764770508 ms
-candidate p50 = 10.767698287963867 ms
-absolute delta = -1.410007476806641 ms
-relative delta = -11.5786%
-
-baseline mean = 12.848957379659018 ms
-candidate mean = 10.823408762613932 ms
-```
-
-两边 `hidden_l3`、`hidden_l4` bit-exact。该组是最终性能结论。
-
-### 7.2 异构 token guardrail
+每个 run 都是 fresh process，三轮顺序为：
 
 ```text
-baseline p50  = 14.313459396362305 ms  (5 warmup + 30 measured)
-candidate p50 = 11.263608932495117 ms  (3 warmup + 5 measured)
-descriptive delta = -21.31%
+r1/r2: per-BS baseline → candidate
+r3:    per-BS candidate → baseline
+warmup = 5
+measured_iters = 30
+context_len_per_sequence = 65536
+active_total_context_tokens = BS * 65536
 ```
 
-candidate 只测 5 次，采样口径不对称，因此这里只作为异构 route correctness 和趋势
-证据，不作为主性能准出数字。L3/L4 仍 bit-exact、finite、TP spread=0。
+| BS | Baseline p50 | Candidate p50 | p50 reduction | Baseline mean | Candidate mean |
+|---:|---:|---:|---:|---:|---:|
+| 1 | `12.9437` | `12.9385` | `0.04%` | `13.4412` | `12.9286` |
+| 2 | `13.7780` | `12.8646` | `6.629%` | `14.0678` | `13.1146` |
+| 4 | `15.2757` | `13.4254` | `12.113%` | `15.3179` | `14.3530` |
+| 7 | `16.1510` | `15.5611` | `3.652%` | `16.6213` | `14.6357` |
+| 8 | `15.8222` | `14.3619` | `9.229%` | `15.7558` | `14.3855` |
+| 16 | `18.8267` | `16.7303` | `11.135%` | `18.9856` | `16.7510` |
+
+报告：
+
+```text
+.../campaign/matrix_correctness_report.json
+  SHA256 451a47d152fc0b0af1b9a21200011af5c0cfa6a884b6996ca057286c032f3368
+.../campaign/matrix_performance_report.json
+  SHA256 44bacd4980f656fd4ccd777b4515dd8c8d58b1edb6ccbc0feceed177dfc5a17b
+```
+
+### 7.2 早期短 workload 诊断
+
+2026-08-04 的 context=1 repeated-token A/B 为 `12.1777→10.7677 ms`
+（`-11.58%`）。它帮助选择 task grain，但不再作为最终性能准出；最终准出以 7.1
+的六档 64K counterbalanced campaign 为准。
 
 ---
 
@@ -460,50 +464,52 @@ repeated/heterogeneous A/B 中取得稳定收益。
 
 ---
 
-## 10. 最终产物索引
+## 10. 当前产物索引
 
 ```text
-/mnt/persist/chensiyu/workspace/moe-opt/l0-l4/final/
-├── source/{baseline,candidate}/
-├── golden/{repeated,heterogeneous}/
-├── baseline/{perf,dfx}/
-├── candidate/{perf,dfx}/
-├── dfx/{baseline,candidate}/
-└── manifests/
+/mnt/persist/chensiyu/workspace/moe-opt/tmp/moe-formal-act-n64-20260806-v1/
+├── authority/
+├── campaign/
+│   ├── runs/                    # 36 normal runs; formal DFX待补
+│   ├── golden/heterogeneous-64k/
+│   ├── matrix_correctness_report.json
+│   └── matrix_performance_report.json
+├── sources/dfx-formal-act-n64-v1/{baseline,candidate}/
+├── overlays/{dfx,route}/
+└── tmp/
 ```
 
 ### DFX 报告
 
 ```text
-baseline:
-  .../final/dfx/baseline/moe_dfx_report.json
-  .../final/dfx/baseline/moe_critical_path_report.md
-candidate:
-  .../final/dfx/candidate/moe_dfx_report.json
-  .../final/dfx/candidate/moe_critical_path_report.md
+PENDING:
+  formal matched-source DFX 12 runs
+  route-aware publication reanalysis
+  fixed final JSON/Markdown report path
 ```
 
 ### Candidate merged swimlane
 
 ```text
-rank0/d0/merged_swimlane_20260804_145912.json
-rank1/d0/merged_swimlane_20260804_145913.json
-rank2/d0/merged_swimlane_20260804_145913.json
-rank3/d0/merged_swimlane_20260804_145914.json
-rank4/d0/merged_swimlane_20260804_145915.json
-rank5/d0/merged_swimlane_20260804_145916.json
-rank6/d0/merged_swimlane_20260804_145916.json
-rank7/d0/merged_swimlane_20260804_145917.json
+PENDING:
+  rank{0..7}/d0/merged_swimlane_*.json
 ```
 
 ### Provenance
 
 ```text
-.../final/manifests/final_summary.json
-.../final/manifests/SHA256SUMS
-.../final/manifests/files.tsv
+authority/final_selection_report.json
+authority/matched_source_audit.json
+authority/normal_seal_authority_v1.json
+  SHA256 16ac43432d0462e34bb939b11fb71e146cb2b9c2b068d9c3c5eec9901faa54be
+campaign/matrix_correctness_report.json
+campaign/matrix_performance_report.json
+tmp/final-scripts-63d7526d/SCRIPTS_SHA256SUMS
+  SHA256 63d7526dc7bcda7e5d3c0404112ddae95f4020dce6fe498dd0e08d5b137722af
 ```
 
-真机结束后 0162 cards `8–15` 无 MoE container/device process 残留。所有临时脚本
-位于 `/mnt/persist/chensiyu/workspace/moe-opt/tmp`；最终目录采用唯一路径和拒绝覆盖
-策略，未通过删除重建来更新产物。
+所有临时脚本位于 `/mnt/persist/chensiyu/workspace/moe-opt/tmp`。当前 normal
+evidence 已增加 fail-closed publication seal：seal 必须绑定外部钉住的旧证据 manifest，
+旧 validation 必须存在且为普通文件，JSON 使用递归类型严格比较；0162 已完成
+36/36 idempotent seal PASS。formal DFX 和 all-rank swimlane 完成后，再在本节补
+唯一最终路径和 SHA256。
