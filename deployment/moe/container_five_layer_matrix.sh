@@ -7,6 +7,11 @@ set -Eeuo pipefail
 : "${MATRIX_IMAGE_REF:?missing MATRIX_IMAGE_REF}"
 : "${RUN_NONCE:?missing RUN_NONCE}"
 : "${SOURCE_KIND:?missing SOURCE_KIND}"
+MATRIX_DEVICES=${MATRIX_DEVICES:-8,9,10,11,12,13,14,15}
+if [[ ! "$MATRIX_DEVICES" =~ ^[0-9]+(,[0-9]+){7}$ ]]; then
+  echo "MATRIX_DEVICES must contain exactly eight comma-separated IDs" >&2
+  exit 35
+fi
 valid_dfx_profile() {
   [[ "$1" =~ ^[[:alnum:]][[:alnum:]_.-]*$ ]]
 }
@@ -73,7 +78,7 @@ cd /workspace/pypto-lib
   > /out/source_verify.log
 
 ARGS=(
-  --device 0,1,2,3,4,5,6,7
+  --device "$MATRIX_DEVICES"
   --ckpt /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp
   --out /out/runtime
   --source-kind "$SOURCE_KIND"

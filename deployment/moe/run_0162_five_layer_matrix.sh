@@ -17,6 +17,18 @@ BATCH=$7
 NC=/mnt/persist/k8s-install/containerd/bin/nerdctl
 CKPT=/data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp
 SCRIPTS=${CAMPAIGN_SCRIPTS:-$ROOT/scripts}
+MATRIX_DEVICES=${MATRIX_DEVICES:-8,9,10,11,12,13,14,15}
+if [[ ! "$MATRIX_DEVICES" =~ ^[0-9]+(,[0-9]+){7}$ ]]; then
+  echo "MATRIX_DEVICES must contain exactly eight comma-separated IDs" >&2
+  exit 4
+fi
+IFS=',' read -r -a DEVICE_IDS <<< "$MATRIX_DEVICES"
+for index in "${DEVICE_IDS[@]}"; do
+  if [ "$index" -lt 0 ] || [ "$index" -gt 15 ]; then
+    echo "invalid device id=$index" >&2
+    exit 4
+  fi
+done
 case "$SOURCE_KIND" in
   baseline|candidate) ;;
   *)
@@ -90,7 +102,7 @@ output_path.write_text(
 )
 PY
 
-for index in 0 1 2 3 4 5 6 7; do
+for index in "${DEVICE_IDS[@]}"; do
   if fuser "/dev/davinci${index}" >/dev/null 2>&1; then
     echo "device /dev/davinci${index} is busy" >&2
     fuser -v "/dev/davinci${index}" >&2 || true
@@ -98,7 +110,7 @@ for index in 0 1 2 3 4 5 6 7; do
   fi
 done
 DEVS=()
-for index in 0 1 2 3 4 5 6 7; do
+for index in "${DEVICE_IDS[@]}"; do
   DEVS+=(--device "/dev/davinci${index}")
 done
 NONCE=$(
@@ -143,6 +155,7 @@ sudo -n "$NC" run --name "$CONTAINER" --rm --net host --ipc host \
   --env MATRIX_MODE="$MODE" \
   --env MATRIX_ROUND="$ROUND" \
   --env MATRIX_BATCH="$BATCH" \
+  --env MATRIX_DEVICES="$MATRIX_DEVICES" \
   --env MATRIX_IMAGE_REF="$IMG" \
   --env RUN_NONCE="$NONCE" \
   --env SOURCE_KIND="$SOURCE_KIND" \
@@ -173,7 +186,7 @@ if [ "$RC" -ne 0 ]; then
 fi
 test -s "$OUT/capability_report.json"
 python3 "$SCRIPTS/validate_five_layer_case.py" --run "$OUT"
-for index in 0 1 2 3 4 5 6 7; do
+for index in "${DEVICE_IDS[@]}"; do
   if fuser "/dev/davinci${index}" >/dev/null 2>&1; then
     echo "device /dev/davinci${index} remained busy after $RUN_NAME" >&2
     exit 19
