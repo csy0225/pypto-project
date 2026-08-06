@@ -1,13 +1,14 @@
 # Performance 性能优化专项
 
-> **2026-08-05 current-source override（优先于下方历史快照）**：当前源码为
-> `pypto-lib stepfun/develop@91c7f46ee949045e2fce807276412b48d8121763`，
+> **2026-08-06 current-source override（优先于下方历史快照）**：当前源码为
+> `pypto-lib stepfun/develop@c9af5790d5fe450e14fd43c88099b87539089d17`，
 > 配套 pypto 为
 > `stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。
 > A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2 已完成；B3 仍在进行。
-> Wave5 仍是最后一个 0162 release-qualified 镜像；R1 已废弃，包含 immutable
-> swimlane 修复的 R2 构建已暂停、尚未发布或验证。下方 2026-07-27 状态、65 ms
-> 分账和旧依赖关系只作历史分析，不能覆盖
+> latest-source canonical image `sha256:3eb694e…` 已通过 0162 BS1×64K
+> Attention/ITL/DFX gate；Wave5 是最后一个完成全量 Main/MTP matrix 的回退基线，
+> 历史 R1/R2 已 supersede。下方 2026-07-27 状态、65 ms 分账和旧依赖关系只作
+> 历史分析，不能覆盖
 > [`task-tracking.md`](task-tracking.md) 的当前状态。
 
 > **2026-07-27 当前目标快照**：已完成并保留完成态的优化为 **A1、B1、B2**。

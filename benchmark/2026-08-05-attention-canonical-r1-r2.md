@@ -1,14 +1,20 @@
 # Attention canonical R1/R2 immutable 验证记录（2026-08-05）
 
+> **HISTORICAL / SUPERSEDED（2026-08-06）**：本文只保留 R1 失败和 R2
+> 未发布的过程证据，不是当前任务或恢复指引。R2 已被 pypto-lib `c9af5790` 的
+> latest-source canonical image 取代，**不得恢复**。当前 manifest、ITL、DFX 与
+> swimlane 见
+> [`2026-08-06-attention-taskmajor-canonical.md`](2026-08-06-attention-taskmajor-canonical.md)。
+
 ## 结论
 
 - **R1 已废弃，不是 canonical 交付镜像。** 两层 bs1/context=65536 的 50 次
   timing、数值一致性均完成，但 immutable DFX 在创建 `RunConfig` 时失败，
   因而没有生成可交付的 swimlane。
-- **R2 尚未构建完成。** R2 已固定正式 PyPTO 修复和串行构建参数；按用户要求，
-  构建已暂停，当前没有 R2 manifest/config digest，也没有 R2 ITL/DFX 结论。
-- 不允许通过挂载宿主源码或 runtime overlay 绕过 R1 缺失接口。恢复验证后必须使用
-  R2 digest-only 镜像。
+- **R2 从未发布，现已 supersede。** 当时固定了 PyPTO 修复和串行构建参数，
+  但构建被停止，没有 manifest/config digest 或 ITL/DFX 结论。
+- 不允许通过挂载宿主源码或 runtime overlay 绕过 R1 缺失接口；也不得继续构建
+  R2。当前验证对象是 2026-08-06 `c9af5790` 镜像。
 
 ## R1：失败证据
 
@@ -69,7 +75,7 @@ bs1_ctx65536_two_layer_dfx/
 该目录**不包含最终可交付的 `l2_swimlane_records.json`**，上面的两层 timing
 也不能替代同一最终镜像的整网 ITL。
 
-## R2：修复、规格与暂停状态
+## R2：历史修复规格与最终未发布状态
 
 正式修复：
 
@@ -96,18 +102,23 @@ BUILD_JOBS=1
 ```
 
 R2 构建在串行 PyPTO C++ editable build 阶段按用户要求停止。停止后已检查本机和
-0162，均无残留 build/compile 进程。因此当前状态必须写作：
+0162，均无残留 build/compile 进程。该历史对象的最终状态是：
 
 ```text
 R1: REVOKED
-R2: BUILD PAUSED / UNPUBLISHED / UNVERIFIED
+R2: NEVER PUBLISHED / UNVERIFIED / SUPERSEDED
 ```
 
 不得为 R2 填写或借用 R1/Wave5 的 manifest、ITL 或 swimlane 数据。
 
-## 恢复后的准出顺序
+## 当时计划的准出顺序（已取消，禁止执行）
 
-1. 保持 `BUILD_JOBS=1` 完成 R2 构建，并执行 credential、pin、import 和
+以下列表只解释 2026-08-05 为什么 R2 当时还不能交付；2026-08-06 后不得把它
+当作待办。实际 gate 已由新镜像按
+[`2026-08-06-attention-taskmajor-canonical.md`](2026-08-06-attention-taskmajor-canonical.md)
+执行。
+
+1. 当时计划保持 `BUILD_JOBS=1` 完成 R2 构建，并执行 credential、pin、import 和
    `RunConfig` 接口审计。
 2. push 后记录 R2 manifest/config digest；0162 只允许 digest-only 启动，不挂载
    宿主源码。

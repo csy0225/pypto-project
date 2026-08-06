@@ -457,7 +457,7 @@ tail-only 改动属于 vLLM-Ascend backend seam，不应改 upstream generic vLL
 
 ---
 
-## 9. 当前任务拆解（2026-08-05）
+## 9. 当前任务拆解（2026-08-06）
 
 历史 0234/N1 bring-up、socket v1 和旧 branch pin 已从活跃任务表移除。当前执行状态只在
 [`../../planning/phases/28-live-integration.md`](../../planning/phases/28-live-integration.md)
@@ -466,7 +466,7 @@ tail-only 改动属于 vLLM-Ascend backend seam，不应改 upstream generic vLL
 | ID | 任务 | 主要边界 | 验收 |
 |---|---|---|---|
 | A1 | 固定被测对象 | source commit、image digest、checkpoint、cards、profile | manifest 可复核；不使用本地 branch 名推断 tip |
-| A2 | R2 immutable gate | pypto `8e92b468`、pypto-lib `91c7f46e`、`BUILD_JOBS=1` | build/audit PASS；digest 已发布；无源码挂载 |
+| A2 | latest-source immutable gate（已完成） | pypto `8e92b468`、pypto-lib `c9af5790`、`BUILD_JOBS=2` | manifest `sha256:3eb694e…`；audit、BS1×64K ITL/DFX PASS；无源码挂载 |
 | B1 | 独立 live front 接管 | vLLM hook、collective-consistent gate、fallback 可观测 | 真实 online request 明确进入 PyPTO Main |
 | C1 | paged-KV bridge | per-layer K/V、block table、slot mapping、seq lens | 多步、dynamic batch、inactive row、历史 row 均正确 |
 | D1 | Main→MTP 同代 gate | 配对 hidden/oracle、acceptance state | token/hidden/finite/TP spread 全通过 |
@@ -497,7 +497,8 @@ tail-only 改动属于 vLLM-Ascend backend seam，不应改 upstream generic vLL
 ## 12. 推荐落地顺序
 
 ```text
-R2 immutable attention gate
+latest-source immutable attention gate ✅
+-> optional full production matrix
 -> independent live-front takeover
 -> paged-KV + dynamic batch
 -> paired Main-to-MTP gate

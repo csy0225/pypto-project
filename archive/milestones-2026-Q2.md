@@ -1,5 +1,41 @@
 # Milestones —— 2026 Q2
 
+## 2026-08-06 —— workload-sized Attention 合入最新 MoE 基线
+
+- `pypto-lib stepfun/develop` 从 `7928a275` fast-forward 到
+  `c9af5790d5fe450e14fd43c88099b87539089d17`。合入内容包括 Full/SWA
+  workload-sized RoPE producer、显式双 TaskId 依赖、SWA unaligned
+  trailing-window 首尾 mask、Full out-proj publication 修复和 A2A3
+  blocks-per-task=`22/16/22` profile；不固定物理核心数。
+- focused 两层验证分支 `1ea76e0f` 完成 bs1/2/4/8/16/7、每请求64K 的
+  linear/reverse matrix、fresh-process exact replacement、SWA ctx65535 direct
+  oracle，以及 bs1/7/16 DFX。该证据证明 attention delta。
+- 合入前 source-mounted 整网 bs1、每请求64K、warmup=5、50 次：
+  min/mean/p50/p99/max =
+  `49.328/50.046/49.880/56.362/56.362 ms`，hidden finite、TP spread=0。
+  相对 Wave5 p50 `49.796 ms` 为 `+0.17%`，属于噪声，不能宣称 latency 收益。
+- 最新源码 immutable 镜像
+  `stepfun-develop-20260806-attn-taskmajor-canonical` 已发布：manifest
+  `sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479`，
+  config
+  `sha256:a6095ba550aa8207e66a10ad2e8923d120af957c9e014349d26915d7ba33d216`。
+  credential/pin/clean-tree/profile audit PASS；0162 digest-only、无源码挂载。
+- 同镜像整网 bs1×64K 50 次 min/mean/p50/p99/max =
+  `39.057/39.594/39.612/40.680/40.680 ms`，hidden finite、TP spread=0。
+  相对 Wave5 p50 降 `20.45%`，但比较跨越最新 MoE 等整栈变化，不能全归因于
+  attention。
+- 同镜像两层 bs1×64K p50 `3.6323 ms`，reference exact、TP spread=0；
+  DFX `8/8` rank PASS，LOW-WAIT `rank2/d0` makespan `690.1 us`、TP AR
+  span-sum `176.24 us`。
+- 整网 bs16、每请求64K 使用 `8192` blocks，compile 成功；KV pool
+  `22.541 GiB/卡`、weight pool `24.857 GiB/卡`，prewarm 前约
+  `52,013 MiB/卡`，申请 `17,179,870,207` bytes pooled static arena 时
+  `rtMalloc 207001`。没有有效 bs16 ITL；runtime-memory A/B 按要求暂停，
+  container 和 cards 8–15 均已清理。
+- canonical attention 文档和性能优化 skill 已同步；skill 只沉淀 workload/task、
+  producer submit、dependency、DFX 和多 batch 性能分析方法，项目状态保留在
+  本 milestone 与 `design/performance/04-attention-optimization.md`。
+
 ## 2026-08-03 —— Wave5 TP all-reduce source publication 稳定性闭环 + 0162 发布 ✅
 
 - `pypto-lib stepfun/develop` 前进到

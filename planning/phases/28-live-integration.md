@@ -1,22 +1,23 @@
 # Phase 28 — 单程序整网 → vLLM live 集成
 
-> **状态：🟡 进行中。最后更新：2026-08-05。**
+> **状态：🟡 进行中。最后更新：2026-08-06。**
 > 本文只保留当前 live 集成工作面；历史 N1 bring-up 已归档到
 > [`../../archive/completed-phases/27-single-program-whole-net-fusion.md`](../../archive/completed-phases/27-single-program-whole-net-fusion.md)。
 
 ## 1. 当前对象
 
 ```text
-current pypto-lib  91c7f46ee949045e2fce807276412b48d8121763
+current pypto-lib  c9af5790d5fe450e14fd43c88099b87539089d17
 current pypto      8e92b46808f9f7c09b6431ad4691503f09c12ee5
 current Main       models.step3p5.decode_fwd:whole_decode_step3p5
 vLLM overlay       1b3e538c35999e62b6d24e0651b3a85b7d16c826
-last qualified     stepfun-develop-20260803-attn-final-wave5
-manifest           sha256:4acc77cdce05c40fff7fdbcedb5612fa49c2edc847a534c218389ddc08667b32
+latest image       stepfun-develop-20260806-attn-taskmajor-canonical
+manifest           sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479
+full-matrix fallback stepfun-develop-20260803-attn-final-wave5
 ```
 
-当前源码 tip 与最后 release-qualified 镜像必须分开。R1 已废弃；R2 build 暂停且
-未发布/验证，不能继承 Wave5 的准出结论。
+当前 latest-source image 已通过 BS1×64K Attention/ITL/DFX gate；完整 Main/MTP
+production matrix 仍只由 Wave5 证明。两类准出必须分开报告，历史 R1/R2 不得恢复。
 
 ## 2. Goal
 
@@ -34,6 +35,7 @@ manifest           sha256:4acc77cdce05c40fff7fdbcedb5612fa49c2edc847a534c218389d
 - 默认 Main 已统一为 `whole_decode_step3p5`，旧 unroll/opt/rollback 入口已删除。
 - standalone Main、batch16、MTP focused gate 和 Wave5 immutable release gate 已完成。
 - Attention/Vec、TP all-reduce source publication/lifetime 已在 Wave5 对 0162 准出。
+- latest-source `c9af5790` immutable image 已完成 BS1×64K 整网 ITL 与两层 DFX。
 - sidecar/holder、权重 IPC、KV metadata schema 和 vLLM overlay 已有实现基础。
 
 这些证据只证明 standalone/sidecar 组件，不等价于真实 production request 已无条件平替。
@@ -80,11 +82,13 @@ MTP 输入必须来自本次 Main 的配对 hidden；禁止拿旧 N1 artifact �
 
 验收标准：[`../../reference/canonical-test.md`](../../reference/canonical-test.md)。
 
-## 6. 与当前 Attention R2 的关系
+## 6. 与 Attention 收口的关系
 
-Attention R2 的 bs1/64K 两层 DFX和整网 ITL是当前更高优先级交付；build 已按用户要求
-暂停。Phase 28 不得抢占或改写 R2 pin。恢复顺序见
-[`../handoff.md`](../handoff.md)。
+Attention latest-source immutable gate 已完成，Phase 28 不再等待历史 R2。
+后续 live 工作必须使用明确的新 digest，并单独处理 paged-KV、3-way HBM 与
+Main→MTP；不能把 BS1 standalone ITL/DFX 当作 live serving 准出。当前
+standalone bs16×每请求64K 还会在约 16 GiB static-arena 分配时 OOM，这与 live
+重复权重问题是两个容量口径，不能混写。下一步见 [`../handoff.md`](../handoff.md)。
 
 ## 7. 明确废弃的输入
 

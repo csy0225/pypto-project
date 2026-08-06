@@ -10,5 +10,6 @@
 > - [`../../deployment/version-matrix.md`](../../deployment/version-matrix.md)
 > - GitHub 远端 `refs/heads/stepfun/develop`
 >
-> 禁止用本目录脚本或 pin 覆盖当前 R2/Wave5 被测对象。需要复现历史案例时，必须显式
-> 标注 `historical N1`，并与当前工作目录、设备和输出隔离。
+> 禁止用本目录脚本或 pin 覆盖当前 latest-source canonical image 或 Wave5
+> full-matrix 回退基线。需要复现历史案例时，必须显式标注 `historical N1`，
+> 并与当前工作目录、设备和输出隔离。

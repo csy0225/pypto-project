@@ -1,18 +1,21 @@
 # 01 — System Design (HLD)：step3p5 decode 性能优化
 
-> **2026-08-05 current-source override（优先于下方历史正文）**：Attention/Vec
+> **2026-08-06 current-source override（优先于下方历史正文）**：Attention/Vec
 > 收口源码为
-> `pypto-lib stepfun/develop@91c7f46ee949045e2fce807276412b48d8121763`，
+> `pypto-lib stepfun/develop@c9af5790d5fe450e14fd43c88099b87539089d17`，
 > 配套 PyPTO（动态 SPMD + immutable swimlane）为
 > `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。
-> 当前实现采用 workload-derived logical tasks + runtime wave mapping，Full SV 合并
-> segment-local recurrence，Full/SWA out-proj cast 默认融合。Wave5 immutable
-> audit/smoke/Main+MTP compile、Main N=128×3、Main batch16、MTP batch1/batch16×2、
-> 64K/batch16 ITL/DFX 已通过；Main N=128 三轮均 `123/128` 且 TP spread=0，
-> 仍是最后一个 **0162 release-qualified** 镜像。R1 已废弃，R2 build 已暂停，
-> 尚无新 digest/ITL/DFX。下方较早的主线表和收益表是
+> 当前实现采用 workload-derived logical tasks + runtime wave mapping，并新增
+> workload-sized RoPE producer、显式双 TaskId 依赖和 A2A3 blocks-per-task
+> `22/16/22` profile；
+> Full SV 合并 segment-local recurrence，Full/SWA out-proj cast 默认融合。
+> latest-source canonical image manifest
+> `sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479`
+> 已通过 0162 BS1×64K ITL/DFX gate（整网 p50 `39.612 ms`，两层 p50
+> `3.6323 ms`、exact、DFX 8/8 rank）。完整 production matrix 的回退基线仍是
+> Wave5；历史 R1/R2 已 supersede。下方较早的主线表和收益表是
 > 设计历史；I1/I2 当前状态以 [`task-tracking.md`](task-tracking.md) 和
-> [`04-attention-optimization.md`](04-attention-optimization.md) §12 为准；
+> [`04-attention-optimization.md`](04-attention-optimization.md) §14 为准；
 > attention 当前 task/tile 设计见同文 §13。
 
 > **2026-07-26 交付收益覆盖**：本专项当前已实际落地并完成 device

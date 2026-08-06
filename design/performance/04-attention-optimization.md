@@ -1,6 +1,6 @@
 # 04 · Attention 优化专项（step3p5 full / SWA flash decode）
 
-> **最终实现覆盖说明（2026-08-06）**：本文已合并原
+> **最终实现覆盖说明（更新至 2026-08-06）**：本文已合并原
 > `attention/attention-tiling-and-partitioning.md` 的最终 task/tile 设计。§0–§9
 > 保留专项探索过程，包含早期 fixed-24 lane、四阶段 split、standalone Pass-A/B/C
 > 与 cast 默认关闭等历史状态；**这些内容不得再作为当前实现说明。** 当前权威状态以
@@ -10,23 +10,26 @@
 > 5–10 us 仅是 task-grain 搜索起点；Full 的 SV 与 segment-local recurrence 已融合，
 > 只保留必要的 `full_online_softmax_reduce/finalize`；Full/SWA out-proj cast 默认都融合。
 > 本轮新增 workload-sized RoPE producer、显式双 TaskId 依赖、SWA trailing-window
-> 首尾 mask、Full out-proj publication 修复与 A2A3 softmax grain=16。权威候选为
-> `pypto-lib perf/attn-rope-taskmajor-lifetime-20260805@1ea76e0f`（基于
-> `stepfun/develop@56b3d477`）与 `pypto stepfun/develop@defa97c5`。0162 已完成
+> 首尾 mask、Full out-proj publication 修复与 A2A3 softmax grain=16。该代码已合入
+> `pypto-lib stepfun/develop@c9af5790`（父提交 `7928a275`，包含最新 MoE
+> 代码）。0162 的 focused device 证据来自合入前、attention delta 相同的
+> `perf/attn-rope-taskmajor-lifetime-20260805@1ea76e0f`。该候选已完成
 > 每请求 64K 的 bs1/2/4/8/16/7 linear+reverse matrix、独立 fresh-process
 > replacement、SWA ctx65535 direct oracle 和 bs1/7/16 DFX；其它机器/架构未由
-> 本轮独立证明。
+> 本轮独立证明。整网仅得到有效 bs1 ITL；bs16×每请求64K 在 prewarm static-arena
+> 分配阶段 HBM OOM，不能给出性能数字。详见 §14。
 >
 > **性质**：LLD 专项。聚焦 decode 阶段 flash-attention kernel 本体（`attention_full.py` /
 > `attention_swa.py`）的重写路线，独立于 README 主表里的 Track A–H。收敛后其中的子项会以
 > `PERF-*` ID 回填 [`task-tracking.md`](task-tracking.md)。
 >
 > **当前源码基线**：pypto-lib
-> `perf/attn-rope-taskmajor-lifetime-20260805@1ea76e0f2d3e6c132198dc6214034968daeaf2f2`
-> （base `stepfun/develop@56b3d477953ab1e2df87213aef3a536c64051dcc`），pypto
-> `stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`；canonical Main =
+> `stepfun/develop@c9af5790d5fe450e14fd43c88099b87539089d17`
+> （parent `7928a2751930b04c866788a396a7337b62c6d32f`），pypto
+> `stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`；canonical Main =
 > `models/step3p5/decode_fwd.py:whole_decode_step3p5`。正文中的旧 file:line 只对应当时快照，
-> 不能覆盖当前源码。
+> 不能覆盖当前源码。`c9af5790` 的 immutable BS1×64K ITL/DFX gate 已完成；
+> manifest 为 `sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479`。
 >
 > **审计口径**（沿用 [`README.md` 顶层审计方法](README.md)）：任何“step3p5 独有 / 必须保留”
 > 判断都要沿 `producer → 数学变换 → transport → consumer → rounding/reduction → lifetime`
@@ -1387,7 +1390,7 @@ subject to:
 
 ### 13.10 lowering、DFX 与负面候选门禁
 
-权威源码：
+本节 focused sweep 的历史源码：
 
 ```text
 pypto-lib perf/attn-rope-taskmajor-lifetime-20260805
@@ -1398,7 +1401,11 @@ pypto stepfun/develop
 defa97c526fec7e8f032dbbfcc39c820add02bf7
 ```
 
-最终源码验证为 `254 passed, 3 skipped`；`py_compile`、`git diff --check`、
+当前 Git 权威源码是 pypto-lib `stepfun/develop@c9af5790` 与 pypto
+`stepfun/develop@8e92b468`；上面的 pin 只用于解释本节既有 focused artifacts，
+不能作为当前 checkout。
+
+focused 源码验证为 `254 passed, 3 skipped`；`py_compile`、`git diff --check`、
 skill quick validation 和 differential Ruff（忽略仓库既有 DSL
 `F401/F821`）均通过。compile-only 还会读取真实生成的
 `orchestration/chip_orch.cpp`，检查 Full/SWA 各 stage 的动态 launch bound、
@@ -1464,3 +1471,156 @@ attention 候选。后续只在新增证据时继续：
    路径后再设计 active-batch mapping；
 4. reduce/finalize 只有在保持 write-disjoint ownership、reduction order 和
    publication 的前提下才可继续融合；不能只为少 kernel 强删。
+
+## 14. 2026-08-06 合入与整网验证状态
+
+### 14.1 源码合入状态
+
+workload-sized attention delta 已从验证分支 `1ea76e0f` 移植到当时最新的
+`stepfun/develop@7928a275`，并以 fast-forward 方式推送：
+
+```text
+pypto-lib stepfun/develop
+c9af5790d5fe450e14fd43c88099b87539089d17
+```
+
+合入没有源码冲突；MoE 的 `KV_NUM_LAYERS` 配置与 attention 的
+blocks-per-task=`22/16/22` profile 同时保留。合入后的 CPU 定向验证为：
+
+- attention/两层 harness：92 项通过；另有 1 项未被本次 delta 修改的既有
+  MoE C3 contract 失败；
+- 最新 MoE/main compatibility：20 项通过；
+- 除两个仓库既有 DSL lint-debt 文件外，本次其余改动文件 Ruff 通过。
+
+focused device matrix、fresh-process replacement 和 DFX 是在 `1ea76e0f` 上产生；
+它们证明 attention delta。`c9af5790` 的 post-merge immutable image 复验见
+§14.2 和 §14.5。
+
+### 14.2 整网 bs1、每请求64K
+
+运行口径：
+
+```text
+active_batch = 1
+context_len = 65536
+num_blocks = 512
+warmup = 5
+measured iterations = 50
+profile = a2a3 (QK/softmax/online blocks-per-task=22/16/22, reduce fan-in=8)
+```
+
+合入前 source-mounted 候选 `1ea76e0f`：
+
+| metric | ITL |
+|---|---:|
+| min | 49.328 ms |
+| mean | 50.046 ms |
+| p50 | 49.880 ms |
+| p99 / max | 56.362 ms |
+
+hidden finite、TP spread=0、进程 RC=0。相对 Wave5 p50 `49.796 ms`，
+变化为 `+0.17%`，处于噪声范围；因此本轮只能声明 task graph 的泛化性和
+correctness 改进，不能用该次数据声明 bs1 整网 latency 收益。
+
+最新源码 immutable 镜像：
+
+```text
+tag      stepfun-develop-20260806-attn-taskmajor-canonical
+manifest sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479
+config   sha256:a6095ba550aa8207e66a10ad2e8923d120af957c9e014349d26915d7ba33d216
+```
+
+| metric | immutable ITL |
+|---|---:|
+| min | 39.057 ms |
+| mean | 39.594 ms |
+| p50 | 39.612 ms |
+| p99 / max | 40.680 ms |
+
+保存的 hidden shape 为 `[8,16,4096]`，全 finite，active row 和全 capacity 的
+TP max spread 都为 `0.0`，进程 RC=0。相对 Wave5 p50 下降 `20.45%`；
+但 `c9af5790` 的 parent 同时包含最新 MoE 等整栈改动，**不能把 10.184 ms
+全部归因于 attention delta**。
+
+artifact：
+
+```text
+/mnt/persist/chensiyu/workspace/attn-opt/out/
+image_attn_taskmajor_canonical_20260806_c9af5790_3eb694e0/
+bs1_ctx65536_whole_net_itl/
+```
+
+### 14.3 整网 bs16、每请求64K
+
+运行严格使用每个 request 独立 64K，而不是总 context=64K：
+
+```text
+active_batch = 16
+context_len = 65536 for every row
+num_blocks = 16 * 512 = 8192
+```
+
+整网 compile 成功，但 prewarm 前每卡已占约 `52,013 MiB`：
+
+| component | 每卡占用 |
+|---|---:|
+| KV pool | 22.541 GiB |
+| weight pool | 24.857 GiB |
+| runtime 申请的 pooled static arena | 17,179,870,207 bytes（约16 GiB） |
+
+随后 `rtMalloc` 返回 `207001`，`ensure_static_arenas` 失败。该失败发生在
+kernel 执行前，不是 attention task-grain、数值或依赖错误；当前 64 GiB 卡无法在
+标准 runtime-memory 配置下同时容纳已有工作集和该 static arena。因此：
+
+- **没有有效 bs16 整网 ITL**，不得用两层 attention p50 代替；
+- ring heap `4→2 GiB` / task window `131072→65536` 的容量 A/B 已按要求暂停；
+- 暂停后 container 和 8–15 卡进程均已清理。
+
+失败 artifact：
+
+```text
+whole_net_bs16_each_ctx65536_current_1ea76e0f_a2a3_20260806/
+```
+
+### 14.4 当前准出边界
+
+两层 attention 的 bs1/2/4/8/16/7、每请求64K matrix 已完成；整网当前只有
+bs1 有有效 ITL，bs16 是容量失败，bs2/4/8/7 尚未在 `c9af5790` 上完成整网复验。
+
+`c9af5790` 已是 Git 权威源码，并已完成 current-source immutable BS1×64K
+ITL/DFX gate。该镜像尚未重跑 Wave5 的 Main N=128×3、Main batch16、MTP
+batch1/16 等完整 production matrix，因此不能自动继承 Wave5 的完整
+release-qualified 标签。历史 R1/R2 已 supersede，完整记录见
+[`../../benchmark/2026-08-05-attention-canonical-r1-r2.md`](../../benchmark/2026-08-05-attention-canonical-r1-r2.md)。
+
+### 14.5 latest-source immutable 两层 DFX
+
+同一 manifest 的 BS1×64K 前两层结果：
+
+```text
+two-layer min/mean/p50/p99/max =
+3.5238/3.9131/3.6323/10.1127/13.8748 ms
+reference exact = true
+max_abs_diff = 0
+hidden TP spread = 0
+swimlane ranks = 8/8
+```
+
+Full workload-derived QK/softmax/SV-online logical tasks 为 `24/32/24`。生成
+`chip_orch.cpp` 中没有 Pass-A/B/C 和 Full/SWA standalone out-proj cast。
+LOW-WAIT 为 `rank2/d0`，makespan `690.1 us`、TP all-reduce span-sum
+`176.24 us`；其它 rank 的数百毫秒 span 是 DFX collective peer-arrival spin
+wait，不能代替 50 次 wall-clock timing。
+
+LOW-WAIT swimlane：
+
+```text
+/mnt/persist/chensiyu/workspace/attn-opt/out/
+image_attn_taskmajor_canonical_20260806_c9af5790_3eb694e0/
+bs1_ctx65536_two_layer_dfx/build_output/
+TwoLayerAttnPerf_20260806_090839/dfx_outputs/
+rank2/d0/l2_swimlane_records.json
+```
+
+完整审计与 artifact 见
+[`../../benchmark/2026-08-06-attention-taskmajor-canonical.md`](../../benchmark/2026-08-06-attention-taskmajor-canonical.md)。

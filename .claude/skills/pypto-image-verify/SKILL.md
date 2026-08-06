@@ -15,8 +15,11 @@ description: >
 > 3 步确认可用**:① 冒烟(镜像+native 库加载)② 整网 decode 精度(canonical)。
 > 完整构建/部署文档:[`deployment/docker/README.md`](../../../deployment/docker/README.md)。
 >
-> **状态边界（2026-08-05）**：默认验证对象仍是 Wave5 release-qualified digest。
-> R1 已废弃；R2 build 已暂停且没有 digest，不能验证或宣称可用。
+> **状态边界（2026-08-06）**：完整 production matrix 的默认验证对象仍是
+> Wave5 release-qualified digest。latest-source Attention/ITL/DFX 对象是
+> `stepfun-develop-20260806-attn-taskmajor-canonical@sha256:3eb694e…`，但它尚未
+> 重跑完整 Main/MTP matrix。先按 [`deployment/version-matrix.md`](../../../deployment/version-matrix.md)
+> 选择目标并固定 manifest；历史 R1/R2 不得恢复。
 
 镜像自包含(pypto 栈 + runtime .so + ptoas + vLLM Track-B 补丁 + CANN beta.1),**不需要**
 宿主装 pypto;宿主只需满足 driver/firmware/CANN 硬前提 + 有 containerd/nerdctl。
@@ -121,7 +124,7 @@ sudo $NC run --rm --net host --ipc host --privileged --security-opt apparmor=unc
 ```
 
 Wave5 镜像内 pypto-lib pin 为 `7099476b`，只保留一个 Main。当前 GitHub
-`stepfun/develop` 已前进到 `91c7f46e`，不能把 branch tip 当作 Wave5 镜像内容。
+`stepfun/develop` 已前进到 `c9af5790`，不能把 branch tip 当作 Wave5 镜像内容。
 
 ```text
 models.step3p5.decode_fwd:whole_decode_step3p5

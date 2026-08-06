@@ -5,13 +5,13 @@
 > SSOT）；此刻状态在 [`../STATUS.md`](../STATUS.md)；接力上下文在
 > [`handoff.md`](handoff.md)。想讲进度给别人听 → 看本文。
 >
-> **2026-08-05 current-source override**：当前源码为
-> `pypto-lib stepfun/develop@91c7f46ee949045e2fce807276412b48d8121763` 与
-> `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。clean
-> Wave5 immutable 的 audit/smoke/Main+MTP compile、Main N=128×3、Main batch16、
-> MTP batch1/batch16×2、64K/batch16 ITL/DFX 已通过；N=128 三轮均
-> `123/128` 且 TP spread=0，64K p50 `49.796 ms`，仍是最后一个
-> **0162 release-qualified** 镜像。R1 已废弃，R2 build 已暂停且未验证。
+> **2026-08-06 current-source override**：当前源码为
+> `pypto-lib stepfun/develop@c9af5790d5fe450e14fd43c88099b87539089d17` 与
+> `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。
+> latest-source canonical image manifest `sha256:3eb694e…` 已通过 BS1×64K
+> Attention/ITL/DFX gate（整网 p50 `39.612 ms`）；Wave5 仍是最后一个完成
+> Main N=128×3、Main batch16、MTP batch1/16 等全量 matrix 的 production
+> release-qualified 回退基线。历史 R1/R2 已 supersede。
 > 其它机器/架构仍需独立 gate。下方 B2/Phase 28 的
 > 2026-07-26 状态保留为历史里程碑，当前准出以
 > [`../STATUS.md`](../STATUS.md) 与 [`../blockers.md`](../blockers.md) 为准。
@@ -53,7 +53,7 @@ graph TD
 
 - **当前形态**：单个 `@pl.program`，45 层 loop-form Main，TP=8/EP=8，
   native W8A8；0724 hidden-only unroll baseline 仅作显式 rollback。
-- **已达成**：当前源码已前进到 `pypto-lib stepfun/develop@91c7f46e`；
+- **已达成**：当前源码已前进到 `pypto-lib stepfun/develop@c9af5790`；
   正式路径仍为 `models.step3p5.decode_fwd:whole_decode_step3p5`；0162 的 0726 历史发布镜像内
   N=256 清理前后 token/hidden `256/256` exact、`max_abs_diff=0`、
   TP spread `0.0`。

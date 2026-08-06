@@ -13,7 +13,8 @@ description: >
 > 目标：**用户拿到一台硬件 → 拉仓库 → 按本文步骤把 pypto 运行时装到能跑
 > smoke + 多卡 allreduce + 单卡 ST**。每步都给"正确做法 + 高频踩坑"。
 > 默认参照 `gpu-a910x-0162` 上最后一个 release-qualified 的 Wave5 pins。
-> 2026-08-05 R2 是开发候选，build 已暂停且未验证，不能当 release 环境安装。
+> 2026-08-06 latest-source image 已通过 BS1×64K Attention/ITL/DFX gate，但尚未
+> 重跑完整 Main/MTP matrix；历史 R1/R2 已 supersede，不能当 release 环境安装。
 >
 > **权威出处（出问题先查这几篇）**：
 > - 版本硬绑定：[`deployment/phase16-three-pillars.md`](../../../deployment/phase16-three-pillars.md)
@@ -151,8 +152,9 @@ git -C PTOAS checkout fc8c6caee561914b4fb991dfc8427bb63194269e
 | PTOAS (src) | `fc8c6cae` |
 | ptoas-bin | `v0.50`（binary，见 Step 5） |
 
-当前开发源码为 pypto `8e92b468` / pypto-lib `91c7f46e`，只用于 R2
-开发验证；在 R2 获得 digest 和 immutable gate 前，不替换上表 release profile。
+当前开发源码为 pypto `8e92b468` / pypto-lib `c9af5790`；对应 immutable image
+manifest `sha256:3eb694e…` 已完成 BS1×64K Attention/ITL/DFX gate。它与上表
+Wave5 full-matrix release profile 是两个测试对象，不能混装或继承验证结论。
 
 > **踩坑**：
 > - **只拉 pypto-lib 不构成同一测试对象**——pypto 的 `StackedDeviceTensor`/`import_ipc_all`、simpler 的 forked-child ACL IPC import、runtime build 产物缺一都跑不通。5 仓要一起对齐。

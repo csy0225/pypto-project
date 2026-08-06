@@ -6,7 +6,7 @@
 
 ## 目录
 
-1. [适用范围与当前结论](#1-适用范围与当前结论)
+1. [适用范围与案例结论](#1-适用范围与案例结论)
 2. [最终 workload 与任务模型](#2-最终-workload-与任务模型)
 3. [Full 与 SWA 的最终任务图](#3-full-与-swa-的最终任务图)
 4. [task-grain 校准经验](#4-task-grain-校准经验)
@@ -17,9 +17,9 @@
 9. [验证与收尾证据](#9-验证与收尾证据)
 10. [负面结果清单](#10-负面结果清单)
 
-## 1. 适用范围与当前结论
+## 1. 适用范围与案例结论
 
-权威对象：
+本案例冻结对象：
 
 ```text
 pypto-lib perf/attn-rope-taskmajor-lifetime-20260805
@@ -33,17 +33,17 @@ machine/profile
   0162 / Ascend A2A3 / PYPTO_STEP3P5_ATTN_TASK_PROFILE=a2a3
 ```
 
-当前可以下的结论：
+该轮案例可以下的结论：
 
-> 针对当前 Step3p5、0162/A2A3 profile，attention/Vec 优化本体以及 TP
-> all-reduce 稳定性已经收尾；当前证据不支持新的 canonical attention 候选。
+> 针对该 Step3p5 snapshot、0162/A2A3 profile，attention/Vec 优化本体以及 TP
+> all-reduce 稳定性已经收尾；该轮证据不支持继续增加 attention 候选。
 
 这不表示其它架构或未来 backend 没有空间。换架构后必须重新做 task-grain、
 tile、resource mapping、batch 和 immutable gate。
 
-镜像边界：Wave5 仍是最后一个 0162 release-qualified 镜像；2026-08-05 R1
-已废弃，R2 build 已暂停且尚无 digest/最终 DFX/整网 ITL。源码结论不能自动升级
-为镜像准出结论。
+通用边界：源码 A/B、focused harness、immutable image 和完整 production matrix
+是不同证据层级。任何性能结论都要注明来自哪一层；源码结论不能自动升级为镜像或
+production 准出结论。具体版本状态不写入 skill，执行时读取项目 SSOT。
 
 ## 2. 最终 workload 与任务模型
 

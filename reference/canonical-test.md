@@ -19,13 +19,14 @@ KV      = resident per-layer KV + runtime metadata
 当前源码 tip：
 
 ```text
-pypto-lib 91c7f46ee949045e2fce807276412b48d8121763
+pypto-lib c9af5790d5fe450e14fd43c88099b87539089d17
 pypto     8e92b46808f9f7c09b6431ad4691503f09c12ee5
 ```
 
-最后一个 release-qualified 镜像仍是 Wave5，镜像内源码为 pypto-lib `7099476b` /
-pypto `defa97c5`。R1 已废弃，R2 build 暂停且未验证。**源码 tip 与 release 镜像
-必须分开报告。**
+latest-source image manifest `sha256:3eb694e…` 已通过 BS1×64K ITL/DFX gate。
+最后一个完成全量 production matrix 的回退基线仍是 Wave5，镜像内源码为
+pypto-lib `7099476b` / pypto `defa97c5`。历史 R1/R2 已 supersede。
+**源码 tip、latest-source partial gate 与 full-matrix release 必须分开报告。**
 
 ## 2. 精度 gate
 
@@ -124,17 +125,18 @@ manifest/config digest
 ```
 
 prepared-worker swimlane 必须先生成依赖图，再在同 worker 上进行 timing-only dispatch；
-R2 使用 `l2_swimlane_reuse_dep_gen`。没有最终 `l2_swimlane_records.json` 就不能宣称
-DFX gate 完成。
+当前 pypto `8e92b468` 使用 `l2_swimlane_reuse_dep_gen`。没有最终
+`l2_swimlane_records.json` 就不能宣称 DFX gate 完成。
 
-## 6. 2026-08-05 当前准出状态
+## 6. 2026-08-06 当前准出状态
 
 ```text
-Wave5 = RELEASE-QUALIFIED ON 0162
-R1    = REVOKED
-R2    = BUILD PAUSED / UNPUBLISHED / UNVERIFIED
+latest-source c9af image = BS1×64K ATTENTION/ITL/DFX PASS ON 0162
+Wave5                    = FULL PRODUCTION MATRIX PASS ON 0162
+R1                       = REVOKED
+R2                       = NEVER PUBLISHED / SUPERSEDED
 ```
 
-R2 恢复后固定顺序：串行 build/audit → digest-only 两层 bs1/64K DFX → 同 digest
-整网 50 次 ITL。完整路径和约束见
-[`../planning/handoff.md`](../planning/handoff.md)。
+当前 digest、ITL、swimlane 路径和剩余 full-matrix gate 见
+[`../benchmark/2026-08-06-attention-taskmajor-canonical.md`](../benchmark/2026-08-06-attention-taskmajor-canonical.md)
+与 [`../planning/handoff.md`](../planning/handoff.md)。

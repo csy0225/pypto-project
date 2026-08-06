@@ -49,12 +49,14 @@ gap-5、scheduler-timeout、attention 乱码、G5b import_ipc、swa_moe const-fo
 
 ## 🔴 ACTIVE — Phase 28 live serving：per-layer KV bridge + 3-way HBM / redundant weights
 
-**当前代码边界（2026-08-05）**：
-`pypto-lib stepfun/develop@91c7f46ee949045e2fce807276412b48d8121763`
+**当前代码边界（2026-08-06）**：
+`pypto-lib stepfun/develop@c9af5790d5fe450e14fd43c88099b87539089d17`
 与 `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`
 只保留 `models.step3p5.decode_fwd:whole_decode_step3p5`。C/D/G、BS1 correctness、
 Attention/Vec I1 与 Wave5 TP all-reduce stability 已合入；Wave5 在 0162
-release-qualified；R2 build 暂停且未验证。本节只描述 Phase 28 live serving
+完整 release-qualified。最新源码 canonical image manifest
+`sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479`
+已完成 BS1×64K ITL/DFX gate；旧 R2 已 supersede。本节只描述 Phase 28 live serving
 缺口，不再把 BS1 的旧
 `6127` 结果视为当前代码状态，也不把 0162 的结论外推到其它机器。
 `models/step3p5_opt`
@@ -87,10 +89,14 @@ Main module/name 参数；后续 blocker 定位只允许 canonical。
    resident per-layer KV 并完成多步回归；缺口是从真实 vLLM paged KV pool
    导入 per-layer BF16 slice，并按请求/step 传
    `block_table`/`slot_mapping`/`seq_lens` 与 dynamic batch metadata。
-2. **3-way HBM / redundant weights**：vLLM W8A8 常驻权重 + exporter 的 whole-net INT8
-   IPC 权重 + whole-net runtime working set 同时存在时，0162 live 报 `207001` OOM。
-   不是 standalone stall，也不是调小 ring heap 能解决；需消除 vLLM/exporter 重复权重，
-   或做等价 in-place/shared-weight 方案。
+2. **HBM 容量有两个独立口径**：
+   - live 3-way：vLLM W8A8 常驻权重 + exporter whole-net INT8 IPC 权重 +
+     runtime working set 同时存在时，0162 报 `207001`；需消除重复权重或做等价
+     in-place/shared-weight 方案；
+   - standalone bs16×每请求64K：KV pool `22.541 GiB/卡`、weight pool
+     `24.857 GiB/卡`，prewarm 前约 `52,013 MiB/卡`，再申请约 16 GiB pooled
+     static arena 时 `207001`。该口径没有 live 重复权重，也尚无有效整网 ITL；
+     ring-heap/task-window 容量 A/B 已暂停，不能与 live 3-way 根因混写。
 3. **独立 live front + 同代 MTP absolute gate**：sidecar 默认 canonical Main wiring 已完成，
    但真实 online request 接管、current Main 输出进入 MTP 后的 absolute
    token/hidden oracle 尚未闭环。

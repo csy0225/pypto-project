@@ -7,13 +7,15 @@
 
 ---
 
-> **⚠ 2026-08-05 current-source override**：attention/Vec 产品实现权威 pin 为
-> `pypto-lib stepfun/develop@91c7f46ee949045e2fce807276412b48d8121763` 与
+> **⚠ 2026-08-06 current-source override**：attention/Vec 产品实现权威 pin 为
+> `pypto-lib stepfun/develop@c9af5790d5fe450e14fd43c88099b87539089d17` 与
 > `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。Wave5
 > 以 self-target TPUT 发布 source partial，并保持既有三波 lifetime；immutable
 > audit/smoke/Main+MTP compile、Main N=128×3、Main batch16、MTP batch1/batch16×2、
-> 64K/batch16 ITL/DFX 均通过，仍是最后一个 **0162 release-qualified** 镜像。
-> R1 已废弃；R2 build 暂停且未发布/验证。下方历史 override 不覆盖 I1/I2。
+> 64K/batch16 ITL/DFX 均通过，是最后一个完整 production release-qualified
+> 回退基线。当前 latest-source canonical image manifest `sha256:3eb694e…`
+> 已通过 BS1×64K ITL/DFX gate；历史 R1/R2 已 supersede。下方历史 override
+> 不覆盖 I1/I2。
 
 > **历史 2026-07-28 release override**：active base =
 > **`stepfun/develop @ 563fe62a`**。唯一 release Main 为
