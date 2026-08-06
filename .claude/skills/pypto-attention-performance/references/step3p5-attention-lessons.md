@@ -22,8 +22,9 @@
 权威对象：
 
 ```text
-pypto-lib stepfun/develop
-  91c7f46ee949045e2fce807276412b48d8121763
+pypto-lib perf/attn-rope-taskmajor-lifetime-20260805
+  1ea76e0f2d3e6c132198dc6214034968daeaf2f2
+  base stepfun/develop@56b3d477953ab1e2df87213aef3a536c64051dcc
 
 pypto stepfun/develop
   defa97c526fec7e8f032dbbfcc39c820add02bf7
@@ -79,7 +80,7 @@ A2A3 资源按：
 | Q physical pad | 16 | 24/32 |
 | head dim | 128 | 128 |
 | KV storage block | 128 tokens | 128 tokens |
-| 最大有效 KV blocks | context 决定；64K 为 512 | window 512，即最多约 4 |
+| 最大有效 KV blocks | context 决定；64K 为 512 | window 512：aligned=4，unaligned≤5 |
 | storage batch capacity | 默认 16；编译时可配置，已验证 32 | 默认 16；编译时可配置，已验证 32 |
 
 默认 `BATCH=16` 是 capacity；实际 logical tasks 由 active rows 和每行真实
@@ -90,7 +91,7 @@ profile 选择是显式的：
 
 ```text
 portable (默认): QK/softmax/online=22/12/16，reduce fan-in=8，uniform O(1)=0
-a2a3:            QK/softmax/online=22/12/22，reduce fan-in=8，四项 uniform O(1)=1
+a2a3:            QK/softmax/online=22/16/22，reduce fan-in=8，四项 uniform O(1)=1
 ```
 
 `--platform a2a3` 不会隐式选择 attention profile。做 A2A3 release A/B 时必须设置
@@ -103,7 +104,9 @@ fan-in 及四个 uniform-O(1) 单项 override；否则单项环境变量优先�
 ### 3.1 Full
 
 ```text
-full_qk_matmul
+full_rope_q ───────────────┐
+                           ├─> full_qk_matmul
+full_rope_kv_cache ────────┘
 -> full_softmax
 -> full_sv_matmul
    # SV + segment-local online recurrence
@@ -125,12 +128,19 @@ full_out_proj_cast
 历史 Pass-A 已并入 `full_sv_matmul`。`reduce` 和 `finalize` 仍是跨 task
 partial 的必要 RAW/liveness 边界。
 
+两个 RoPE producer 都按 `spmd(active_rows)` 一次提交，QK 显式依赖两个
+TaskId。DFX 应同时检查 logical blocks 随 workload 增长、producer
+`invocation_count=1`；不能只看 QK/SV 是否已经 task-major。
+
 ### 3.2 SWA
 
-SWA window 最多约 4 个 KV blocks，保持 row-oriented 高密度任务：
+SWA 的 512-token window 在 aligned 边界覆盖 4 个 KV blocks、unaligned
+边界最多覆盖 5 个，保持 row-oriented 高密度任务：
 
 ```text
-swa_qk_matmul
+swa_rope_q ───────────────┐
+                         ├─> swa_qk_matmul
+swa_rope_kv_cache ───────┘
 -> swa_softmax
 -> swa_sv_matmul
 -> swa_online_softmax
@@ -160,8 +170,9 @@ QK/softmax/online grain 24/12/24:
 ```
 
 `24/12/24` 的 device makespan 曾优于 `16/12/16`，证明“单 task 越接近
-5–10 us 越好”不成立。随后三轮稳定性中，`22/12/22` 与 `24/12/24`
-差异已接近噪声；显式 A2A3 profile 最终选择 `22/12/22`。
+5–10 us 越好”不成立。随后 QK/online 的 22 与 24 在重复稳定性中已接近
+噪声，block-softmax 又独立比较 12 与 16。显式 A2A3 profile 最终选择
+`22/16/22`，不能把旧的三项联动 sweep 当成最终 profile。
 
 ### 4.2 SV + segment recurrence
 
@@ -183,32 +194,35 @@ SV segment work
 | 16 | 约 19 us | 32 / 1（当时 Pass-A/AIV 口径） | 五轮 reference median 最优约 0.7 us |
 
 该结果促成 portable fallback 使用 online grain=16。完成 TaskId chain、task-major
-uniform O(1) mapping 和 fixed-total-context 多 batch 复测后，0162 的显式 A2A3
-profile 改为 online grain=22、reduce fan-in=8。这个结论来自整条依赖链，不可用
+uniform O(1) mapping 和 per-request-64K 多 batch 复测后，0162 的显式 A2A3
+profile 使用 online grain=22、reduce fan-in=8。这个结论来自整条依赖链，不可用
 旧 QK/SV standalone sweep 或单轮最低值机械覆盖。
 
 ### 4.3 batch 与异构 context
 
 异构两行 `65536 / 8192` 的 task 数等于逐 row `ceil` 求和，而不是按最大
-context 给两行铺满。最终 A2A3 profile 在 **fixed-total-context=64K** 下的结果为：
+context 给两行铺满。最终要求的 batch matrix 使用**每个 request 都为 65536**：
 
-| active batch | per-row context | 两层 p50 |
-|---:|---:|---:|
-| 1 | 65536 | 3.7839 ms |
-| 4 | 16384 | 3.7675 ms |
-| 8 | 8192 | 3.7599 ms |
-| 12 | 5504 / 5376 | 3.8710 ms |
-| 16 | 4096 | 3.9480 ms |
-| 32 | 2048 | 4.8368 ms |
+| active batch | 每 request context | QK / softmax / online tasks | fresh-process 两层 p50 |
+|---:|---:|---:|---:|
+| 1 | 65536 | 24 / 32 / 24 | 3.5837 ms |
+| 2 | 65536 | 48 / 64 / 48 | 5.0313 ms |
+| 4 | 65536 | 96 / 128 / 96 | 3.9684 ms |
+| 8 | 65536 | 192 / 256 / 192 | 4.2073 ms |
+| 16 | 65536 | 384 / 512 / 384 | 4.7132 ms |
+| 7 | 65536 | 168 / 224 / 168 | 4.1188 ms |
 
-batch16 另做 200 measured iterations：p50 `3.9192 ms`、p99 `7.4785 ms`、
-max `11.7102 ms`，每轮输出 `unique_count=1`、exact、finite、TP spread=0。
-少量 p99/max 长尾属于系统/collective 到达抖动，不能据此引入 batch-aware 数学分支。
+六个独立进程都与最终 matrix bitwise exact replacement，finite、TP spread=0、
+逐迭代 `unique_count=1`。另有 linear/reverse 20-iteration matrix 覆盖输入交替、
+inactive-row、Q publication 与 device KV slot/readback。bs2 的 host p50 会受
+collective 到达状态影响，不能据此增加 batch-aware attention 数学分支。
 
 经验：
 
 - capacity 不等于 workload；
-- batch16 必须验证；capacity 扩到 32 后还要重新检查 task-count、tile 和内存边界；
+- 多 batch 长 context 必须明确“每 request 64K”，不能用“总 context 64K”替代；
+- batch16 必须验证；capacity 扩到 32 后还要重新检查 task-count、tile、RoPE
+  grid dependency 和内存边界；
 - 服务 workload 改变时，应补多轮 profile，再生成独立 architecture/workload profile。
 
 ## 5. online softmax 的融合边界
@@ -256,6 +270,10 @@ cast fusion        = 1
 
 cast fusion 删除了 standalone GM round-trip，correctness 通过；整网 latency
 收益处于中性/噪声级，因此它是数据流清理和当前 profile 选择，不是跨架构定律。
+
+out-proj task 沿输出 N tiles 切分，但 batch 外层仍按静态
+`BATCH_TILE=16` capacity 执行；不要把 Full context stages 的
+workload-derived mapping 外推成“整个 attention 已无 inactive-row work”。
 
 ### 6.2 未合入的融合
 
@@ -350,32 +368,53 @@ focused harness -> 参数筛选与机制证明
 canonical whole-net -> 数值、跨 rank、端到端和发布判断
 ```
 
-最新 bs16/64K DFX（rank2 是本轮 LOW-WAIT reference）：
+最终每请求 64K DFX：
+
+| bs | LOW-WAIT rank | makespan | TP all-reduce span-sum | QK / softmax / SV |
+|---:|---|---:|---:|---:|
+| 1 | rank2 | 687.2 us | 168.44 us | 16.00 / 17.36 / 31.54 us |
+| 7 | rank1 | 1143.8 us | 178.96 us | 142.76 / 79.32 / 168.54 us |
+| 16 | rank2 | 1642.8 us | 180.06 us | 311.12 / 161.88 / 379.52 us |
 
 ```text
 /mnt/persist/chensiyu/workspace/attn-opt/out/
-attn_a2a3_profile_64k_bs16_dfx_8_15_50x_20260805/
-build_output/TwoLayerAttnPerf_20260805_072659/
-dfx_outputs/rank2/d0/l2_swimlane_records.json
+rope_taskmajor_final_dfx_perrow64k_linear_bs{1,7,16}_s16_early_20260806/
 ```
 
-rank2 makespan 为 `1055.5 us`，四次 TP all-reduce 的 critical-path span 合计
-约 `185.24 us`。其它 rank 的数百毫秒 all-reduce 主要是 peer-arrival spin wait
-被计入 kernel duration，不能解释为通信算术时间。
+每个 RoPE producer 都是一次 invocation，logical blocks 随 active batch 为
+`1/7/16`。producer early-resolve 将 Full producer→QK 的全 rank 中位 gap 从
+`3.46/4.74/7.53 us` 降到 `0.93/3.46/5.06 us`，SWA 从
+`1.84/4.06/6.11 us` 降到 `0.77/1.99/4.14 us`。其它 rank 的数百毫秒
+all-reduce 主要是 peer-arrival spin wait，不能解释为通信算术时间。
 
 ## 9. 验证与收尾证据
 
 最终源码验证：
 
 ```text
-py_compile / git diff --check / English-only = PASS
-pytest = 218 passed, 3 skipped
+py_compile / git diff --check / differential Ruff = PASS
+skill quick validation = PASS
+pytest = 254 passed, 3 skipped
 ```
 
 compile-only 不能只看编译返回码。harness 会读取真实生成的
 `orchestration/chip_orch.cpp`，验证 Full/SWA 每个 stage 的动态 launch bound、
 launch/scalar SSA 一致性、TaskId publication 和完整依赖链；最终 checker 返回空错误
 列表。这样可阻止“Python 图有依赖、lowering 后依赖丢失”的假 PASS。
+
+最终真实设备门禁还包括：
+
+```text
+linear/reverse matrix:
+  bs=1/2/4/8/16/7, every request context=65536
+  alternating/inactive/Q-publication/device-KV audits PASS
+
+fresh-process:
+  six batches bitwise exact replacement, bad_ratio=0
+
+SWA direct oracle:
+  bs1 / ctx65535 / reverse table / five covered blocks PASS
+```
 
 此前 canonical whole-net release gate：
 
