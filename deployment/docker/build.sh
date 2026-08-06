@@ -14,10 +14,26 @@ SPEC=${1:-${SPEC:-builds/stepfun-develop-20260726-step3p5-only.env}}
 source "$SPEC"    # IMAGE_TAG + immutable source pins
 : "${IMAGE_TAG:?spec 缺 IMAGE_TAG}"
 BUILD_JOBS=${BUILD_JOBS:-2}
+ATTN_TASK_PROFILE=${ATTN_TASK_PROFILE:-portable}
+REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN=${REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN:-0}
 [[ "$BUILD_JOBS" =~ ^[1-9][0-9]*$ ]] || {
   echo "BUILD_JOBS 必须是正整数，当前值: $BUILD_JOBS"
   exit 1
 }
+case "$ATTN_TASK_PROFILE" in
+  portable|a2a3) ;;
+  *)
+    echo "ATTN_TASK_PROFILE 仅支持 portable/a2a3，当前值: $ATTN_TASK_PROFILE"
+    exit 1
+    ;;
+esac
+case "$REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN" in
+  0|1) ;;
+  *)
+    echo "REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN 必须是 0 或 1，当前值: $REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN"
+    exit 1
+    ;;
+esac
 
 GH=${GH:-/data/chensiyu/secrets/github.env}
 GL=${GL:-/data/chensiyu/secrets/gitlab.env}
@@ -40,9 +56,26 @@ if [ ! -f ptoas-bin.tgz ]; then
   tar czf ptoas-bin.tgz -C "$PTOAS_BIN_SRC" bin lib $([ -e "$PTOAS_BIN_SRC/ptoas" ] && echo ptoas)
   echo "[build] ptoas-bin.tgz = $(du -h ptoas-bin.tgz | cut -f1)"
 fi
+if [ -n "${PTOAS_BIN_SHA256:-}" ]; then
+  actual_ptoas_sha=$(
+    tar -xOzf ptoas-bin.tgz bin/ptoas | sha256sum | awk '{print $1}'
+  )
+  [ "$actual_ptoas_sha" = "$PTOAS_BIN_SHA256" ] || {
+    echo "ptoas payload SHA256 mismatch: expected=$PTOAS_BIN_SHA256 actual=$actual_ptoas_sha"
+    exit 1
+  }
+fi
+if [ -n "${PTOAS_BIN_ARCHIVE_SHA256:-}" ]; then
+  actual_ptoas_archive_sha=$(sha256sum ptoas-bin.tgz | awk '{print $1}')
+  [ "$actual_ptoas_archive_sha" = "$PTOAS_BIN_ARCHIVE_SHA256" ] || {
+    echo "ptoas archive SHA256 mismatch: expected=$PTOAS_BIN_ARCHIVE_SHA256 actual=$actual_ptoas_archive_sha"
+    exit 1
+  }
+fi
 
 echo "[build] SPEC=$SPEC  IMG=$IMG"
-echo "[build] pins: pypto=$PYPTO_COMMIT pypto-lib=$PYPTO_LIB_COMMIT pto-isa=$PTO_ISA_COMMIT PTOAS=$PTOAS_COMMIT simpler=$SIMPLER_COMMIT ptoas-bin=$PTOAS_BIN_VER attn-profile=${ATTN_TASK_PROFILE:-portable} build-jobs=$BUILD_JOBS"
+echo "[build] pins: pypto=$PYPTO_COMMIT pypto-lib=$PYPTO_LIB_COMMIT pto-isa=$PTO_ISA_COMMIT PTOAS=$PTOAS_COMMIT simpler=$SIMPLER_COMMIT ptoas-bin=$PTOAS_BIN_VER"
+echo "[build] profile: attention=$ATTN_TASK_PROFILE build-jobs=$BUILD_JOBS l2-swimlane-reuse-required=$REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN"
 
 # github clone 需经宿主可达的代理; 优先官方入口 (deploy.i.shaipower.com/httpproxy),
 # 拿不到回落 Dockerfile 内置默认。内网 (pip/gitlab/hub) 直连不走代理。
@@ -64,8 +97,9 @@ DOCKER_BUILDKIT=1 docker build \
   --build-arg PTOAS_COMMIT="$PTOAS_COMMIT" \
   --build-arg SIMPLER_COMMIT="$SIMPLER_COMMIT" \
   --build-arg PTOAS_BIN_VER="$PTOAS_BIN_VER" \
-  --build-arg ATTN_TASK_PROFILE="${ATTN_TASK_PROFILE:-portable}" \
+  --build-arg ATTN_TASK_PROFILE="$ATTN_TASK_PROFILE" \
   --build-arg BUILD_JOBS="$BUILD_JOBS" \
+  --build-arg REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN="$REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN" \
   --build-arg VLLM_PATCH_BRANCH="$VLLM_PATCH_BRANCH" \
   --build-arg VLLM_PATCH_COMMIT="$VLLM_PATCH_COMMIT" \
   "${PROXY_ARGS[@]}" \

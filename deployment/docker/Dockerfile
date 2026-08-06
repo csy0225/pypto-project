@@ -19,7 +19,8 @@ ARG PTOAS_COMMIT=fc8c6caee561914b4fb991dfc8427bb63194269e
 ARG SIMPLER_COMMIT=e2efebcbd190302609c0775d2984f409f5f42c76
 ARG PTOAS_BIN_VER=v0.50
 ARG ATTN_TASK_PROFILE=portable
-ARG BUILD_JOBS=1
+ARG BUILD_JOBS=2
+ARG REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN=0
 ARG VLLM_PATCH_BRANCH=csy/pypto-tail-mtp-integration
 ARG VLLM_PATCH_COMMIT=1b3e538c35999e62b6d24e0651b3a85b7d16c826
 ARG GH_PROXY=http://proxy.i.shaipower.com:3128
@@ -141,7 +142,25 @@ ENV PATH=${WS}/ptoas-bin/bin:/usr/local/python3.11.14/bin:/usr/local/Ascend/nnal
     CMAKE_PREFIX_PATH=/usr/local/Ascend/cann-9.0.0-beta.1/toolkit/tools/tikicpulib/lib/cmake:/usr/local/Ascend/cann-9.0.0-beta.1/lib64/cmake
 ENV PYPTO_PROG_BUILD_DIR=/tmp/pypto_build_output
 ENV PTO2_RING_HEAP=4294967296 PTO2_RING_TASK_WINDOW=131072 PTO2_RING_DEP_POOL=131072
-ENV PYPTO_STEP3P5_ATTN_TASK_PROFILE=${ATTN_TASK_PROFILE}
+ENV PYPTO_STEP3P5_ATTN_TASK_PROFILE=${ATTN_TASK_PROFILE} \
+    PYPTO_REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN=${REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN} \
+    PYPTO_IMAGE_PYPTO_COMMIT=${PYPTO_COMMIT} \
+    PYPTO_IMAGE_PYPTO_LIB_COMMIT=${PYPTO_LIB_COMMIT} \
+    PYPTO_IMAGE_PTO_ISA_COMMIT=${PTO_ISA_COMMIT} \
+    PYPTO_IMAGE_PTOAS_COMMIT=${PTOAS_COMMIT} \
+    PYPTO_IMAGE_SIMPLER_COMMIT=${SIMPLER_COMMIT} \
+    PYPTO_IMAGE_VLLM_PATCH_COMMIT=${VLLM_PATCH_COMMIT} \
+    PYPTO_IMAGE_PTOAS_BIN_VER=${PTOAS_BIN_VER} \
+    PYPTO_IMAGE_BUILD_JOBS=${BUILD_JOBS}
+LABEL com.stepfun.pypto.pypto-commit=${PYPTO_COMMIT} \
+      com.stepfun.pypto.pypto-lib-commit=${PYPTO_LIB_COMMIT} \
+      com.stepfun.pypto.pto-isa-commit=${PTO_ISA_COMMIT} \
+      com.stepfun.pypto.ptoas-commit=${PTOAS_COMMIT} \
+      com.stepfun.pypto.simpler-commit=${SIMPLER_COMMIT} \
+      com.stepfun.pypto.vllm-patch-commit=${VLLM_PATCH_COMMIT} \
+      com.stepfun.pypto.attention-profile=${ATTN_TASK_PROFILE} \
+      com.stepfun.pypto.l2-swimlane-reuse-required=${REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN} \
+      com.stepfun.pypto.build-jobs=${BUILD_JOBS}
 RUN for name in \
       PYPTO_STEP3P5_FULL_ATTN_QK_BLOCKS_PER_TASK \
       PYPTO_STEP3P5_FULL_ATTN_SOFTMAX_BLOCKS_PER_TASK \
@@ -171,5 +190,6 @@ RUN ln -sfn bin/ptoas ${WS}/ptoas-bin/ptoas && \
 
 WORKDIR ${WS}
 COPY pypto-smoke.sh /workspace/pypto-smoke.sh
+COPY pypto-image-audit.sh /workspace/pypto-image-audit.sh
 ENTRYPOINT ["/bin/bash", "-c", "source /usr/local/Ascend/ascend-toolkit/set_env.sh && source /usr/local/Ascend/cann-9.0.0-beta.1/share/info/ascendnpu-ir/bin/set_env.sh && source /usr/local/Ascend/nnal/atb/set_env.sh && exec \"$@\"", "--"]
 CMD ["/bin/bash", "-l"]
