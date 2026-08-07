@@ -1,6 +1,6 @@
 # 实时状态（STATUS）
 
-> **本文件只放当前真相，不保存流水或旧 pin。最后更新：2026-08-06。**
+> **本文件只放当前真相，不保存流水或旧 pin。最后更新：2026-08-07。**
 > 历史记录见 [`archive/`](archive/) 和 [`benchmark/`](benchmark/)；镜像组合见
 > [`deployment/version-matrix.md`](deployment/version-matrix.md)。
 
@@ -18,7 +18,7 @@
 
 | 仓库/组件 | 分支或 pin | 当前 commit | 状态 |
 |---|---|---|---|
-| pypto-lib | `csy0225/pypto-lib:stepfun/develop` | `c9af5790d5fe450e14fd43c88099b87539089d17` | workload-sized attention producer 已合入最新 MoE 基线；immutable ITL/DFX gate PASS |
+| pypto-lib | `csy0225/pypto-lib:stepfun/develop` | `63814d4ae62718b3c0721834878e4b4af4e7ac1b` | 远端 tip；修复 SWA sliding-window score mask；0162 source-overlay N=128 为 `127/128`、TP spread=0，最终 immutable image 待统一 commit 后发布 |
 | pypto | `csy0225/pypto:stepfun/develop` | `8e92b46808f9f7c09b6431ad4691503f09c12ee5` | prepared-worker immutable swimlane dep-gen reuse；`88 passed, 3 skipped` |
 | simpler | immutable pin | `e2efebcbd190302609c0775d2984f409f5f42c76` | 当前 canonical image pin |
 | pto-isa | immutable pin | `ecb6c303f797749f811a494742c3c08156aacabb` | 当前 canonical image pin |
@@ -34,7 +34,18 @@ models.step3p5.decode_fwd:whole_decode_step3p5
 
 ## 2. 镜像与验证状态
 
-### 当前 latest-source canonical image
+### 最终统一发布镜像（待构建）
+
+截至 2026-08-07，**没有 immutable image 包含**
+pypto-lib=`63814d4ae62718b3c0721834878e4b4af4e7ac1b`。按当前用户决定，本次只提交
+状态文档，不触发镜像构建；后续选定统一 release commit 后，再按标准镜像发布流程
+构建并执行完整回归。
+
+因此，下方两个 digest 都是 `c9af5790` 层级的 **pre-fix evidence**，不能标成
+当前源码的最终发布镜像，也不能把其 golden、性能或 DFX 自动升级为
+`63814d4a` 的准出结论。
+
+### 最近一次 Attention canonical image（pre-fix evidence）
 
 ```text
 tag:
@@ -44,8 +55,9 @@ manifest: sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde12547
 config:   sha256:a6095ba550aa8207e66a10ad2e8923d120af957c9e014349d26915d7ba33d216
 ```
 
-该镜像与 §1 当前源码一致。credential、五仓 pin、clean tree、CANN 8.5.1
-absence、prepared-swimlane `RunConfig` 和 A2A3
+该镜像绑定 pypto-lib=`c9af5790`，**不包含** §1 的 SWA mask 修复
+`63814d4a`。其 credential、五仓 pin、clean tree、CANN 8.5.1 absence、
+prepared-swimlane `RunConfig` 和 A2A3
 QK/softmax/online blocks-per-task=`22/16/22` profile 审计均 PASS。
 0162 digest-only、无源码/runtime overlay 验证：
 
@@ -58,9 +70,32 @@ QK/softmax/online blocks-per-task=`22/16/22` profile 审计均 PASS。
 完整记录：
 [`benchmark/2026-08-06-attention-taskmajor-canonical.md`](benchmark/2026-08-06-attention-taskmajor-canonical.md)。
 
-该镜像完成本轮 latest-source Attention/ITL/DFX gate，但尚未重跑 Wave5 的 Main
-N=128×3、Main batch16 和 MTP 全矩阵，不能自动继承完整 production
-release-qualified 标签。
+该镜像只完成 `c9af5790` 层级的 Attention/ITL/DFX gate；SWA mask 修复后，
+这些性能与 DFX 只能作 pre-fix 对照。它也未重跑 Wave5 的 Main N=128×3、
+Main batch16 和 MTP 全矩阵，不能自动继承完整 production release-qualified 标签。
+
+### L0–L4 MoE formal image（pre-fix evidence）
+
+```text
+hub.i.basemind.com/stepcast/vllm-pypto@sha256:
+  cab89668164cf85dc75e4f3ac53ef77ef4b8653767c7d147c5113cdee6a9d88c
+```
+
+该 digest 绑定 pypto-lib=`c9af5790`、pypto=`8e92b468`、attention profile=`a2a3`
+和 prepared-swimlane reuse capability。0162 的 focused normal A/B 已完成
+baseline/candidate × BS `1/2/4/7/8/16` × 3 轮，共 36/36 fresh-process run；
+每条 sequence 独立 `context_len=65536`。六档 L3/L4 hidden 跨轮 hash exact，
+性能均无回退。seal：
+
+```text
+/mnt/persist/chensiyu/workspace/moe-opt/tmp/moe-formal-c9af-20260806-v2/
+  campaign/normal_seal_authority.json
+SHA256 875804ddbb81b4f15a907e41e454ed3004aca3b56075063431edef5efc70c531
+```
+
+该 campaign 在 `c9af5790` 上已 seal，但 SWA mask 随 `63814d4a` 发生源码变化，
+因此旧 L3/L4 golden 与性能数据不能自动升级为最终 release evidence。统一发布
+commit 确定后，六档每请求独立 64K、双 hidden golden 和 A/B 必须在最终镜像上重跑。
 
 ### 最新完整 release-qualified 回退基线（Wave5）
 
@@ -77,13 +112,24 @@ Wave5 只对 0162 完整 release-qualified；其源码 pin 是 pypto `defa97c5`�
 
 ### 历史 2026-08-05 R1/R2（已 supersede）
 
-- R1 已撤销；R2 从未发布，且其 pypto-lib `91c7f46e` 已被 `c9af5790`
+- R1 已撤销；R2 从未发布，且其 pypto-lib `91c7f46e` 已被 `63814d4a`
   supersede。不得恢复 R2 或用其状态覆盖上面的当前镜像。
 - 历史记录：
 [`benchmark/2026-08-05-attention-canonical-r1-r2.md`](benchmark/2026-08-05-attention-canonical-r1-r2.md)。
 
 ## 3. Attention 当前判断
 
+- `63814d4a` 将 SWA tail-window mask 从 `pl.cmp` predicate 转换路径改为显式
+  typed INT32 数值区间 mask，避免 predicate 数值转换破坏 sliding-window
+  score mask。
+- 0162 使用 `cab896…` substrate + `63814d4a` 精确 source overlay 的 N=128
+  teacher-forced 回归为 `127/128=99.21875%`，唯一 miss 是
+  `step94 expected=478 actual=320`，`hidden_tp_spread_max=0.0`，已通过
+  `>=95%` source-level 精度门。证据：
+  `/mnt/persist/chensiyu/workspace/moe-opt/tmp/moe-precision-fix-20260807-v2/runs/Lmask-v1-n128/summary.json`
+  （SHA256 `7f91dcdb…`）。
+- source-level PASS 不等于 immutable-image PASS；最终镜像上的精度、性能和 DFX
+  仍需重跑，当前不能宣称 SWA 修复无性能回退。
 - Full/SWA 核心计算中主要可避免的调度 bubble 已闭环；logical task 按 workload
   和 architecture profile 推导，不固定 24 个物理核。
 - Full/SWA RoPE producer 已改为 workload-sized 单次 SPMD submit，QK 显式依赖
@@ -92,9 +138,9 @@ Wave5 只对 0162 完整 release-qualified；其源码 pin 是 pypto `defa97c5`�
 - Full Pass-A 已并入 SV；只保留必要的 online-softmax reduce/finalize。
 - Full/SWA out-proj cast 均融合。
 - 已证伪或无稳定收益的 AR+residual、residual+RMS、RMS+projection 等方案不合入。
-- focused 两层矩阵已覆盖 bs1/2/4/8/16/7、每请求64K；当前 immutable 镜像
+- pre-fix focused 两层矩阵已覆盖 bs1/2/4/8/16/7、每请求64K；`c9af5790` 镜像
   两层 BS1 p50 `3.6323 ms`，输出 exact，DFX task count 为 `24/32/24`。
-- 当前 immutable 整网 BS1×64K p50 `39.612 ms`，相对 Wave5 下降 `20.45%`；
+- pre-fix immutable 整网 BS1×64K p50 `39.612 ms`，相对 Wave5 下降 `20.45%`；
   该比较跨越最新 MoE 等整栈改动，不能把全部收益归因于 Attention。
 - 整网 bs16×每请求64K 在 prewarm 前约 `52,013 MiB/卡` 的基础上申请约
   16 GiB static arena，`rtMalloc 207001`；没有有效 bs16 ITL。
@@ -104,22 +150,48 @@ Wave5 只对 0162 完整 release-qualified；其源码 pin 是 pypto `defa97c5`�
 设计入口：
 [`design/performance/04-attention-optimization.md`](design/performance/04-attention-optimization.md)。
 
-## 4. 当前下一步
+## 4. MoE 当前判断
 
-1. 若提升为完整 production release，按 Wave5 同口径补 Main N=128×3、
+- 产品改动 `7928a275` 已是远端 `stepfun/develop@63814d4a` 的祖先。
+- 正式 candidate `decode_fwd.py` SHA256=`7884da7c…`；baseline
+  `56b3d477` SHA256=`3553664c…`。
+- `c9af5790` pre-fix 六档 focused normal A/B 与 L3/L4 hidden golden 已通过；
+  p50 改善分别为 `9.16/1.83/3.52/6.07/0.53/11.61%`，但最终镜像必须重跑。
+- matched-source whole-net baseline/candidate 的 1-step×2、2-step×2 共 8/8 run
+  均通过，输出分别为 `303` 和 `303,1207`；publication seal=`PASS`：
+  `.../whole-net-matched-ab-20260807T024525Z/publication_seal_report.json`
+  （SHA256 `c0a03127…`）。
+- J1 保持 🟦/NO-GO：source-overlay N=128 已通过，但 final immutable image
+  精度、六档 64K golden/A/B、formal matched-source DFX 12 runs、
+  route-aware reanalysis 和 all-rank swimlane 尚未完成。
+
+设计入口：
+[`design/performance/05-moe-optimization.md`](design/performance/05-moe-optimization.md)。
+
+## 5. 当前下一步
+
+1. 选定统一 release commit；本次状态文档提交不构建镜像。选定后按标准流程构建
+   包含 `63814d4a`（或其后继统一提交）的 immutable image。
+2. 在最终镜像上先完成 whole-net N=128 多步精度，再重跑 BS
+   `1/2/4/7/8/16`、每请求独立 64K、L3/L4 golden 与 counterbalanced A/B。
+3. 完成 MoE formal all-rank DFX/swimlane，并使用正式 analyzer source policy
+   `baseline=3553664c`、`candidate=7884da7c` fail-closed 重分析。
+4. 用 `pypto-image-verify` 与 `pypto-perf-regression` 对最终 immutable image
+   执行标准回归。
+5. 若提升为完整 production release，按 Wave5 同口径补 Main N=128×3、
    Main batch16、MTP batch1/16 和 smoke/precision matrix。
-2. BS16×每请求64K 必须先通过 runtime-memory 容量门禁；不能把 OOM 或两层数据
+6. BS16×每请求64K 必须先通过 runtime-memory 容量门禁；不能把 OOM 或两层数据
    写成整网性能。
-3. 新架构重新 sweep workload task grain；不能把 A2A3 blocks-per-task
+7. 新架构重新 sweep workload task grain；不能把 A2A3 blocks-per-task
    `22/16/22` 或物理核心数当作跨架构常量。
 
-## 5. 其它项目级 active work
+## 6. 其它项目级 active work
 
 真实 vLLM live front、paged-KV/dynamic batch、同代 Main→MTP absolute gate 和
 3-way HBM 仍未闭环；这些属于 serving 集成，不改变本轮 attention/R2 的准出顺序。
 旧 N1 standalone、0234 stall 和早期 pin 只保留为历史案例，不再列为当前源码状态。
 
-## 6. 机器状态口径
+## 7. 机器状态口径
 
 0162 是本轮验证机（driver `25.5.2` / firmware `7.8.0.7.220` /
 CANN `9.0.0-beta.1`）。ITL/DFX 完成后 container 已退出，16 张卡均无 NPU

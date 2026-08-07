@@ -1,28 +1,34 @@
 # Performance 性能优化专项
 
-> **2026-08-06 current-source override（优先于下方历史快照）**：当前源码为
-> `pypto-lib stepfun/develop@c9af5790d5fe450e14fd43c88099b87539089d17`，
+> **2026-08-07 current-source override（优先于下方历史快照）**：当前源码为
+> `pypto-lib stepfun/develop@63814d4ae62718b3c0721834878e4b4af4e7ac1b`，
 > 配套 pypto 为
 > `stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。
 > A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2 已完成；B3/J1 仍在进行。
-> latest-source canonical image `sha256:3eb694e…` 已通过 0162 BS1×64K
-> Attention/ITL/DFX gate；Wave5 是最后一个完成全量 Main/MTP matrix 的回退基线，
-> 历史 R1/R2 已 supersede。下方 2026-07-27 状态、65 ms 分账和旧依赖关系只作
-> 历史分析，不能覆盖
+> `63814d4a` 修复 SWA sliding-window score mask：将 `pl.cmp` predicate
+> 转换路径替换为 typed INT32 数值区间 mask。0162 source-overlay N=128 为
+> `127/128=99.21875%`、TP spread=0；唯一 miss 为
+> `step94 expected=478 actual=320`。当前没有包含 `63814d4a` 的 immutable image；
+> 镜像发布已推迟到统一 release commit 确定后。`sha256:3eb694e…` 与
+> `sha256:cab8966…` 都只作为 `c9af5790` pre-fix evidence；Wave5 仍是最后一个
+> 完成全量 Main/MTP matrix 的回退基线。下方 2026-07-27 状态、65 ms 分账和旧
+> 依赖关系只作历史分析，不能覆盖
 > [`task-tracking.md`](task-tracking.md) 的当前状态。
 >
-> **2026-08-06 L0–L4 focused MoE 集成进行中**：调优对象严格裁剪为
+> **2026-08-07 L0–L4 focused MoE 集成进行中**：调优对象严格裁剪为
 > `L0 Full+dense → L1/L2 SWA+dense → L3 SWA+MoE → L4 Full+MoE`，且 L4
-> 消费真实 L3 输出。产品代码已随 `7928a275` 进入上述 `c9af5790`：将 routed
+> 消费真实 L3 输出。产品代码 `7928a275` 已是上述 `63814d4a` 的祖先：将 routed
 > fused gate/up 拆为独立 gate、up 和 activation，
 > 使用 `row=16, K=512, N=64`，并将 down 设为 `N=256`；L43/L44 specialization
-> 保持原配置。2026-08-04 旧源码 campaign 在 0162 cards `8–15` 上，同口径
-> `5 warmup + 30 measured` p50
-> `12.1777→10.7677 ms`（**-11.58%**），两套输入的完整 `hidden_l3/hidden_l4`
-> 均 BF16 bit-exact、finite、TP spread=0。gate/up AIC p50 从约 `144 µs`
-> 降到 `12.7–12.9 µs`。这些数据只作候选选择依据；J1 需在新 canonical 镜像上完成
-> BS `1/2/4/7/8/16`、每请求独立 `context_len=65536`、双 hidden golden 和
-> all-rank DFX 后才能转为完成态。该结论不是 whole-net 或 L43/L44 发布结论；
+> 保持原配置。pre-fix digest `sha256:cab8966…` 上，BS `1/2/4/7/8/16`、每请求独立
+> `context_len=65536` 的 36 个 fresh-process run 已 seal；三轮 p50 分别改善
+> `9.16/1.83/3.52/6.07/0.53/11.61%`，完整 `hidden_l3/hidden_l4` 跨轮 hash
+> exact，六档无性能回退；但 SWA mask 已变化，旧 golden/性能不能自动升级为
+> 最终 release evidence。matched-source whole-net 的 1-step×2、2-step×2 已
+> 8/8 sealed PASS；source-overlay N=128 已过线。J1 仍需在最终 immutable image
+> 上重跑六档 64K、双 hidden、N=128，并完成 formal matched-source DFX、
+> route-aware reanalysis 与 all-rank swimlane。该结论不是 whole-net 或 L43/L44
+> 发布结论；
 > 详见 [`05-moe-optimization.md`](05-moe-optimization.md)。
 
 > **2026-07-27 当前目标快照**：已完成并保留完成态的优化为 **A1、B1、B2**。
@@ -89,7 +95,7 @@ producer → 数学变换/quant/route-map → transport/window
 | **PERF-H1** | retained window 清零：host 搬零 → device `aclrtMemset` | H host per-step | **P0** | ✅ 清零 `21.50→2.21 ms`、ITL p50 `85.02→65.55 ms`（−22.9%）、每步 H2D `244.7 MiB→0`；语义等价 | A1 | S (~1d) |
 | **PERF-H2** | per-rank 视图重建 hoist 到 `prepare()`（= 跨卡起跑阶梯病根） | H host per-step | P1 | submit 3.49 ms 的大部分；起跑阶梯实测 2.914 ms。**v4-flash 同形状**，属 codegen 通用改进 | H1 | M (~1w) |
 | **PERF-H3** | DFX run 第一 barrier 假长条（观测性，非性能） | H host per-step | P2 | 让 swimlane 可信——该假长条曾把 `tp_all_reduce` 误判成 74.1% wall | A1 | S (~2d) |
-| **PERF-J1** | L0–L4 routed gate/up stage split + task-grain tuning | J MoE compute | **P0** | ✅ gate/up AIC p50 `≈144→12.7–12.9 µs`；focused p50 `12.1777→10.7677 ms`（-11.58%）；两套 L3/L4 hidden bit-exact | A1, C1–C3, D1–D2, G1, I2 | M |
+| **PERF-J1** | L0–L4 routed gate/up stage split + task-grain tuning | J MoE compute | **P0** | 🟦 pre-fix 六档 64K 与双 hidden 已通过；source-overlay N=128 已过线，final image 六档/精度/DFX 待补 | A1, C1–C3, D1–D2, G1, I2 | M |
 
 优先级：**P0** 零/低风险且解锁其它项，先做；**P1** 收益大的主体；**P2** 微调/收尾。
 工作量：S ≤ 3d，M ≈ 1w，L ≈ 2w，XL 多周。
@@ -112,7 +118,7 @@ Track A–J 是**按 workstream 分工**（谁认领）。但同一个 ITL 数�
 | **L0 · 核内流水** | 一个 AICore 内 cube/vector/MTE 的 pipeline 重叠 | **单 task 时长** | l0_swimlane（`simpler_setup.tools.l0_swimlane`） | （暂无立项；`expert_gate_up_aiv` 与 `aic` 同耗时是候选线索） |
 | **结构 / codegen** | program 形态本身：层展开 vs `pl.range`、权重 resident、调度轴、动态 batch | 以上各层的**上界** | 源码体量、编译产物、IR | B1 ✅ · B2 ✅ · B3 · G1 ✅ |
 | **可观测性** | 让上面每一层可测且可信 | —— | —— | A1 ✅ · H3 |
-| **MoE compute** | routed expert 的 expert/feature/tile 调度与 W8A8 cube/vec pipeline | **L0–L4 focused graph 的 L3/L4 gate/up/down** | focused clean A/B + all-rank DFX/swimlane + memory | **J1 ✅：gate/up split，row16/K512/N64，down N256** |
+| **MoE compute** | routed expert 的 expert/feature/tile 调度与 W8A8 cube/vec pipeline | **L0–L4 focused graph 的 L3/L4 gate/up/down** | focused clean A/B + all-rank DFX/swimlane + memory | **J1 🟦：实现与 pre-fix normal A/B 已完成；final image 六档/precision/DFX 待补** |
 
 ### 当前 ITL 65 ms 按层分账（ctx=64k / bs=16，实测）
 

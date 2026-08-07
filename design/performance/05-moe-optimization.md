@@ -1,22 +1,32 @@
 # 05 · MoE 优化专项：L0–L4 focused network
 
-> **状态（2026-08-06）**：L0–L4 focused MoE 产品实现已合入
-> `pypto-lib stepfun/develop@7928a2751930b04c866788a396a7337b62c6d32f`。
-> 0162 上六档 BS=`1,2,4,7,8,16` 的 formal normal campaign 已完成 36/36 fresh
+> **状态（2026-08-07）**：L0–L4 focused MoE 产品实现 `7928a275` 已合入
+> `pypto-lib stepfun/develop@63814d4ae62718b3c0721834878e4b4af4e7ac1b`。
+> 0162 上基于 `c9af5790` 的六档 BS=`1,2,4,7,8,16` formal normal campaign
+> 已完成 36/36 fresh
 > process run、完整 `hidden_l3/hidden_l4` golden、精度 finalize 和三轮
 > counterbalance；每个 sequence 都独立使用 `context_len=65536`。
 >
-> **当前发布边界**：formal matched-source DFX、route-aware publication gate 和最终
-> all-rank swimlane 尚未完成，不能把 2026-08-04 的 context=1 诊断 DFX 路径写成最终
-> 64K DFX。本文只覆盖五层裁剪网络，不把结果外推为 45 层 whole-net、prefill、
-> L43/L44 specialization 或其它机器的发布结论。
+> **SWA 精度修复**：`63814d4a` 将 sliding-window score mask 从 `pl.cmp`
+> predicate 转换路径改为 typed INT32 数值区间 mask。0162 使用 pre-fix image
+> substrate + `63814d4a` 精确 source overlay 的 N=128 回归为
+> `127/128=99.21875%`、TP spread=0；唯一 miss 为
+> `step94 expected=478 actual=320`。
 >
-> **formal campaign 根目录**：
-> `/mnt/persist/chensiyu/workspace/moe-opt/tmp/moe-formal-act-n64-20260806-v1`
+> **当前发布边界（NO-GO）**：matched-source whole-net 1-step×2、2-step×2
+> 已 8/8 sealed PASS，source-overlay N=128 也已过线；但没有 immutable image
+> 包含 `63814d4a`。SWA 源码变化后，`c9af5790` 的六档 golden 与性能不能自动
+> 升级为最终证据。按用户决定，镜像发布推迟到统一 release commit 确定后；
+> final image 六档回归、formal matched-source DFX、route-aware reanalysis 和
+> all-rank swimlane 仍待完成。本文只覆盖五层裁剪网络，不把结果外推为 45 层
+> whole-net、prefill、L43/L44 specialization 或其它机器。
 >
-> **当前 authoritative normal 报告**：
+> **pre-fix formal campaign 根目录**：
+> `/mnt/persist/chensiyu/workspace/moe-opt/tmp/moe-formal-c9af-20260806-v2`
+>
+> **pre-fix authoritative normal 报告**：
 > `.../campaign/matrix_correctness_report.json` 和
-> `.../campaign/matrix_performance_report.json`
+> `.../campaign/final-r123/matrix_performance_report.json`
 
 ---
 
@@ -42,21 +52,23 @@ L4  Full Attention + MoE   （直接消费真实 hidden_l3）
 5. L43/L44 specialization 明确保留原 `row=32, down N=128`；
 6. 保留 `combine_scatter → combine_wait → combine_reduce` 的真实依赖。
 
-当前 formal normal 结果：
+`c9af5790` pre-fix formal normal 结果：
 
 | BS | Baseline median-round p50 | Candidate median-round p50 | reduction |
 |---:|---:|---:|---:|
-| 1 | `12.9437 ms` | `12.9385 ms` | `0.04%` |
-| 2 | `13.7780 ms` | `12.8646 ms` | `6.629%` |
-| 4 | `15.2757 ms` | `13.4254 ms` | `12.113%` |
-| 7 | `16.1510 ms` | `15.5611 ms` | `3.652%` |
-| 8 | `15.8222 ms` | `14.3619 ms` | `9.229%` |
-| 16 | `18.8267 ms` | `16.7303 ms` | `11.135%` |
+| 1 | `14.4086 ms` | `13.0882 ms` | `9.164%` |
+| 2 | `14.2412 ms` | `13.9802 ms` | `1.833%` |
+| 4 | `14.9853 ms` | `14.4572 ms` | `3.524%` |
+| 7 | `16.1734 ms` | `15.1925 ms` | `6.065%` |
+| 8 | `15.8162 ms` | `15.7330 ms` | `0.526%` |
+| 16 | `19.6457 ms` | `17.3643 ms` | `11.613%` |
 
 六档均满足 `hidden_l3/hidden_l4` BF16 bit-exact、finite、TP spread=0，且
 `performance_non_regression_all_batches=true`。早期诊断 DFX 中 gate/up task 已从约
 `144 µs` 降至 `12.7–12.9 µs`；combine wait 仍暴露远端 producer/route-skew 尾部，
-但 formal 64K DFX 未完成前不发布最终 wait 或 swimlane 结论。
+但 formal 64K DFX 未完成前不发布最终 wait 或 swimlane 结论。由于
+`63814d4a` 修改了 L1–L3 会经过的 SWA mask，这些数据只作为 pre-fix 对照，
+最终 immutable image 必须重新生成 golden 并重跑 A/B。
 
 ---
 
@@ -82,14 +94,19 @@ expert、combine 和 TP all-reduce 函数。
 ```text
 repo:
   /data/chensiyu/hw_project/pypto/workspace/pypto-lib-moe-final-20260806
-branch:
+development branch:
   moe-opt
 base:
   stepfun/develop@56b3d477953ab1e2df87213aef3a536c64051dcc
-final commit:
+product commit:
   7928a2751930b04c866788a396a7337b62c6d32f
+published branch/current remote tip:
+  stepfun/develop
+  63814d4ae62718b3c0721834878e4b4af4e7ac1b
 candidate decode_fwd.py SHA256:
   7884da7c33a2d338fd36097676a5fafbcc2795c845409868ff0ce40cbb2bc2f9
+current attention_swa.py SHA256:
+  c451b4cc1462cf2b7b960798d6242936962427940f68757bf7eea6679c109623
 ```
 
 实现及验证文件：
@@ -118,7 +135,9 @@ devices:
 checkpoint:
   /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp
 image:
-  hub.i.basemind.com/stepcast/vllm-pypto@sha256:b43e704ae878283575b77178501371bdb47848c4db97b2db6dbc3d7007a4995d
+  hub.i.basemind.com/stepcast/vllm-pypto@sha256:cab89668164cf85dc75e4f3ac53ef77ef4b8653767c7d147c5113cdee6a9d88c
+image pypto-lib:
+  c9af5790d5fe450e14fd43c88099b87539089d17
 image PyPTO:
   8e92b46808f9f7c09b6431ad4691503f09c12ee5
 attention profile:
@@ -130,26 +149,27 @@ l2_swimlane_reuse_dep_gen:
 formal normal A/B 使用同一 digest-pinned image；baseline/candidate 只切换冻结 source
 tree。镜像审计要求 PyPTO=`8e92b468`、attention=`a2a3` 且
 `l2_swimlane_reuse_dep_gen` 存在，避免再次回退到旧 `defa97c5`/portable substrate。
+该 digest 不包含 `63814d4a`，因此本节只描述 pre-fix substrate；最终镜像尚未构建。
 
 ---
 
 ## 2. Golden 与精度合同
 
-### 2.1 六档 64K golden
+### 2.1 六档 64K golden（pre-fix）
 
 ```text
 /mnt/persist/chensiyu/workspace/moe-opt/tmp/
-  moe-formal-act-n64-20260806-v1/campaign/golden/heterogeneous-64k/bs{1,2,4,7,8,16}/
+  moe-formal-c9af-20260806-v2/campaign/golden/heterogeneous-64k/bs{1,2,4,7,8,16}/
 ```
 
 | BS | `manifest.json` SHA256 |
 |---:|---|
-| 1 | `b169691fa0703c890f7a41523dec2a39226c33fd57f34fcaea74cd3aba8dcd22` |
-| 2 | `f1ac1026c41f2a372e0224193c124d481c88c7c305d90e0afe52ca770fd0bdbc` |
-| 4 | `bdee4f56a9283be06f1a5a0402596a287a2af8b7526797480f0e05653923727d` |
-| 7 | `1aa70db3de8d2ae564fff691b4b9b609e5ad3e6f330f2033bb7265e305aa9338` |
-| 8 | `e5b1b38e88c3c67397005c63151e8a1e261079b9a3188a4efeed89cda934a7f9` |
-| 16 | `fcb04b11570b1395e35fadee6b42885691c2dac1e71d3b0c7d5e2e2648c36c09` |
+| 1 | `5c8ee88e8f5faf966604cb503f9476dc7c6e9cb7d28954de2fc95ccfa175dd3c` |
+| 2 | `acce36c926f7649bafae027bdc94a224639567301983f58d8b67f316d31f23c5` |
+| 4 | `68041f5b9e5203fdb7e5be8a0c26d0bb40a166de47b6d9fd039323b93ba93c9f` |
+| 7 | `81c8feebed6c2e56d434b47db95cc7d1df18a34e57467e053177971865a5f7f8` |
+| 8 | `36a8a74a3df5d1141487235fb7a5ac2a2dbead74d4b9e84788e49890eab980fa` |
+| 16 | `55f676ae7e014606561e43afc44d305bec72661ab3e2f7eefc0160b8a318bf72` |
 
 每档 golden 都来自独立 fresh-process baseline run，并满足：
 
@@ -166,6 +186,8 @@ blocks_per_sequence = 512
 candidate 对 baseline 的 L3、L4 均为 `max_abs=0`、`bad_ratio=0`、bit-exact，
 并通过 batch-extension invariance。
 精度比较使用完整 hidden state，不以 token argmax 代替中间层精度。
+这些 golden 绑定 `c9af5790` 的 SWA 行为；`63814d4a` 之后必须在最终 immutable
+image 上重新 dump，不能原样作为 final golden。
 
 ---
 
@@ -388,7 +410,7 @@ row tile 减半使 receive tile 数翻倍是预期，不表示路由 token 翻�
 
 ## 7. 性能 A/B
 
-### 7.1 主准出：六档独立 64K
+### 7.1 pre-fix 六档独立 64K
 
 每个 run 都是 fresh process，三轮顺序为：
 
@@ -403,26 +425,74 @@ active_total_context_tokens = BS * 65536
 
 | BS | Baseline p50 | Candidate p50 | p50 reduction | Baseline mean | Candidate mean |
 |---:|---:|---:|---:|---:|---:|
-| 1 | `12.9437` | `12.9385` | `0.04%` | `13.4412` | `12.9286` |
-| 2 | `13.7780` | `12.8646` | `6.629%` | `14.0678` | `13.1146` |
-| 4 | `15.2757` | `13.4254` | `12.113%` | `15.3179` | `14.3530` |
-| 7 | `16.1510` | `15.5611` | `3.652%` | `16.6213` | `14.6357` |
-| 8 | `15.8222` | `14.3619` | `9.229%` | `15.7558` | `14.3855` |
-| 16 | `18.8267` | `16.7303` | `11.135%` | `18.9856` | `16.7510` |
+| 1 | `14.4086` | `13.0882` | `9.164%` | `14.4392` | `13.2242` |
+| 2 | `14.2412` | `13.9802` | `1.833%` | `14.6349` | `14.0110` |
+| 4 | `14.9853` | `14.4572` | `3.524%` | `15.0584` | `14.5889` |
+| 7 | `16.1734` | `15.1925` | `6.065%` | `16.2990` | `15.4190` |
+| 8 | `15.8162` | `15.7330` | `0.526%` | `16.3686` | `16.0016` |
+| 16 | `19.6457` | `17.3643` | `11.613%` | `19.7844` | `17.6998` |
 
 报告：
 
 ```text
 .../campaign/matrix_correctness_report.json
   SHA256 451a47d152fc0b0af1b9a21200011af5c0cfa6a884b6996ca057286c032f3368
-.../campaign/matrix_performance_report.json
-  SHA256 44bacd4980f656fd4ccd777b4515dd8c8d58b1edb6ccbc0feceed177dfc5a17b
+.../campaign/final-r123/matrix_performance_report.json
+  SHA256 d238baa1524dc9c7fe3f703f596211689f5d904a9d209589c09d12df722e6875
+.../campaign/normal_seal_authority.json
+  SHA256 875804ddbb81b4f15a907e41e454ed3004aca3b56075063431edef5efc70c531
 ```
 
-### 7.2 早期短 workload 诊断
+报告的 `measurement_integrity_passed`、
+`hidden_hash_exact_across_selected_rounds` 和
+`performance_non_regression_all_batches` 均为 `true`。
+该结论只对 `c9af5790` pre-fix source/image 组合成立，不是 `63814d4a` 最终准出。
+
+### 7.2 Whole-net matched-source A/B
+
+同镜像、同 checkpoint、同设备、只切换冻结 `decode_fwd.py` 的 BS1 teacher-forced
+冒烟位于：
+
+```text
+.../whole-net-matched-ab-20260807T024525Z/
+```
+
+baseline/candidate 的 1-step 各两轮均输出 `303`，2-step 各两轮均输出
+`303,1207`；共 8/8 run 通过，publication seal=`PASS`：
+
+```text
+.../whole-net-matched-ab-20260807T024525Z/publication_seal_report.json
+SHA256 c0a03127a706ac3d987369573dda3a8b20f725ee0efee47af78a8c4892704338
+```
+
+该 matched-source A/B 关闭了先前 1/2-step smoke 的不完整状态，但两步输出仍不能
+替代 N=128、ALIGNED≥95% 多步精度门。
+
+### 7.3 `63814d4a` source-overlay N=128 精度
+
+SWA 定位显示问题来自 `pl.cmp` predicate 到数值 mask 的转换路径。最终修复使用
+显式 INT32 区间算术生成 `{0,1}` mask，再 cast 到 score dtype；不改 MoE tile、
+route、combine 或 reduction 数学。
+
+0162 cards `0–7`、fresh container、teacher-forced N=128：
+
+```text
+/mnt/persist/chensiyu/workspace/moe-opt/tmp/
+  moe-precision-fix-20260807-v2/runs/Lmask-v1-n128/summary.json
+SHA256 7f91dcdb3b30bf7beeac9b6994c55b42c8154438bc63b9025bd9cb21a2479503
+token exact: 127/128 = 99.21875%
+unique miss: step94 expected=478 actual=320
+hidden_tp_spread_max: 0.0
+```
+
+该 source tree 的关键 SHA256 与 `stepfun/develop@63814d4a` 一致，其中
+`attention_swa.py=c451b4cc…`。该结果通过 source-level 精度门，但不是
+immutable-image 回归，也没有证明性能无回退。
+
+### 7.4 早期短 workload 诊断
 
 2026-08-04 的 context=1 repeated-token A/B 为 `12.1777→10.7677 ms`
-（`-11.58%`）。它帮助选择 task grain，但不再作为最终性能准出；最终准出以 7.1
+（`-11.58%`）。它帮助选择 task grain，但不再作为最终性能准出；性能准出以 7.1
 的六档 64K counterbalanced campaign 为准。
 
 ---
@@ -467,16 +537,18 @@ repeated/heterogeneous A/B 中取得稳定收益。
 ## 10. 当前产物索引
 
 ```text
-/mnt/persist/chensiyu/workspace/moe-opt/tmp/moe-formal-act-n64-20260806-v1/
-├── authority/
+/mnt/persist/chensiyu/workspace/moe-opt/tmp/moe-formal-c9af-20260806-v2/
 ├── campaign/
-│   ├── runs/                    # 36 normal runs; formal DFX待补
+│   ├── runs/                    # 36 sealed normal runs
 │   ├── golden/heterogeneous-64k/
 │   ├── matrix_correctness_report.json
-│   └── matrix_performance_report.json
-├── sources/dfx-formal-act-n64-v1/{baseline,candidate}/
-├── overlays/{dfx,route}/
-└── tmp/
+│   ├── normal_seal_authority.json
+│   └── final-r123/matrix_performance_report.{json,md}
+├── sources/dfx-c9af-v2/{baseline,candidate}/
+└── whole-net-matched-ab-20260807T024525Z/
+
+/mnt/persist/chensiyu/workspace/moe-opt/tmp/moe-precision-fix-20260807-v2/
+└── runs/Lmask-v1-n128/          # 63814d4a source-overlay N=128
 ```
 
 ### DFX 报告
@@ -498,18 +570,21 @@ PENDING:
 ### Provenance
 
 ```text
-authority/final_selection_report.json
-authority/matched_source_audit.json
-authority/normal_seal_authority_v1.json
-  SHA256 16ac43432d0462e34bb939b11fb71e146cb2b9c2b068d9c3c5eec9901faa54be
+campaign/normal_seal_authority.json
+  SHA256 875804ddbb81b4f15a907e41e454ed3004aca3b56075063431edef5efc70c531
 campaign/matrix_correctness_report.json
-campaign/matrix_performance_report.json
-tmp/final-scripts-63d7526d/SCRIPTS_SHA256SUMS
-  SHA256 63d7526dc7bcda7e5d3c0404112ddae95f4020dce6fe498dd0e08d5b137722af
+  SHA256 451a47d152fc0b0af1b9a21200011af5c0cfa6a884b6996ca057286c032f3368
+campaign/final-r123/matrix_performance_report.json
+  SHA256 d238baa1524dc9c7fe3f703f596211689f5d904a9d209589c09d12df722e6875
+whole-net-matched-ab-20260807T024525Z/publication_seal_report.json
+  SHA256 c0a03127a706ac3d987369573dda3a8b20f725ee0efee47af78a8c4892704338
+../moe-precision-fix-20260807-v2/runs/Lmask-v1-n128/summary.json
+  SHA256 7f91dcdb3b30bf7beeac9b6994c55b42c8154438bc63b9025bd9cb21a2479503
 ```
 
 所有临时脚本位于 `/mnt/persist/chensiyu/workspace/moe-opt/tmp`。当前 normal
-evidence 已增加 fail-closed publication seal：seal 必须绑定外部钉住的旧证据 manifest，
-旧 validation 必须存在且为普通文件，JSON 使用递归类型严格比较；0162 已完成
-36/36 idempotent seal PASS。formal DFX 和 all-rank swimlane 完成后，再在本节补
-唯一最终路径和 SHA256。
+evidence 已增加 fail-closed publication seal，且 36/36 fresh-process run 已 seal。
+不得改写旧 evidence 或把历史 `container.rc=1` 升级为 PASS。SWA mask 已变化，
+所以上述 `c9af5790` normal evidence 只保留为 pre-fix 对照。统一 release commit
+确定并构建 immutable image 后，需重跑六档 golden/A/B、N=128、formal DFX 和
+all-rank swimlane，再在本节补唯一 final 路径和 SHA256。

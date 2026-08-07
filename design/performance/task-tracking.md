@@ -7,27 +7,32 @@
 
 ---
 
-> **⚠ 2026-08-06 current-source override**：attention/Vec 产品实现权威 pin 为
-> `pypto-lib stepfun/develop@c9af5790d5fe450e14fd43c88099b87539089d17` 与
+> **⚠ 2026-08-07 current-source override**：attention/Vec 产品实现权威 pin 为
+> `pypto-lib stepfun/develop@63814d4ae62718b3c0721834878e4b4af4e7ac1b` 与
 > `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。Wave5
 > 以 self-target TPUT 发布 source partial，并保持既有三波 lifetime；immutable
 > audit/smoke/Main+MTP compile、Main N=128×3、Main batch16、MTP batch1/batch16×2、
 > 64K/batch16 ITL/DFX 均通过，是最后一个完整 production release-qualified
-> 回退基线。当前 latest-source canonical image manifest `sha256:3eb694e…`
-> 已通过 BS1×64K ITL/DFX gate；历史 R1/R2 已 supersede。下方历史 override
-> 不覆盖 I1/I2。
+> 回退基线。`63814d4a` 将 SWA mask 从 `pl.cmp` predicate 转换路径改为 typed
+> INT32 数值区间 mask；0162 source-overlay N=128 为
+> `127/128=99.21875%`、TP spread=0。当前没有包含该提交的 immutable image，
+> 镜像发布已按用户决定推迟到统一 release commit 确定后。manifest
+> `sha256:3eb694e…` 仅是 `c9af5790` pre-fix evidence；历史 R1/R2 已
+> supersede。下方历史 override 不覆盖 I1/I2。
 >
-> **⚠ 2026-08-06 L0–L4 focused MoE override**：Track J 的产品实现已随
-> `7928a275` 进入上述 `c9af5790`，但 formal regression 仍在进行；范围只包含
+> **⚠ 2026-08-07 L0–L4 focused MoE override**：Track J 的产品实现已随
+> `7928a275` 进入上述 `63814d4a`；范围只包含
 > `L0 Full+dense / L1–L2 SWA+dense / L3 SWA+MoE / L4 Full+MoE`，L4 必须消费
 > 真实 L3 输出。最终方案为 routed gate/up stage split，普通 expert 使用
 > `row=16, K=512, N=64, down N=256`；L43/L44 specialization 保持原配置。
-> 2026-08-04 旧源码 campaign 在 0162 cards `8–15` 上 p50
-> `12.1777→10.7677 ms`（-11.58%），repeated 和
-> heterogeneous 两套完整 L3/L4 hidden 均 bit-exact、finite、TP spread=0。
-> 该证据只作候选选择依据；新 canonical 镜像仍须完成 BS `1/2/4/7/8/16`、
-> 每请求独立 `context_len=65536`、双 hidden golden、端到端回归和 all-rank DFX。
-> 该结果不覆盖 whole-net 或 L43/L44 release gate。
+> pre-fix digest `sha256:cab8966…` 上 BS `1/2/4/7/8/16`、每请求独立 64K 的三轮
+> normal A/B 已完成，36/36 fresh-process run 已 seal，六档 L3/L4 hidden hash
+> exact 且性能无回退；matched-source whole-net 1-step×2、2-step×2 已 8/8
+> sealed PASS，source-overlay N=128 已过线。SWA mask 变化后，旧 golden/性能
+> 不能自动升级为 final evidence。剩余准出是最终 immutable image 上六档 64K、
+> 双 hidden、N=128、formal matched-source DFX、route-aware reanalysis 和
+> all-rank swimlane。
+> 该结果不覆盖 whole-net、prefill 或 L43/L44 release gate。
 
 > **历史 2026-07-28 release override**：active base =
 > **`stepfun/develop @ 563fe62a`**。唯一 release Main 为
@@ -130,7 +135,7 @@ producer → 数学变换/quant/route-map → transport/window
 ### Track J — MoE compute 优化
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| J1 | L0–L4 routed gate/up stage split + task-grain tuning | P0 | 🟦 | codex | A1, C1–C3, D1–D2, G1, I2 | 产品实现 `7928a275` 已进入 `stepfun/develop@c9af5790`：fused gate/up 拆为 gate、up、activation，普通 expert 采用 `row16/K512/N64/down-N256`，保留 scatter→wait 真依赖与 L43/L44 原 specialization。旧源码 campaign 的 gate/up AIC p50 `≈144→12.7–12.9 µs`、focused p50 -11.58% 和双 hidden bit-exact 只作候选依据。阻塞：基于新 canonical 镜像完成 BS `1/2/4/7/8/16`、每请求独立 64K、端到端精度、双 hidden golden 和 all-rank DFX 后才能关闭。设计见 [`05-moe-optimization.md`](05-moe-optimization.md) | 2026-08-06 |
+| J1 | L0–L4 routed gate/up stage split + task-grain tuning | P0 | 🟦 | codex | A1, C1–C3, D1–D2, G1, I2 | 产品实现 `7928a275` 已进入 `stepfun/develop@63814d4a`：普通 expert 为 `row16/K512/N64/down-N256`，保留 scatter→wait 真依赖与 L43/L44 specialization。`c9af5790` pre-fix 镜像 `sha256:cab8966…` 的三轮 normal A/B 已 seal：BS `1/2/4/7/8/16` 每请求独立 64K，L3/L4 hidden hash exact，p50 分别改善 `9.16/1.83/3.52/6.07/0.53/11.61%`；matched-source 8/8 run sealed PASS。`63814d4a` source-overlay N=128=`127/128`、spread=0。阻塞：统一 release commit/immutable image，以及其上的六档 golden/A/B、N=128、formal DFX/reanalysis/all-rank swimlane。设计见 [`05-moe-optimization.md`](05-moe-optimization.md) | 2026-08-07 |
 
 ---
 
@@ -148,9 +153,10 @@ producer → 数学变换/quant/route-map → transport/window
 **base 校正后关键路径**：A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2 已 ✅；
 historical pull C2 仅作回归基线。当前 performance 看板只剩
 **B3（KV resident/in-place 的连续多轮 row-diff/liveness 证据）**与
-**J1（最新 canonical 镜像上的六档 64K focused regression/DFX）**处于进行中。
-Attention/Vec 与 TP all-reduce stability 已在 0162 release-qualified；J1 的旧
-L0–L4 focused graph 证据不能升级为新镜像、whole-net 或 L43/L44 release 结论。
+**J1（final immutable image 六档/precision/DFX/swimlane）**处于进行中。
+Attention/Vec 与 TP all-reduce stability 已在 0162 release-qualified；J1 的
+pre-fix focused normal PASS 和 source-overlay precision PASS 不能升级为最终
+immutable-image、whole-net 或 L43/L44 release 结论。
 其它机器仍需独立 gate。
 
 2026-08-05 新增 **C5/C6/C7**（TP all-reduce 实现层残余开销）为 ⬜ 候选，
@@ -178,6 +184,8 @@ codegen，收益恒为 0；剩下的实现层杠杆只有 **C5′**（self-TPUT 
 
 | 日期 | ID | 变更 | 备注 |
 |------|----|----|------|
+| 2026-08-07 | I1/J1 | SWA mask 精度修复进入远端，状态文档冻结并推迟镜像发布 | `stepfun/develop@63814d4a`：typed INT32 数值区间 mask 替代 `pl.cmp` predicate 转换；0162 source-overlay N=128=`127/128=99.21875%`、唯一 miss `step94 478→320`、TP spread=0。当前无包含该提交的 immutable image；后续选统一 release commit 再走标准发布流程 |
+| 2026-08-07 | J1 | `c9af5790` pre-fix 六档 normal A/B、双 hidden与 matched-source A/B 完成，J1 保持 🟦 | 36/36 focused run 已 seal；`normal_seal_authority.json` SHA256=`875804dd…`，r1/r2/r3 性能报告 SHA256=`d238baa1…`。whole-net 1-step×2、2-step×2 共 8/8 sealed PASS。SWA mask 已变化，final image 仍须重跑六档/精度并补 formal DFX/swimlane |
 | 2026-08-06 | J1 | 产品实现并入最新 `stepfun/develop`，启动 canonical formal regression | `7928a275` 已是 `c9af5790` 祖先；新镜像必须绑定 `pypto@8e92b468`、A2/A3 profile 和 prepared swimlane capability。准出为 BS `1/2/4/7/8/16` 各自 64K、L3/L4 hidden golden、端到端精度与 all-rank DFX；完成前保持 🟦 |
 | 2026-08-05 | C5 → ❌ + C5′ | 分段计时完成；C5 实测证伪并关闭 | **① 分段计时（§7.1.1）**：用 `benchmark/2026-07-29-v3-64k/dfx-swim` 全 8 rank swimlane，按**程序序**配对（`task_token_raw` 高 32 位是 ring_id、跨 rank 不一致，90 个 barrier 里只有 12 个 task_id 相同，**不能按 task_id join**）。排除每步第一个 barrier 后 89×8：`min over ranks`（自身搬运）**39.6–44.7 µs**（p50 41.1）、mean 51.1 → **自身搬运 ~80%**；straggler 在 8 rank 间轮换（rank2 21 / rank1 16 / rank3 6）**无坏卡**；480 KB ÷ 单核 ~14 GB/s ≈ 34 µs 对账吻合。⇒ clean 的 16.1 µs 基本全是自身搬运，**靶子合法**。**② C5 证伪**：6 个 notify/wait 循环 + push AG 循环改 `pl.parallel` 后，wave5 镜像 compile A/B 出**逐字节相同**的 `kernels/aiv/tp_all_reduce.cpp`(431 行) 与 `ptoas/tp_all_reduce.cpp`(378 行)。循环**未被展开**（9 个真实 C `for`，`TNotify`×3 / `TWait`×5 在循环体内），**InCore 的 AIV codegen 不消费 `ForKind`** → `pl.parallel` 在 InCore 是惰性注解，只有 Orchestration 层（切 task/block）才有意义。连带：§2.4 把 `twophase_par` −35% 归因于 `pl.parallel` **站不住**（真实差异更可能是它 AG 直接写 `out`、无 final copy、无 Wave3 的结构差异），引用前需重测。**产物**：3 个 kernel 文件全部回退，只留一条守卫契约 `test_tp_all_reduce_keeps_reduce_scatter_accumulate_serial`（+16 行）；in-image 全量 unit **218 passed / 4 skipped**，two-layer compile-only **RC=0**。复现：`0162:/mnt/persist/chensiyu/workspace/ar-c5/compile_ab.sh {base,c5}`、`0162:/tmp/ar_segment2.py`。⚠ **未做 device/ITL**：0162 有 `0162-full-machine-perf.lock`（今天 19:28），另一 campaign 今天在 0–7 与 8–15 两组卡都在跑，时序测量会互相污染 |
 | 2026-08-05 | C5/C6/C7 | 复核 Wave5 后 TP all-reduce 残余瓶颈，立 3 个 ⬜ 候选并纠正两处口径 | 复核基准 `pypto-lib stepfun/develop@7099476b`。**口径纠正**：① 权威耗时 = DFX avg **16.1 µs**/次、span **1.84%**（「40+ µs」来自 PMU 17× / swimlane 476× 放大 run）；② 该 16 µs **含 barrier 自旋等待**（profiling 计入 kernel compute），clean run 跨卡 skew 2.914 ms 全被首个 barrier 吸收；③ vLLM-Ascend 的 ~10 µs 是 HCCL/SDMA 口径，不计入 AICore kernel 时间，**不可直接对比**。**算法已到下界**（224 KB/卡 = `2(P-1)/P × N`），残余全在实现层：单核 `block_num=1`（runtime 默认，`pto_submit_types.h:250-270`；48 AIV 用 1 个）、C4 落地版丢了微基准赢的并行扇出（只 final copy 用 `pl.parallel`）、本地搬运 256 KB > 跨卡 224 KB、零 compute/comm overlap。候选 C5（补并行扇出，~8 行）/ C6（消 Wave3+final copy）/ C7（atomic-add push RS，需 rebase 拿上游 `9776f276` bf16 atomic-add）。**多核化与 MC2 级融合明确不建议**（全仓零跨卡多核先例；Wave5 已立「不机械合入无稳定收益的 AR/residual/RMS 融合」）。详见 [`03-tp-allreduce-algorithm-comparison.md`](03-tp-allreduce-algorithm-comparison.md) §7 |
