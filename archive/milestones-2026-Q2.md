@@ -1,5 +1,26 @@
 # Milestones —— 2026 Q2
 
+## 2026-08-08 —— MoE session 收尾：统一源码 tip、harness 与 pending build spec
+
+- 远端 `csy0225/pypto-lib:stepfun/develop` 权威 tip 已核对为
+  `491267c45875e9b1e0071eed224e2e73526799e2`。该提交链包含
+  `7928a275` 五层 MoE compute 优化、`63814d4a` SWA mask 修复、
+  `cd19fe6b` active-route scheduling，以及 `491267c4` route/precision
+  release harness。
+- pypto-lib 定向合同回归：
+  `test_live_precision_ab_contract.py`、`test_gen_vanilla_oracle.py`、
+  `test_five_layer_moe_route_contract.py`、`test_five_layer_moe_dfx_analysis.py`、
+  `test_performance_bc_contract.py`，结果 `122 passed, 1 warning`。
+- pypto-project 中当前 pin、MoE 设计、task tracking、handoff、canonical test、
+  version matrix 与 container admission pin 已同步到 `491267c4`。
+- 新增 pending build spec：
+  `deployment/docker/builds/stepfun-develop-20260808-moe-opt-latest-source.env`；
+  显式要求 PyPTO=`8e92b468`、attention profile=`a2a3` 和
+  `l2_swimlane_reuse_dep_gen`，不固定 `BUILD_JOBS`。
+- 本次未构建镜像、未执行 0162 长回归。历史 `c9af5790` digest/golden/A/B 只保留
+  为 pre-fix evidence；`491267c4` 的 immutable N=128、六档 BS×64K、formal DFX
+  和 all-rank swimlane 仍是下一 session 的 release gate。
+
 ## 2026-08-06 —— workload-sized Attention 合入最新 MoE 基线
 
 - `pypto-lib stepfun/develop` 从 `7928a275` fast-forward 到

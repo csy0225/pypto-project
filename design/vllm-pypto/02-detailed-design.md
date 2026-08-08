@@ -466,7 +466,8 @@ tail-only 改动属于 vLLM-Ascend backend seam，不应改 upstream generic vLL
 | ID | 任务 | 主要边界 | 验收 |
 |---|---|---|---|
 | A1 | 固定被测对象 | source commit、image digest、checkpoint、cards、profile | manifest 可复核；不使用本地 branch 名推断 tip |
-| A2 | latest-source immutable gate（已完成） | pypto `8e92b468`、pypto-lib `c9af5790`、`BUILD_JOBS=2` | manifest `sha256:3eb694e…`；audit、BS1×64K ITL/DFX PASS；无源码挂载 |
+| A2 | 历史 latest-source immutable partial gate（已完成） | pypto `8e92b468`、pypto-lib `c9af5790`、`BUILD_JOBS=2` | manifest `sha256:3eb694e…`；audit、BS1×64K ITL/DFX PASS；无源码挂载；不包含当前 `491267c4` |
+| A3 | 当前 MoE latest-source immutable gate（待执行） | pypto `8e92b468`、pypto-lib `491267c4`、profile `a2a3`、L2 swimlane capability required | 先构建 pending spec，再完成 0162 N=128、六档 BS×64K、DFX 与 all-rank swimlane |
 | B1 | 独立 live front 接管 | vLLM hook、collective-consistent gate、fallback 可观测 | 真实 online request 明确进入 PyPTO Main |
 | C1 | paged-KV bridge | per-layer K/V、block table、slot mapping、seq lens | 多步、dynamic batch、inactive row、历史 row 均正确 |
 | D1 | Main→MTP 同代 gate | 配对 hidden/oracle、acceptance state | token/hidden/finite/TP spread 全通过 |

@@ -152,9 +152,10 @@ git -C PTOAS checkout fc8c6caee561914b4fb991dfc8427bb63194269e
 | PTOAS (src) | `fc8c6cae` |
 | ptoas-bin | `v0.50`（binary，见 Step 5） |
 
-当前开发源码为 pypto `8e92b468` / pypto-lib `c9af5790`；对应 immutable image
-manifest `sha256:3eb694e…` 已完成 BS1×64K Attention/ITL/DFX gate。它与上表
-Wave5 full-matrix release profile 是两个测试对象，不能混装或继承验证结论。
+当前开发源码为 pypto `8e92b468` / pypto-lib `491267c4`；尚无对应 immutable
+image。历史 `c9af5790` image manifest `sha256:3eb694e…` 已完成其源码层级的
+BS1×64K Attention/ITL/DFX partial gate。它、当前源码与上表 Wave5 full-matrix
+release profile 是三个测试对象，不能混装或继承验证结论。
 
 > **踩坑**：
 > - **只拉 pypto-lib 不构成同一测试对象**——pypto 的 `StackedDeviceTensor`/`import_ipc_all`、simpler 的 forked-child ACL IPC import、runtime build 产物缺一都跑不通。5 仓要一起对齐。

@@ -1,6 +1,6 @@
 # 实时状态（STATUS）
 
-> **本文件只放当前真相，不保存流水或旧 pin。最后更新：2026-08-07。**
+> **本文件只放当前真相，不保存流水或旧 pin。最后更新：2026-08-08。**
 > 历史记录见 [`archive/`](archive/) 和 [`benchmark/`](benchmark/)；镜像组合见
 > [`deployment/version-matrix.md`](deployment/version-matrix.md)。
 
@@ -18,7 +18,7 @@
 
 | 仓库/组件 | 分支或 pin | 当前 commit | 状态 |
 |---|---|---|---|
-| pypto-lib | `csy0225/pypto-lib:stepfun/develop` | `63814d4ae62718b3c0721834878e4b4af4e7ac1b` | 远端 tip；修复 SWA sliding-window score mask；0162 source-overlay N=128 为 `127/128`、TP spread=0，最终 immutable image 待统一 commit 后发布 |
+| pypto-lib | `csy0225/pypto-lib:stepfun/develop` | `491267c45875e9b1e0071eed224e2e73526799e2` | 远端 tip；包含 active-route scheduling、SWA mask 修复和 MoE route/precision release harness；最终 immutable image 尚未构建 |
 | pypto | `csy0225/pypto:stepfun/develop` | `8e92b46808f9f7c09b6431ad4691503f09c12ee5` | prepared-worker immutable swimlane dep-gen reuse；`88 passed, 3 skipped` |
 | simpler | immutable pin | `e2efebcbd190302609c0775d2984f409f5f42c76` | 当前 canonical image pin |
 | pto-isa | immutable pin | `ecb6c303f797749f811a494742c3c08156aacabb` | 当前 canonical image pin |
@@ -36,14 +36,15 @@ models.step3p5.decode_fwd:whole_decode_step3p5
 
 ### 最终统一发布镜像（待构建）
 
-截至 2026-08-07，**没有 immutable image 包含**
-pypto-lib=`63814d4ae62718b3c0721834878e4b4af4e7ac1b`。按当前用户决定，本次只提交
-状态文档，不触发镜像构建；后续选定统一 release commit 后，再按标准镜像发布流程
-构建并执行完整回归。
+截至 2026-08-08，**没有 immutable image 包含**
+pypto-lib=`491267c45875e9b1e0071eed224e2e73526799e2`。本次只完成代码与文档收尾，
+不把 pending spec 或历史 digest 标成发布镜像。下一次按
+`deployment/docker/builds/stepfun-develop-20260808-moe-opt-latest-source.env`
+构建并执行 0162 标准回归。
 
-因此，下方两个 digest 都是 `c9af5790` 层级的 **pre-fix evidence**，不能标成
-当前源码的最终发布镜像，也不能把其 golden、性能或 DFX 自动升级为
-`63814d4a` 的准出结论。
+因此，下方两个 digest 都是旧源码层级的 **pre-fix evidence**，不能标成当前源码
+的最终发布镜像，也不能把其 golden、性能或 DFX 自动升级为
+`491267c4` 的准出结论。
 
 ### 最近一次 Attention canonical image（pre-fix evidence）
 
@@ -112,8 +113,8 @@ Wave5 只对 0162 完整 release-qualified；其源码 pin 是 pypto `defa97c5`�
 
 ### 历史 2026-08-05 R1/R2（已 supersede）
 
-- R1 已撤销；R2 从未发布，且其 pypto-lib `91c7f46e` 已被 `63814d4a`
-  supersede。不得恢复 R2 或用其状态覆盖上面的当前镜像。
+- R1 已撤销；R2 从未发布，且其 pypto-lib `91c7f46e` 已被当前
+  `491267c4` supersede。不得恢复 R2 或用其状态覆盖上面的当前镜像。
 - 历史记录：
 [`benchmark/2026-08-05-attention-canonical-r1-r2.md`](benchmark/2026-08-05-attention-canonical-r1-r2.md)。
 
@@ -152,17 +153,20 @@ Wave5 只对 0162 完整 release-qualified；其源码 pin 是 pypto `defa97c5`�
 
 ## 4. MoE 当前判断
 
-- 产品改动 `7928a275` 已是远端 `stepfun/develop@63814d4a` 的祖先。
-- 正式 candidate `decode_fwd.py` SHA256=`7884da7c…`；baseline
-  `56b3d477` SHA256=`3553664c…`。
+- 产品改动 `7928a275` 已包含在当前远端 `stepfun/develop@491267c4` 中；
+  `cd19fe6b` 的 active-route scheduling 和 `491267c4` 的 route/precision
+  release harness 也已进入当前源码 tip。
+- 当前 tip 的 `decode_fwd.py` SHA256=`4b39aec7…`。旧正式 campaign 的 candidate
+  SHA256=`7884da7c…`、baseline `56b3d477` SHA256=`3553664c…` 只绑定历史
+  source policy。
 - `c9af5790` pre-fix 六档 focused normal A/B 与 L3/L4 hidden golden 已通过；
   p50 改善分别为 `9.16/1.83/3.52/6.07/0.53/11.61%`，但最终镜像必须重跑。
 - matched-source whole-net baseline/candidate 的 1-step×2、2-step×2 共 8/8 run
   均通过，输出分别为 `303` 和 `303,1207`；publication seal=`PASS`：
   `.../whole-net-matched-ab-20260807T024525Z/publication_seal_report.json`
   （SHA256 `c0a03127…`）。
-- J1 保持 🟦/NO-GO：source-overlay N=128 已通过，但 final immutable image
-  精度、六档 64K golden/A/B、formal matched-source DFX 12 runs、
+- J1 保持 🟦/NO-GO：source-overlay N=128 已通过，但 `491267c4` 对应的 final
+  immutable image 精度、六档 64K golden/A/B、formal matched-source DFX 12 runs、
   route-aware reanalysis 和 all-rank swimlane 尚未完成。
 
 设计入口：
@@ -170,12 +174,13 @@ Wave5 只对 0162 完整 release-qualified；其源码 pin 是 pypto `defa97c5`�
 
 ## 5. 当前下一步
 
-1. 选定统一 release commit；本次状态文档提交不构建镜像。选定后按标准流程构建
-   包含 `63814d4a`（或其后继统一提交）的 immutable image。
+1. 按 pending spec 构建包含 `491267c4` 的 immutable image。
 2. 在最终镜像上先完成 whole-net N=128 多步精度，再重跑 BS
    `1/2/4/7/8/16`、每请求独立 64K、L3/L4 golden 与 counterbalanced A/B。
-3. 完成 MoE formal all-rank DFX/swimlane，并使用正式 analyzer source policy
-   `baseline=3553664c`、`candidate=7884da7c` fail-closed 重分析。
+3. 为最终 image/source 重新生成 matched source policy：current candidate 必须绑定
+   `4b39aec7…`，baseline 从选定的 immutable control source 独立计算；完成 MoE
+   formal all-rank DFX/swimlane 和 fail-closed 重分析。不得把历史
+   `baseline=3553664c`、`candidate=7884da7c` policy 直接沿用为当前准出。
 4. 用 `pypto-image-verify` 与 `pypto-perf-regression` 对最终 immutable image
    执行标准回归。
 5. 若提升为完整 production release，按 Wave5 同口径补 Main N=128×3、

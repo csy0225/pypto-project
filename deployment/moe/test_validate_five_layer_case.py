@@ -390,7 +390,7 @@ def _write_image_identity_fixture(
             "[audit] pin pypto      "
             "8e92b46808f9f7c09b6431ad4691503f09c12ee5 clean",
             "[audit] pin pypto-lib  "
-            "c9af5790d5fe450e14fd43c88099b87539089d17 clean",
+            "491267c45875e9b1e0071eed224e2e73526799e2 clean",
             "[audit] git credential scrub: PASS",
             "[audit] attention profile: a2a3",
             "[audit] prepared swimlane reuse capability: "

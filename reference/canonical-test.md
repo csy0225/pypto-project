@@ -19,11 +19,12 @@ KV      = resident per-layer KV + runtime metadata
 当前源码 tip：
 
 ```text
-pypto-lib c9af5790d5fe450e14fd43c88099b87539089d17
+pypto-lib 491267c45875e9b1e0071eed224e2e73526799e2
 pypto     8e92b46808f9f7c09b6431ad4691503f09c12ee5
 ```
 
-latest-source image manifest `sha256:3eb694e…` 已通过 BS1×64K ITL/DFX gate。
+历史 `c9af5790` image manifest `sha256:3eb694e…` 已通过其源码层级的 BS1×64K
+ITL/DFX partial gate；当前 `491267c4` 尚无 immutable image。
 最后一个完成全量 production matrix 的回退基线仍是 Wave5，镜像内源码为
 pypto-lib `7099476b` / pypto `defa97c5`。历史 R1/R2 已 supersede。
 **源码 tip、latest-source partial gate 与 full-matrix release 必须分开报告。**
@@ -128,10 +129,11 @@ prepared-worker swimlane 必须先生成依赖图，再在同 worker 上进行 t
 当前 pypto `8e92b468` 使用 `l2_swimlane_reuse_dep_gen`。没有最终
 `l2_swimlane_records.json` 就不能宣称 DFX gate 完成。
 
-## 6. 2026-08-06 当前准出状态
+## 6. 2026-08-08 当前准出状态
 
 ```text
-latest-source c9af image = BS1×64K ATTENTION/ITL/DFX PASS ON 0162
+current source 491267c4  = NO IMMUTABLE IMAGE YET
+historical c9af image    = BS1×64K ATTENTION/ITL/DFX PARTIAL PASS ON 0162
 Wave5                    = FULL PRODUCTION MATRIX PASS ON 0162
 R1                       = REVOKED
 R2                       = NEVER PUBLISHED / SUPERSEDED

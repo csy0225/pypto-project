@@ -1,23 +1,23 @@
 # Performance 性能优化专项
 
-> **2026-08-07 current-source override（优先于下方历史快照）**：当前源码为
-> `pypto-lib stepfun/develop@63814d4ae62718b3c0721834878e4b4af4e7ac1b`，
+> **2026-08-08 current-source override（优先于下方历史快照）**：当前源码为
+> `pypto-lib stepfun/develop@491267c45875e9b1e0071eed224e2e73526799e2`，
 > 配套 pypto 为
 > `stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。
 > A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2 已完成；B3/J1 仍在进行。
 > `63814d4a` 修复 SWA sliding-window score mask：将 `pl.cmp` predicate
 > 转换路径替换为 typed INT32 数值区间 mask。0162 source-overlay N=128 为
 > `127/128=99.21875%`、TP spread=0；唯一 miss 为
-> `step94 expected=478 actual=320`。当前没有包含 `63814d4a` 的 immutable image；
-> 镜像发布已推迟到统一 release commit 确定后。`sha256:3eb694e…` 与
+> `step94 expected=478 actual=320`。当前没有包含最新 `491267c4` 的 immutable
+> image；下一步按 pending spec 构建。`sha256:3eb694e…` 与
 > `sha256:cab8966…` 都只作为 `c9af5790` pre-fix evidence；Wave5 仍是最后一个
 > 完成全量 Main/MTP matrix 的回退基线。下方 2026-07-27 状态、65 ms 分账和旧
 > 依赖关系只作历史分析，不能覆盖
 > [`task-tracking.md`](task-tracking.md) 的当前状态。
 >
-> **2026-08-07 L0–L4 focused MoE 集成进行中**：调优对象严格裁剪为
+> **2026-08-08 L0–L4 focused MoE 集成进行中**：调优对象严格裁剪为
 > `L0 Full+dense → L1/L2 SWA+dense → L3 SWA+MoE → L4 Full+MoE`，且 L4
-> 消费真实 L3 输出。产品代码 `7928a275` 已是上述 `63814d4a` 的祖先：将 routed
+> 消费真实 L3 输出。产品代码 `7928a275` 已是上述 `491267c4` 的祖先：将 routed
 > fused gate/up 拆为独立 gate、up 和 activation，
 > 使用 `row=16, K=512, N=64`，并将 down 设为 `N=256`；L43/L44 specialization
 > 保持原配置。pre-fix digest `sha256:cab8966…` 上，BS `1/2/4/7/8/16`、每请求独立

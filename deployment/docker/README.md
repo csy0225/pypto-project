@@ -6,9 +6,16 @@ containerd/nerdctl)。**
 
 ---
 
-## 0. 当前镜像状态（2026-08-06）
+## 0. 当前镜像状态（2026-08-08）
 
-当前 latest-source canonical image：
+当前源码 tip 为 pypto
+`8e92b46808f9f7c09b6431ad4691503f09c12ee5`、pypto-lib
+`491267c45875e9b1e0071eed224e2e73526799e2`；**尚无包含该组合的 immutable
+image**。下一次构建对象由
+[`builds/stepfun-develop-20260808-moe-opt-latest-source.env`](builds/stepfun-develop-20260808-moe-opt-latest-source.env)
+冻结，构建和 0162 gate 完成前不得填写 manifest/config digest。
+
+最近一次已构建的 latest-source partial-gate image（历史 pre-fix evidence）：
 
 ```text
 tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260806-attn-taskmajor-canonical
@@ -38,9 +45,10 @@ Attention p50 `3.6323 ms`、reference exact、DFX `8/8` rank 完整。
 详见
 [`../../benchmark/2026-08-06-attention-taskmajor-canonical.md`](../../benchmark/2026-08-06-attention-taskmajor-canonical.md)。
 
-该镜像完成 latest-source Attention/ITL/DFX gate，但尚未重跑 Wave5 的 Main
+该镜像完成其 `c9af5790` 源码层级的 Attention/ITL/DFX gate，但尚未重跑 Wave5 的 Main
 N=128×3、Main batch16 和 MTP 全矩阵，因此不能自动继承完整 production
-release-qualified 标签。最后一个**完整 release-qualified 回退基线**仍是 Wave5：
+release-qualified 标签，也不能代表当前 `491267c4`。最后一个**完整
+release-qualified 回退基线**仍是 Wave5：
 
 ```text
 tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260803-attn-final-wave5
@@ -385,7 +393,8 @@ deployment/docker/
 | `stepfun-develop-20260803-attn-final-wave5` | 2026-08-03 | `defa97c5` / `7099476b` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **最后一个完整 production release-qualified 回退基线**。manifest `sha256:4acc77cdce05c40fff7fdbcedb5612fa49c2edc847a534c218389ddc08667b32`，config `sha256:4f2539c17fe60e61062bd27d96082a707e581b81fe716208c1bca4139dfd7394`；self-target TPUT source publication + 既有三波 lifetime；audit/smoke/Main+MTP compile、Main N=128×3、Main batch16、MTP batch1/batch16×2、64K/batch16 ITL/DFX PASS；N=128 三轮均 `123/128` 且 spread=0；64K p50 `49.796 ms` |
 | `stepfun-develop-20260805-attn-final-canonical` | 2026-08-05 | `defa97c5` / `91c7f46e` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **R1 REVOKED，禁止交付**。manifest `sha256:fb613c2d5a74592f248c6d923e3ada6582edbe40349ada530017e622ca735b23`，config `sha256:95bf9657adc09650fc85c23544756169519f85c145b42b14641bfc41e6c173e2`；bs1/64K 两层 50 次 timing 与数值检查完成，但 immutable DFX 因镜像缺 `l2_swimlane_reuse_dep_gen` 接口失败，没有最终 swimlane；不得用源码挂载绕过 |
 | `stepfun-develop-20260805-attn-final-canonical-r2` | 2026-08-05 | `8e92b468` / `91c7f46e` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **HISTORICAL / NEVER PUBLISHED / SUPERSEDED**。当时包含 prepared-swimlane 修复但构建被停止；无 manifest/config digest，不得恢复或借用其它镜像数据。历史记录见 [`../../benchmark/2026-08-05-attention-canonical-r1-r2.md`](../../benchmark/2026-08-05-attention-canonical-r1-r2.md) |
-| `stepfun-develop-20260806-attn-taskmajor-canonical` | 2026-08-06 | `8e92b468` / `c9af5790` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **当前 latest-source canonical image；Attention/ITL/DFX gate PASS**。manifest `sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479`，config `sha256:a6095ba550aa8207e66a10ad2e8923d120af957c9e014349d26915d7ba33d216`；BS1×64K 整网 p50 `39.612 ms`，hidden finite、TP spread=0；同 digest 两层 p50 `3.6323 ms`、exact、DFX 8/8 rank。尚未重跑完整 Main/MTP production matrix |
+| `stepfun-develop-20260806-attn-taskmajor-canonical` | 2026-08-06 | `8e92b468` / `c9af5790` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **历史 latest-source partial gate；pre-fix evidence**。manifest `sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479`，config `sha256:a6095ba550aa8207e66a10ad2e8923d120af957c9e014349d26915d7ba33d216`；BS1×64K 整网 p50 `39.612 ms`，hidden finite、TP spread=0；同 digest 两层 p50 `3.6323 ms`、exact、DFX 8/8 rank。该镜像不包含当前 `491267c4`，且未重跑完整 Main/MTP production matrix |
+| `stepfun-develop-20260808-moe-opt-latest-source` | 2026-08-08 | `8e92b468` / `491267c4` / `ecb6c303` / `fc8c6cae` / `e2efebcb` / `v0.50` | **PENDING / 未构建**。spec 要求 `ATTN_TASK_PROFILE=a2a3` 和 `l2_swimlane_reuse_dep_gen`；`BUILD_JOBS` 使用 build.sh 默认值。构建及 0162 N=128、六档 BS×64K、DFX/swimlane 完成前无 manifest/config digest |
 
 ## Pin 依据
 

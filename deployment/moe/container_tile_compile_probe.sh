@@ -16,7 +16,7 @@ test ! -e /runtime-override
   --output /out/capability_report.json \
   --image-ref "$TILE_COMPILE_IMAGE_REF" \
   --expected-pypto 8e92b46808f9f7c09b6431ad4691503f09c12ee5 \
-  --expected-pypto-lib c9af5790d5fe450e14fd43c88099b87539089d17 \
+  --expected-pypto-lib 491267c45875e9b1e0071eed224e2e73526799e2 \
   --expected-attn-profile a2a3
 
 cd /workspace/pypto-lib

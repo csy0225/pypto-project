@@ -7,8 +7,8 @@
 
 ---
 
-> **⚠ 2026-08-07 current-source override**：attention/Vec 产品实现权威 pin 为
-> `pypto-lib stepfun/develop@63814d4ae62718b3c0721834878e4b4af4e7ac1b` 与
+> **⚠ 2026-08-08 current-source override**：attention/Vec 产品实现权威 pin 为
+> `pypto-lib stepfun/develop@491267c45875e9b1e0071eed224e2e73526799e2` 与
 > `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。Wave5
 > 以 self-target TPUT 发布 source partial，并保持既有三波 lifetime；immutable
 > audit/smoke/Main+MTP compile、Main N=128×3、Main batch16、MTP batch1/batch16×2、
@@ -21,7 +21,7 @@
 > supersede。下方历史 override 不覆盖 I1/I2。
 >
 > **⚠ 2026-08-07 L0–L4 focused MoE override**：Track J 的产品实现已随
-> `7928a275` 进入上述 `63814d4a`；范围只包含
+> `7928a275` 进入上述 `491267c4`；范围只包含
 > `L0 Full+dense / L1–L2 SWA+dense / L3 SWA+MoE / L4 Full+MoE`，L4 必须消费
 > 真实 L3 输出。最终方案为 routed gate/up stage split，普通 expert 使用
 > `row=16, K=512, N=64, down N=256`；L43/L44 specialization 保持原配置。
@@ -135,7 +135,7 @@ producer → 数学变换/quant/route-map → transport/window
 ### Track J — MoE compute 优化
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| J1 | L0–L4 routed gate/up stage split + task-grain tuning | P0 | 🟦 | codex | A1, C1–C3, D1–D2, G1, I2 | 产品实现 `7928a275` 已进入 `stepfun/develop@63814d4a`：普通 expert 为 `row16/K512/N64/down-N256`，保留 scatter→wait 真依赖与 L43/L44 specialization。`c9af5790` pre-fix 镜像 `sha256:cab8966…` 的三轮 normal A/B 已 seal：BS `1/2/4/7/8/16` 每请求独立 64K，L3/L4 hidden hash exact，p50 分别改善 `9.16/1.83/3.52/6.07/0.53/11.61%`；matched-source 8/8 run sealed PASS。`63814d4a` source-overlay N=128=`127/128`、spread=0。阻塞：统一 release commit/immutable image，以及其上的六档 golden/A/B、N=128、formal DFX/reanalysis/all-rank swimlane。设计见 [`05-moe-optimization.md`](05-moe-optimization.md) | 2026-08-07 |
+| J1 | L0–L4 routed gate/up stage split + task-grain tuning | P0 | 🟦 | codex | A1, C1–C3, D1–D2, G1, I2 | 产品实现 `7928a275` 已进入 `stepfun/develop@491267c4`；当前 tip 还包含 active-route scheduling 和 route/precision release harness。普通 expert 为 `row16/K512/N64/down-N256`，保留 scatter→wait 真依赖与 L43/L44 specialization。旧 `c9af5790` 镜像 `sha256:cab8966…` 的三轮 normal A/B 已 seal：BS `1/2/4/7/8/16` 每请求独立 64K，L3/L4 hidden hash exact，p50 分别改善 `9.16/1.83/3.52/6.07/0.53/11.61%`；matched-source 8/8 run sealed PASS。旧 source-overlay N=128=`127/128`、spread=0。阻塞：`491267c4` immutable image，以及其上的六档 64K golden/A/B、N=128、formal DFX/reanalysis/all-rank swimlane。设计见 [`05-moe-optimization.md`](05-moe-optimization.md) | 2026-08-08 |
 
 ---
 
@@ -184,6 +184,7 @@ codegen，收益恒为 0；剩下的实现层杠杆只有 **C5′**（self-TPUT 
 
 | 日期 | ID | 变更 | 备注 |
 |------|----|----|------|
+| 2026-08-08 | J1 | 当前源码 tip 与最小 pending build spec 冻结 | `stepfun/develop@491267c4` 已包含 `7928a275`、active-route scheduling、SWA mask 修复和 route/precision release harness；当前无包含该提交的 immutable image，下一步按 pending spec 构建并执行 0162 标准回归 |
 | 2026-08-07 | I1/J1 | SWA mask 精度修复进入远端，状态文档冻结并推迟镜像发布 | `stepfun/develop@63814d4a`：typed INT32 数值区间 mask 替代 `pl.cmp` predicate 转换；0162 source-overlay N=128=`127/128=99.21875%`、唯一 miss `step94 478→320`、TP spread=0。当前无包含该提交的 immutable image；后续选统一 release commit 再走标准发布流程 |
 | 2026-08-07 | J1 | `c9af5790` pre-fix 六档 normal A/B、双 hidden与 matched-source A/B 完成，J1 保持 🟦 | 36/36 focused run 已 seal；`normal_seal_authority.json` SHA256=`875804dd…`，r1/r2/r3 性能报告 SHA256=`d238baa1…`。whole-net 1-step×2、2-step×2 共 8/8 sealed PASS。SWA mask 已变化，final image 仍须重跑六档/精度并补 formal DFX/swimlane |
 | 2026-08-06 | J1 | 产品实现并入最新 `stepfun/develop`，启动 canonical formal regression | `7928a275` 已是 `c9af5790` 祖先；新镜像必须绑定 `pypto@8e92b468`、A2/A3 profile 和 prepared swimlane capability。准出为 BS `1/2/4/7/8/16` 各自 64K、L3/L4 hidden golden、端到端精度与 all-rank DFX；完成前保持 🟦 |

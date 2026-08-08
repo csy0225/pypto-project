@@ -1,23 +1,27 @@
 # Phase 28 — 单程序整网 → vLLM live 集成
 
-> **状态：🟡 进行中。最后更新：2026-08-06。**
+> **状态：🟡 进行中。最后更新：2026-08-08。**
 > 本文只保留当前 live 集成工作面；历史 N1 bring-up 已归档到
 > [`../../archive/completed-phases/27-single-program-whole-net-fusion.md`](../../archive/completed-phases/27-single-program-whole-net-fusion.md)。
 
 ## 1. 当前对象
 
 ```text
-current pypto-lib  c9af5790d5fe450e14fd43c88099b87539089d17
+current pypto-lib  491267c45875e9b1e0071eed224e2e73526799e2
 current pypto      8e92b46808f9f7c09b6431ad4691503f09c12ee5
 current Main       models.step3p5.decode_fwd:whole_decode_step3p5
 vLLM overlay       1b3e538c35999e62b6d24e0651b3a85b7d16c826
-latest image       stepfun-develop-20260806-attn-taskmajor-canonical
+latest built image stepfun-develop-20260806-attn-taskmajor-canonical
 manifest           sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479
+current image      none for pypto-lib 491267c4
+pending spec       stepfun-develop-20260808-moe-opt-latest-source
 full-matrix fallback stepfun-develop-20260803-attn-final-wave5
 ```
 
-当前 latest-source image 已通过 BS1×64K Attention/ITL/DFX gate；完整 Main/MTP
-production matrix 仍只由 Wave5 证明。两类准出必须分开报告，历史 R1/R2 不得恢复。
+`c9af5790` 历史 image 已通过 BS1×64K Attention/ITL/DFX partial gate；当前
+`491267c4` 尚无 immutable image。完整 Main/MTP production matrix 仍只由 Wave5
+证明。源码 tip、历史 partial gate 和 full release 三类对象必须分开报告，历史
+R1/R2 不得恢复。
 
 ## 2. Goal
 
@@ -35,7 +39,8 @@ production matrix 仍只由 Wave5 证明。两类准出必须分开报告，历�
 - 默认 Main 已统一为 `whole_decode_step3p5`，旧 unroll/opt/rollback 入口已删除。
 - standalone Main、batch16、MTP focused gate 和 Wave5 immutable release gate 已完成。
 - Attention/Vec、TP all-reduce source publication/lifetime 已在 Wave5 对 0162 准出。
-- latest-source `c9af5790` immutable image 已完成 BS1×64K 整网 ITL 与两层 DFX。
+- 历史 `c9af5790` immutable image 已完成其源码层级的 BS1×64K 整网 ITL 与两层
+  DFX；当前 `491267c4` 尚待按 pending spec 构建和回归。
 - sidecar/holder、权重 IPC、KV metadata schema 和 vLLM overlay 已有实现基础。
 
 这些证据只证明 standalone/sidecar 组件，不等价于真实 production request 已无条件平替。

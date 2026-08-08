@@ -1,7 +1,8 @@
 # 05 · MoE 优化专项：L0–L4 focused network
 
-> **状态（2026-08-07）**：L0–L4 focused MoE 产品实现 `7928a275` 已合入
-> `pypto-lib stepfun/develop@63814d4ae62718b3c0721834878e4b4af4e7ac1b`。
+> **状态（2026-08-08）**：L0–L4 focused MoE 产品实现 `7928a275` 已合入
+> 当前 `pypto-lib stepfun/develop@491267c45875e9b1e0071eed224e2e73526799e2`；
+> 当前 tip 还包含 active-route scheduling 与 route/precision release harness。
 > 0162 上基于 `c9af5790` 的六档 BS=`1,2,4,7,8,16` formal normal campaign
 > 已完成 36/36 fresh
 > process run、完整 `hidden_l3/hidden_l4` golden、精度 finalize 和三轮
@@ -15,7 +16,7 @@
 >
 > **当前发布边界（NO-GO）**：matched-source whole-net 1-step×2、2-step×2
 > 已 8/8 sealed PASS，source-overlay N=128 也已过线；但没有 immutable image
-> 包含 `63814d4a`。SWA 源码变化后，`c9af5790` 的六档 golden 与性能不能自动
+> 包含 `491267c4`。SWA/active-route 源码变化后，旧镜像的六档 golden 与性能不能自动
 > 升级为最终证据。按用户决定，镜像发布推迟到统一 release commit 确定后；
 > final image 六档回归、formal matched-source DFX、route-aware reanalysis 和
 > all-rank swimlane 仍待完成。本文只覆盖五层裁剪网络，不把结果外推为 45 层
@@ -102,8 +103,10 @@ product commit:
   7928a2751930b04c866788a396a7337b62c6d32f
 published branch/current remote tip:
   stepfun/develop
-  63814d4ae62718b3c0721834878e4b4af4e7ac1b
-candidate decode_fwd.py SHA256:
+  491267c45875e9b1e0071eed224e2e73526799e2
+current-tip decode_fwd.py SHA256:
+  4b39aec73421dbc97352432d44dbf6e14b5b6d9212e887f29d9e0f8755a62398
+historical campaign candidate decode_fwd.py SHA256:
   7884da7c33a2d338fd36097676a5fafbcc2795c845409868ff0ce40cbb2bc2f9
 current attention_swa.py SHA256:
   c451b4cc1462cf2b7b960798d6242936962427940f68757bf7eea6679c109623
@@ -149,7 +152,7 @@ l2_swimlane_reuse_dep_gen:
 formal normal A/B 使用同一 digest-pinned image；baseline/candidate 只切换冻结 source
 tree。镜像审计要求 PyPTO=`8e92b468`、attention=`a2a3` 且
 `l2_swimlane_reuse_dep_gen` 存在，避免再次回退到旧 `defa97c5`/portable substrate。
-该 digest 不包含 `63814d4a`，因此本节只描述 pre-fix substrate；最终镜像尚未构建。
+该 digest 不包含 `491267c4`，因此本节只描述历史 pre-fix substrate；最终镜像尚未构建。
 
 ---
 
@@ -186,7 +189,7 @@ blocks_per_sequence = 512
 candidate 对 baseline 的 L3、L4 均为 `max_abs=0`、`bad_ratio=0`、bit-exact，
 并通过 batch-extension invariance。
 精度比较使用完整 hidden state，不以 token argmax 代替中间层精度。
-这些 golden 绑定 `c9af5790` 的 SWA 行为；`63814d4a` 之后必须在最终 immutable
+这些 golden 绑定 `c9af5790` 的 SWA 行为；`491267c4` 之后必须在最终 immutable
 image 上重新 dump，不能原样作为 final golden。
 
 ---
@@ -446,7 +449,10 @@ active_total_context_tokens = BS * 65536
 报告的 `measurement_integrity_passed`、
 `hidden_hash_exact_across_selected_rounds` 和
 `performance_non_regression_all_batches` 均为 `true`。
-该结论只对 `c9af5790` pre-fix source/image 组合成立，不是 `63814d4a` 最终准出。
+该结论只对 `c9af5790` pre-fix source/image 组合成立，不是 `491267c4` 最终准出。
+其中 `3553664c…` / `7884da7c…` / `65b0b8bf…` / `572ea2a2…` 等 decode hash
+属于对应历史 campaign 的冻结 source policy；当前 tip `4b39aec7…` 的正式回归必须
+重新生成 matched policy，不能批量替换旧记录，也不能直接沿用旧 policy。
 
 ### 7.2 Whole-net matched-source A/B
 
@@ -468,7 +474,7 @@ SHA256 c0a03127a706ac3d987369573dda3a8b20f725ee0efee47af78a8c4892704338
 该 matched-source A/B 关闭了先前 1/2-step smoke 的不完整状态，但两步输出仍不能
 替代 N=128、ALIGNED≥95% 多步精度门。
 
-### 7.3 `63814d4a` source-overlay N=128 精度
+### 7.3 `63814d4a` source-overlay N=128 精度（历史修复层）
 
 SWA 定位显示问题来自 `pl.cmp` predicate 到数值 mask 的转换路径。最终修复使用
 显式 INT32 区间算术生成 `{0,1}` mask，再 cast 到 score dtype；不改 MoE tile、

@@ -5,11 +5,12 @@
 > SSOT）；此刻状态在 [`../STATUS.md`](../STATUS.md)；接力上下文在
 > [`handoff.md`](handoff.md)。想讲进度给别人听 → 看本文。
 >
-> **2026-08-06 current-source override**：当前源码为
-> `pypto-lib stepfun/develop@c9af5790d5fe450e14fd43c88099b87539089d17` 与
+> **2026-08-08 current-source override**：当前源码为
+> `pypto-lib stepfun/develop@491267c45875e9b1e0071eed224e2e73526799e2` 与
 > `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。
-> latest-source canonical image manifest `sha256:3eb694e…` 已通过 BS1×64K
-> Attention/ITL/DFX gate（整网 p50 `39.612 ms`）；Wave5 仍是最后一个完成
+> 历史 `c9af5790` image manifest `sha256:3eb694e…` 已通过其源码层级的 BS1×64K
+> Attention/ITL/DFX partial gate（整网 p50 `39.612 ms`）；当前 `491267c4`
+> 尚无 immutable image。Wave5 仍是最后一个完成
 > Main N=128×3、Main batch16、MTP batch1/16 等全量 matrix 的 production
 > release-qualified 回退基线。历史 R1/R2 已 supersede。
 > 其它机器/架构仍需独立 gate。下方 B2/Phase 28 的
@@ -53,7 +54,7 @@ graph TD
 
 - **当前形态**：单个 `@pl.program`，45 层 loop-form Main，TP=8/EP=8，
   native W8A8；0724 hidden-only unroll baseline 仅作显式 rollback。
-- **已达成**：当前源码已前进到 `pypto-lib stepfun/develop@c9af5790`；
+- **已达成**：当前源码已前进到 `pypto-lib stepfun/develop@491267c4`；
   正式路径仍为 `models.step3p5.decode_fwd:whole_decode_step3p5`；0162 的 0726 历史发布镜像内
   N=256 清理前后 token/hidden `256/256` exact、`max_abs_diff=0`、
   TP spread `0.0`。

@@ -15,10 +15,11 @@ description: >
 > 3 步确认可用**:① 冒烟(镜像+native 库加载)② 整网 decode 精度(canonical)。
 > 完整构建/部署文档:[`deployment/docker/README.md`](../../../deployment/docker/README.md)。
 >
-> **状态边界（2026-08-06）**：完整 production matrix 的默认验证对象仍是
-> Wave5 release-qualified digest。latest-source Attention/ITL/DFX 对象是
-> `stepfun-develop-20260806-attn-taskmajor-canonical@sha256:3eb694e…`，但它尚未
-> 重跑完整 Main/MTP matrix。先按 [`deployment/version-matrix.md`](../../../deployment/version-matrix.md)
+> **状态边界（2026-08-08）**：完整 production matrix 的默认验证对象仍是
+> Wave5 release-qualified digest。当前源码是 pypto `8e92b468` /
+> pypto-lib `491267c4`，尚无 immutable image；`20260806` 的
+> `c9af5790@sha256:3eb694e…` 只作为历史 Attention/ITL/DFX partial gate。
+> 先按 [`deployment/version-matrix.md`](../../../deployment/version-matrix.md)
 > 选择目标并固定 manifest；历史 R1/R2 不得恢复。
 
 镜像自包含(pypto 栈 + runtime .so + ptoas + vLLM Track-B 补丁 + CANN beta.1),**不需要**
@@ -124,7 +125,7 @@ sudo $NC run --rm --net host --ipc host --privileged --security-opt apparmor=unc
 ```
 
 Wave5 镜像内 pypto-lib pin 为 `7099476b`，只保留一个 Main。当前 GitHub
-`stepfun/develop` 已前进到 `c9af5790`，不能把 branch tip 当作 Wave5 镜像内容。
+`stepfun/develop` 已前进到 `491267c4`，不能把 branch tip 当作 Wave5 镜像内容。
 
 ```text
 models.step3p5.decode_fwd:whole_decode_step3p5
