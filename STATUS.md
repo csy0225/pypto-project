@@ -4,7 +4,7 @@
 > 每日流水在 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)；
 > 整体规划在 [`planning/roadmap.md`](planning/roadmap.md)；接力面在
 > [`planning/handoff.md`](planning/handoff.md)。
-> **最后更新：2026-08-06。**
+> **最后更新：2026-08-10。**
 
 ## 两条线（项目结构）
 
@@ -19,7 +19,38 @@
      `PyPtoMetadataOnlyStep3p5DecoderLayer` + MTP-proposer 挂点 + MTP3 `hf_overrides` boot fix，
      commit `1b3e538c`）+ `vllm-ascend/` fork。
 
-> **2026-08-06 MoE focused 当前真相**：
+> **2026-08-10 MoE BS1 N256 发布真相**：
+>
+> ```text
+> csy0225/pypto-lib:stepfun/develop
+>   a31977fbb7ced6d2e599539c223d07813f161140
+> merge parents
+>   491267c45875e9b1e0071eed224e2e73526799e2
+>   7d3e02ae4ed447ded543fb716a479350f1f89db6
+> decode_fwd.py sha256
+>   d392311ce1f38a67ddaa007173bb012c87e68cafeb5dca6b47813a2424683eea
+> ```
+>
+> 最终改造把普通 routed expert hidden quant N chunk 扩到 `256`，gate/up 从
+> `K512xN64` 改为 `K256xN256`，配置四个 split slots，把每 expert N work
+> 从 `20` 降到 `5`；empty-rank scatter 判定移入 kernel，early staging 保留。
+>
+> 0162、BS1、ctx/max-seq `65536`、512 blocks 的 45-layer hidden-only A/B/A：
+> mean `36.354 -> 35.055 ms`（**3.57%**），p50
+> `35.778 -> 34.271 ms`（**4.21%**），裁决 `GO_GAIN_CONFIRMED`，三臂 hidden
+> payload byte-exact。100 样本 harness 的 p99 下标为 99，因此等于 max，只作诊断。
+>
+> 精度 targeted replay 为 `123/128 >= 122`、128/128 TP spread=0，step77
+> token-exact；candidate 的 0162 pytest 30/30、ruff、compile-only 全 PASS。
+> 合并远端 release harness 后，merge tree 在 0162 再跑 pytest 30/30 与 ruff PASS；
+> 产品 `decode_fwd.py` SHA 未变化。DFX/PMU PASS，但 PMU event2 仅为 busy-cycle，
+> 不可反推 HBM GB/s 或对比 `1.6 TB/s` 峰值。`down24` 因下游相位与 L4 terminal
+> 回退冻结为 `NO_GO_NO_RERUN`。
+>
+> 详见
+> [`benchmark/2026-08-10-step3p5-moe-n256-final.md`](benchmark/2026-08-10-step3p5-moe-n256-final.md)。
+
+> **2026-08-06 MoE focused 阶段性结果（已由 2026-08-10 N256 发布取代）**：
 >
 > ```text
 > scope:
@@ -45,14 +76,12 @@
 > `0.04/6.629/12.113/3.652/9.229/11.135%`，六档 `hidden_l3/hidden_l4`
 > 均 BF16 bit-exact、finite、TP spread=0；每个 sequence 独立使用 64K context。
 >
-> 当前未完成项是 formal matched-source DFX 12 runs、route-aware publication
-> reanalysis 和最终 all-rank swimlane。2026-08-04 的 context=1 DFX 仅为 task-grain
-> 诊断证据，不是最终 64K DFX。publication seal 已收紧为：外部钉住旧 normal
-> evidence manifest、旧 validation 必须存在且为普通文件、递归类型严格比较。
-> 0162 上 36/36 idempotent seal 已 PASS；authority 为
-> `authority/normal_seal_authority_v1.json`，SHA256
-> `16ac43432d0462e34bb939b11fb71e146cb2b9c2b068d9c3c5eec9901faa54be`。
-> 在反向复审转为 GO 前，不发布最终 DFX/swimlane 路径。
+> 当时未完成 formal matched-source DFX、route-aware publication reanalysis 和最终
+> all-rank swimlane；这些缺口已由上方 2026-08-10 N256 ITL/DFX/precision/landing
+> 证据链取代并关闭。旧 publication authority
+> `authority/normal_seal_authority_v1.json`（SHA256
+> `16ac43432d0462e34bb939b11fb71e146cb2b9c2b068d9c3c5eec9901faa54be`）
+> 仅保留为历史阶段证据。
 
 > **2026-08-03 当前真相：Attention/Vec 与 TP all-reduce 稳定性已在 Wave5
 > immutable 镜像完成 0162 发布 gate。**
@@ -215,6 +244,7 @@
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS(src) | simpler | ptoas-bin |
 |------|------|-------|-----------|---------|-----------|---------|-----------|
+| 2026-08-10 | **MoE BS1 N256 发布到 `csy0225/pypto-lib:stepfun/develop`**：merge 远端 release harness `491267c4` 与已验证 candidate `7d3e02ae`；产品 `decode_fwd.py` SHA 保持 `d392311c…`。0162 BS1/64K A/B/A mean `36.354 -> 35.055 ms`（3.57%）、p50 `35.778 -> 34.271 ms`（4.21%）；precision replay `123/128`、128/128 spread=0；candidate compile-only PASS，merge tree pytest 30/30 + ruff PASS。`down24` NO-GO | 未移动 | `a31977fb` | 未移动 | 未移动 | 未移动 | 未移动 |
 | 2026-08-03 | **Wave5 canonical release（0162）**：source partial 改 self-target TPUT，再走既有三波 reduce-scatter + push all-gather。manifest `sha256:4acc77cd…`、config `sha256:4f2539c1…`；immutable audit/smoke/Main+MTP compile、Main N=128×3、Main batch16、MTP batch1/batch16×2、64K/batch16 ITL/DFX 全 PASS。N=128 三轮均 `123/128` 且 spread=0；64K p50 `49.796 ms` | `defa97c5` | `7099476b` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | v0.50 |
 | 2026-08-03 | **Wave4 historical immutable candidate**：canonical TP all-reduce 增第三 completion wave；two-layer harness 与 canonical AST 对齐。manifest `sha256:8125c678…`、config `sha256:c340001f…`；audit/smoke/compile/64K ITL/DFX PASS，p50 `50.204 ms`。N=128 Run1 `122/128` 但 step2 spread=`2.0`，Run2 `123/128` spread=0；raw token gate PASS，未通过当时 TP-spread stability gate，已由 Wave5 取代 | `defa97c5` | `d7e1381b` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | v0.50 |
 | 2026-08-02 | **Attention/Vec 历史 clean candidate**：workload-derived tasks、Full/SWA cast 与 Vec 收口。manifest `sha256:64c573bc…`；64K p50 `50.563 ms`；N=128 三轮均 `121/128`，由后续 Wave3/4 lifetime 修复取代 | `defa97c5` | `76d96bdb` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | v0.50 |

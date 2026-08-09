@@ -1,5 +1,27 @@
 # Milestones —— 2026 Q2
 
+## 2026-08-10 —— MoE BS1 N256 优化发布到 `stepfun/develop` ✅
+
+- `csy0225/pypto-lib:stepfun/develop` 已前进到
+  `a31977fbb7ced6d2e599539c223d07813f161140`，合并远端最新 release harness
+  `491267c4` 与已验证 candidate `7d3e02ae`；产品 `decode_fwd.py` SHA 保持
+  `d392311ce1f38a67ddaa007173bb012c87e68cafeb5dca6b47813a2424683eea`。
+- 普通 routed hidden quant N chunk 扩到 `256`；gate/up
+  `K512xN64 -> K256xN256`、`slot_num=4`、每 expert N work `20 -> 5`；
+  empty-rank scatter 判定移入 kernel 并保留 early staging。
+- 0162 BS1/ctx65536/512 blocks 整网 A/B/A：mean
+  `36.354 -> 35.055 ms`（**3.57%**），p50
+  `35.778 -> 34.271 ms`（**4.21%**），hidden payload byte-exact；
+  p99 因 100 样本实现等于 max，仅作诊断。
+- targeted replay `123/128 >= 122`、128/128 TP spread=0、step77 token-exact；
+  candidate pytest 30/30、ruff、compile-only PASS。merge tree 复制到 0162 后
+  pytest 30/30 + ruff 再次 PASS。
+- DFX/PMU PASS；event2 是 busy-cycle 而非 byte counter，不得反推 HBM GB/s。
+  `down24` 因 e1/e2、scatter 下游相位与 L4 terminal 回退，冻结
+  `NO_GO_NO_RERUN`。
+- 详见
+  [`../benchmark/2026-08-10-step3p5-moe-n256-final.md`](../benchmark/2026-08-10-step3p5-moe-n256-final.md)。
+
 ## 2026-08-03 —— Wave5 TP all-reduce source publication 稳定性闭环 + 0162 发布 ✅
 
 - `pypto-lib stepfun/develop` 前进到
