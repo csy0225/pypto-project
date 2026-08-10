@@ -268,7 +268,7 @@ V4-Flash 的示例常量、某次 probe 的 peer-major slab、`spmd_submit`、`t
 
 probe 可以报告当前表达能力或版本限制，但产品代码首先服从 DeepSeek 语义和 step3p5 明确差异。
 
-### 4.3 Release gate
+### 4.3 发布门
 
 验收应按以下层级记录：
 

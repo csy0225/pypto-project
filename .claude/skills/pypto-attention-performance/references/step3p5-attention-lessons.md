@@ -150,7 +150,7 @@ grain 24/12/24:
 5–10 us 越好”不成立。随后三轮稳定性中，`22/12/22` 与 `24/12/24`
 差异已接近噪声；当前 QK 最终选择 22，softmax 选择 12。
 
-### 4.2 SV + segment recurrence
+### 4.2 SV + 分段递推
 
 Pass-A 并入 SV 后，目标函数变成整条 online chain，而不是旧 standalone SV：
 

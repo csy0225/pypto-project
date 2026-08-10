@@ -111,7 +111,7 @@ recv_x 是大 payload
 
 这会带来几个风险。
 
-### 3.1 false sharing
+### 3.1 false sharing（伪共享）
 
 不同 rank / worker 写的是不同地址，但如果地址落在同一 cache line，硬件一致性或内存引擎仍可能以整条 line 为单位仲裁。
 

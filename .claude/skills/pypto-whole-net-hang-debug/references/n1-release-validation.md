@@ -56,7 +56,7 @@ simpler HEAD 98ce22a6 + dirty child IPC import
 formalize 了相关运行支持，并由下面的 clean-pin smoke 单独验证；该 smoke
 不把新提交追溯成旧 20-run 的 byte-identical runtime。
 
-### 12.2 release exact-source 20-run
+### 12.2 发布版 exact-source 20 轮
 
 日志：
 

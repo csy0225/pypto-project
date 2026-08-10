@@ -171,10 +171,10 @@ CI patch: three dirty test/runner files corresponding to committed 563fe62a
 status: 0162 local only; registry pull unavailable
 ```
 
-Candidate evidence: Main 8-step token exact, hidden finite, TP spread `0`; N=256
-teacher-forced hidden finite `256/256`, TP spread `0`, token exact `241/256`.
-Use the host-side mounted candidate only after confirming the image exists locally; do not
-replace the published-image audit hash above until the candidate is rebuilt and pushed.
+candidate 证据：Main 8-step token exact、hidden finite、TP spread `0`；N=256
+teacher-forced hidden finite `256/256`、TP spread `0`、token exact `241/256`。
+只有确认该镜像存在于本地之后，才能用宿主侧挂载的 candidate；在 candidate 重新
+build 并 push 之前，**不要**替换上面已发布镜像的 audit hash。
 
 ### Step 3.1 · 发布镜像内 canonical-only 审计（必做）
 
@@ -334,8 +334,8 @@ step0/step1 `token_exact=true` + step2 `output=6127`(= skill 金标准 `1207→6
 | 容器 `rc=1` + `cann-8.5.1 No such file` | 旧镜像 8.5.1 残留 | 换新 tag(ENTRYPOINT/profile/ENV 已改 beta.1) |
 | ptoas/pypto 命令找不到 | 没走登录 shell | 命令用 `bash -lc '...'`(source `/etc/profile.d/pypto-env.sh`) |
 | runner step2 FAIL | `DEFAULT_ORACLE_TOKENS` stale(19384) | 非精度问题,见 Step 3 判读 |
-| `stage left a live child process group` | shared-memory child cleanup race / zombie-only group | 检查 Main report 与宿主进程；优先使用修正后的 runner，不能只看该错误判精度失败 |
-| MTP report missing / `mtp3_hidden.pt` missing | MTP oracle is outside the image | Use `--skip-mtp` for Main/C/D/G image verification and report MTP as skipped |
+| `stage left a live child process group` | shared-memory 子进程清理竞争 / 仅剩 zombie 的进程组 | 检查 Main report 与宿主进程；优先使用修正后的 runner，不能只看该错误判精度失败 |
+| MTP report missing / `mtp3_hidden.pt` missing | MTP oracle 在镜像之外 | Main/C/D/G 镜像验证用 `--skip-mtp`，并把 MTP 记为 skipped |
 
 ## 踩坑速查(容器内场景)
 

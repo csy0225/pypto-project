@@ -164,7 +164,7 @@ producer compute
 
 ### 表 C：layer/index namespace 表
 
-| absolute layer | layer type | attention local index | dense local index | MoE position | norm index | weight keys | buffer suffix |
+| 绝对层号 | 层类型 | attention 局部索引 | dense 局部索引 | MoE 位置 | norm 索引 | weight keys | buffer 后缀 |
 |---:|---|---:|---:|---:|---:|---|---|
 
 这一张表必须覆盖所有层，不允许用一个含义模糊的 `layer_idx` 同时表示：
@@ -339,7 +339,7 @@ completion 如何传播和回收？
 
 建议为每个 collective 建立表：
 
-| step | rank role | payload operation | signal operation | fence | expected generation | next step |
+| 步 | rank 角色 | payload 操作 | signal 操作 | fence | 期望 generation | 下一步 |
 |---:|---|---|---|---|---:|---|
 
 并覆盖以下最小 case：
@@ -375,7 +375,7 @@ completion 如何传播和回收？
 
 Agent 必须提交逐算子 numerical contract：
 
-| stage | input dtype | accumulation dtype | output dtype | scale/bias dtype | quant/dequant boundary | golden |
+| 阶段 | 输入 dtype | 累加 dtype | 输出 dtype | scale/bias dtype | quant/dequant 边界 | golden |
 |---|---|---|---|---|---|---|
 
 对于 native W8A8 路径，至少明确：

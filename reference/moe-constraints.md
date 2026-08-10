@@ -181,7 +181,7 @@ token 级对齐（temp=0 多 prompt）。
 **`ep_all_to_all`（moe.py:305-382 的 a2a pull）对「非 0 号接收卡」投递错 token**（rank0 对，rank≠0 错）。
 证据（layer3, --bypass-gate, --zero-shared --torch-golden, cards 8-15）：
 
-| stage | rank0 | rank1 |
+| 阶段 | rank0 | rank1 |
 |---|---|---|
 | `recv_x`（a2a 输出，re-pack 前） | **0.00% 对**（验证了 ref 布局） | **68% 错** ← 根因 |
 | `local_routed_x`（re-pack 后） | 0.00% 对 | 68% 错（传播） |

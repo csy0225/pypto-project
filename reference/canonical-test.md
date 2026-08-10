@@ -26,7 +26,7 @@ accept/reject 由 vLLM 或 standalone host 负责。
 
 ## 2. 精度和 liveness gate
 
-### 2.1 Vanilla raw precision
+### 2.1 vanilla 原始精度
 
 使用 live vanilla vLLM W8A8 oracle 做 teacher-forced 多步 decode，seed=6127，
 要求：
@@ -49,7 +49,7 @@ vanilla raw alignment = 240/256 = 93.75%
 该结果必须和 replacement equivalence 分开报告，不能把 replacement PASS
 改写成 vanilla precision PASS。
 
-### 2.2 Replacement equivalence
+### 2.2 替换等价性
 
 canonical-only 清理前后必须逐 token、逐 hidden 对比。已有 N=256 证据：
 
@@ -111,7 +111,7 @@ resident K/V history
 B3 额外使用 `--kv-probe` 检查 45 层、K/V、slot 0/1/2；相邻 invocation
 必须证明历史 row 不被误写，padding row 必须来自 allocator-owned reserve。
 
-## 4. MTP hidden-only gate
+## 4. MTP hidden-only 门
 
 MTP 使用：
 

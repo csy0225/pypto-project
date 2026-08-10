@@ -45,7 +45,7 @@ strip active real builder
 这个问题不是最终 512B A/B 变量，但必须保留修复，否则下一次 regenerate
 会重新引入未验证边界。
 
-### 10.2 per-layer distinct buffer
+### 10.2 每层独立 buffer
 
 PyPTO 当前依赖模型是 RAW-only v1，依赖 non-aliasing intermediate memory。
 本案例审计每层：
