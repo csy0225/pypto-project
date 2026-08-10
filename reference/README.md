@@ -16,12 +16,14 @@ canonical 测试、pypto runtime 框架视图、编程 API、kernel 约束的参
 | [`moe-constraints.md`](moe-constraints.md) | MoE kernel / dispatch / combine 的硬约束清单。 |
 | [`moe-routed-live-wiring.md`](moe-routed-live-wiring.md) | routed expert live 接线路径（vLLM ↔ pypto）。 |
 | [`zero-copy-ipc-route.md`](zero-copy-ipc-route.md) | 跨卡 zero-copy IPC（weight / KV）路径设计。 |
+| [`execution-host-contract.md`](execution-host-contract.md) | **0162 是唯一执行主机**；卡/锁分配、oracle 状态、无卡 codegen 门。所有 agent 适用。 |
 
 ## 什么内容归哪里
 
 | 内容 | 去向 |
 |------|------|
 | canonical 验收口径 / golden token / 命令 | `canonical-test.md` |
+| 执行主机 / 卡与锁 / 并发计时约束 | `execution-host-contract.md` |
 | pypto runtime 框架概念 | `4plus1/` |
 | pypto frontend API | `pypto-programming-api.md` |
 | 跨仓架构 / 模块图 | `../design/` |
