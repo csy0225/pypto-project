@@ -102,6 +102,42 @@ Main module/name 参数；后续 blocker 定位只允许 canonical。
 > **结论:多decode精度 blocker 已解决,整网 forward 数值忠实、逐 token 对齐 vanilla。**
 > 历史"near-tie/未完全正常"表述作废。详见 memory `n1_multidecode_neartie_faithful_a632c42e`。
 
+> **2026-08-04 更新（device 0162 cards 0-7, 分支 `feat/vllm-live-front-wiring`, 镜像
+> `vllm-pypto:wave5-local`）——co-resident 整条 round-trip WIRING 已在设备上打通到
+> decode ABI；下一墙 = live prefill**：
+>
+> 本 session 把 tail-only vLLM（`--load-format pypto` + `PYPTO_STEP3P5_TAIL_ONLY=1`,
+> kept=3/skipped=109539）与常驻 whole-net sidecar **同卡 0-7 co-resident** 跑通到
+> 真实请求进入 gate。解决/验证：
+> 1. **block_table ABI 修复**：live vLLM 默认 `max-model-len`(~262144)→ block table
+>    宽 2048 → flat `16×2048=32768`，而 compiled `BLOCK_TABLE_FLAT_DYN(BTF)=512`
+>    (`USER_BATCH_DYN=16 × ceil(MAX_SEQ 4096/128)=32`)。**修法：vLLM launcher 固定
+>    `--max-model-len 4096`** 让 block table 宽=32 → flat 512 = BTF。（`whole_decode_holder.py:536`
+>    的 `table.numel()!=BTF` 校验。）
+> 2. **G4 co-tenancy NO_HCCL 补丁不在任何发布镜像里**：release/Wave 镜像都为 standalone
+>    canonical（cards 8-15）构建，`comm_hccl.cpp` 无 `SIMPLER_COMM_NO_HCCL` gate（image
+>    `.so` grep=0），故 env flag 空转、sidecar `comm_init` 撞 `HcclCommInitRootInfo
+>    failed: 7`。**修法：从 git `878f3742` 重建 patch，在 wave5 镜像内 patch
+>    `src/a2a3/platform/onboard/host/comm_hccl.cpp`（5 处 anchor）+ `build_runtimes
+>    --platforms a2a3` 重编，把 patched `libhost_runtime.so`（host_build_graph +
+>    tensormap_and_ringbuffer）mount 进 sidecar**。重建后 gate_count=1。
+>    → device 验证：sidecar 常驻、weight+KV IPC 零拷贝导入、`whole_decode_step3p5`
+>    在 8 chip **co-resident 编译+prewarm+run**（`simpler_run` device_wall spans，
+>    ~50ms），**0 次 HcclCommInitRootInfo failed、0 次 507018、无 card poison / 无
+>    force-reset**（co-tenancy hazard 未触发）。
+> 3. **下一墙 = live prefill（H4，非 wiring 缺陷）**：真实请求首个 forward 是 **prefill**
+>    (`AscendAttentionState.PrefillNoCache`, `prompt_token_ids_len=1, num_computed_tokens=0`)；
+>    `whole_decode_step3p5` 是 **decode-only**，gate（`vllm_monkey_patch.py`
+>    `classify_decode_gate`）在 `extract_pypto_decode_plan` 上正确 fail-closed
+>    (`DecodeMetadataError: unsupported attention state PrefillNoCache`)，EngineCore 退出。
+>    要端到端出 token，必须先 prefill 填 KV 再 decode——需要 wire prefill program/bridge
+>    或 prefill KV-fill 路径。跟踪见 phase 28 H4。
+>
+> 未推送：分支 `feat/vllm-live-front-wiring` 3 个 fix commit（`a9573180` load_format
+> coerce、`c9af2a6a` MTP profile no-op hoist、`d35a71bf` KVPOOL MTP-optional）待用户
+> 授权后 HTTP/1.1+PAT push。NO_HCCL patch 目前只在镜像内重建（`nohccl_patch.py` +
+> `build_nohccl.sh` 在 0162 `live-front-wiring/patches/`），未 bake 进发布镜像。
+
 1. **live per-layer paged-KV bridge**：standalone canonical path 已有
    resident per-layer KV 并完成多步回归；缺口是从真实 vLLM paged KV pool
    导入 per-layer BF16 slice，并按请求/step 传

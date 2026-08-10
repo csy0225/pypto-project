@@ -19,6 +19,37 @@
      `PyPtoMetadataOnlyStep3p5DecoderLayer` + MTP-proposer 挂点 + MTP3 `hf_overrides` boot fix，
      commit `1b3e538c`）+ `vllm-ascend/` fork。
 
+> **2026-08-10 P1a gate 解耦（最新性能结论，已在 N256 之上再拿约 6%）**：
+>
+> ```text
+> pypto-lib  perf/gate-decouple-invrms-20260810  d13b2ca   (base a31977fb)
+> decode_fwd.py sha256
+>   28080c536a3731a9f40ad360b7d064f59bf70686de89e718cd99957d9984a07c
+> image  hub.i.basemind.com/stepcast/vllm-pypto@sha256:cab89668...  (ATTN_TASK_PROFILE=a2a3 baked)
+> ```
+>
+> `gate_expert_fanout` 的 cube matmul 本不需要 `norm_quant_moe_input` 的任何输出，
+> 只因 `inv_rms` 缩放写在同一 task 里而被串行。改为 fanout 只存 raw FP32 logits、
+> `inv_rms/sigmoid/bias` 尾巴搬进 `gate_topk`（它本来就等 inv_rms）。算子顺序不变。
+>
+> | 工作点 | parent_center | candidate | gain | 裁决 |
+> |---|---:|---:|---:|---|
+> | bs=1 ctx=64k nb=512 | 36.493 | 33.849 | +2.645 ms (+7.25%)；min +4.87% | GO |
+> | bs=8 ctx=64k nb=4096 | 97.528 | 91.722 | +5.806 ms (+5.95%)；min +6.19% | GO |
+> | bs=16 ctx=64k | — | — | 物理不可行（16 GiB 单次 rtMalloc -> 207001） | 容量上限 |
+>
+> **统一口径：bs=1 与 bs=8 都约 6%，byte-exact**（bs=1 三臂 hidden sha256 =
+> `567b206b...` 即 N256 发布 golden、tail token 14371；bs=8 三臂 = `1fcd4fcc...`）。
+> 机理：MoE-only 段 15 hop -> 14 hop，`norm_quant` 离开关键路径，链头 81.8 -> 56.5 us。
+>
+> 同轮被否：`gate_up+act` 合并撞 UB 上限（`401472 > 188416` B，pitfalls §7 常量
+> `pl.range` 展开不复用 buffer）；`act+h_quant` grid 维度不兼容；
+> `tp_all_reduce` 降 ring step **前提未证实不执行**（AR 主要是吸收 rank skew 的
+> barrier —— candidate swimlane 里单个 AR 达 35,530 us，128 KB payload 不可能是搬运）。
+> AR 正确口径是 48 次 on-path、约 8.5~9.7%，**不是** 15%。
+>
+> 详见 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) 2026-08-10 P1a 条目。
+
 > **2026-08-10 MoE BS1 N256 发布真相**：
 >
 > ```text
@@ -244,6 +275,7 @@
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS(src) | simpler | ptoas-bin |
 |------|------|-------|-----------|---------|-----------|---------|-----------|
+| 2026-08-10 | **P1a gate 解耦（分支 `perf/gate-decouple-invrms-20260810` @ `d13b2ca`，尚未合 develop）**：`gate_expert_fanout` 只存 raw FP32 logits，`inv_rms/sigmoid/bias` 尾巴搬进 `gate_topk`，解除对 `norm_quant_moe_input` 的串行。`decode_fwd.py` SHA `d392311c… -> 28080c53…`。codegen 实证 `params_t70` 不再 `add_input(moe_inv_rms)`，task 数与 `block_num=9` 不变。0162 A/B/A：bs=1/64k/nb512 `36.493 -> 33.849 ms`（p50 +7.25%、min +4.87%）；bs=8/64k/nb4096 `97.528 -> 91.722 ms`（p50 +5.95%、min +6.19%）；bs=16/64k 物理不可行。**两个 batch 三臂 hidden 全 byte-exact**（bs=1 = N256 golden `567b206b…`、tail token 14371；bs=8 `1fcd4fcc…`）。swimlane 机理：MoE-only 段 15 -> 14 hop、`norm_quant` 离开关键路径、链头 `81.8 -> 56.5 us`。同轮 NO-GO：`gate_up+act`（UB `401472 > 188416` B，pitfalls §7）、`act+h_quant`（grid 维度不兼容）、`tp_all_reduce` 降 ring step（前提未证实：AR 主要吸收 rank skew，单个 AR 观测到 35,530 us） | 未移动 | `d13b2ca`(branch) | 未移动 | 未移动 | 未移动 | 未移动 |
 | 2026-08-10 | **MoE BS1 N256 发布到 `csy0225/pypto-lib:stepfun/develop`**：merge 远端 release harness `491267c4` 与已验证 candidate `7d3e02ae`；产品 `decode_fwd.py` SHA 保持 `d392311c…`。0162 BS1/64K A/B/A mean `36.354 -> 35.055 ms`（3.57%）、p50 `35.778 -> 34.271 ms`（4.21%）；precision replay `123/128`、128/128 spread=0；candidate compile-only PASS，merge tree pytest 30/30 + ruff PASS。`down24` NO-GO | 未移动 | `a31977fb` | 未移动 | 未移动 | 未移动 | 未移动 |
 | 2026-08-03 | **Wave5 canonical release（0162）**：source partial 改 self-target TPUT，再走既有三波 reduce-scatter + push all-gather。manifest `sha256:4acc77cd…`、config `sha256:4f2539c1…`；immutable audit/smoke/Main+MTP compile、Main N=128×3、Main batch16、MTP batch1/batch16×2、64K/batch16 ITL/DFX 全 PASS。N=128 三轮均 `123/128` 且 spread=0；64K p50 `49.796 ms` | `defa97c5` | `7099476b` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | v0.50 |
 | 2026-08-03 | **Wave4 historical immutable candidate**：canonical TP all-reduce 增第三 completion wave；two-layer harness 与 canonical AST 对齐。manifest `sha256:8125c678…`、config `sha256:c340001f…`；audit/smoke/compile/64K ITL/DFX PASS，p50 `50.204 ms`。N=128 Run1 `122/128` 但 step2 spread=`2.0`，Run2 `123/128` spread=0；raw token gate PASS，未通过当时 TP-spread stability gate，已由 Wave5 取代 | `defa97c5` | `d7e1381b` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | v0.50 |

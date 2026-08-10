@@ -1,5 +1,106 @@
 # Milestones —— 2026 Q2
 
+## 2026-08-10 —— P1a gate 解耦：swimlane critical path 定向优化，bs1/bs8 各约 6%，byte-exact ✅
+
+**方法**：只看 swimlane critical path（5 层 FiveLayerMoe 代表整网），改动全部收在
+`pypto-lib/models/step3p5/decode_fwd.py`。
+
+**定位**：interior SWA+MoE 层的 MoE-only 段是 15 hop、compute 222.1 + stall 74.6 =
+`296.7 us`（stall 占 25%）。链头 `norm_quant_moe_input`(25.8) -> `gate_expert_fanout`(32.7)
+之间的串行**只由 `inv_rms` 一个 per-token 标量造成**，而它在 fanout 的 FP32 matmul **之后**
+才乘（`decode_fwd.py:618` `logits_n = pl.row_expand_mul(logits_n, inv_rms)`）——
+也就是 fanout 的 cube matmul 根本不需要 norm_quant 的任何输出。
+
+**改法（P1a，commit `d13b2ca`，branch `perf/gate-decouple-invrms-20260810`）**：
+fanout 只存 raw FP32 logits 到 `logit_buf`（cube->vec 用 `pl.mul(logits_n, 1.0)`，FP32 精确）；
+把 `row_expand_mul(inv_rms) -> sigmoid -> +bias -> score_buf/biased_buf` 整段按同样的
+`ROUTER_GATE_N_CHUNK=32` 分块搬到 `gate_topk` 开头（它本来就要等 inv_rms），
+pad 列 0/NEG_INF 的处理不变。算子顺序完全不变，只多一次 FP32 tensor round-trip。
+
+**三层验证（都是实测，不是推断）**：
+
+1. **codegen 层**（同 image `sha256:cab89668`，a2a3，NB=512，两边都 COMPILE_OK 13.3s）：
+   `whole_chip_orch.cpp` 里 baseline 的 `params_t70`(gate_expert_fanout) 有
+   `add_input(moe_inv_rms__ssa_v2_inline1565)`；candidate 的 `params_t70` 没有了，
+   join 点搬到 `params_t71`(gate_topk)。task 数与 `block_num=9` 均不变。
+2. **device A/B/A**（`parent -> candidate -> parent`，10/100）：
+
+   | 工作点 | parent_center | candidate | gain | gain_floor | 裁决 |
+   |---|---:|---:|---:|---:|---|
+   | bs=1 ctx=65536 nb=512 | 36.493 | 33.849 | +2.645 ms (+7.25%)；min 口径 +1.704 (+4.87%) | 0.634 | GO |
+   | bs=8 ctx=65536 nb=4096 | 97.528 | 91.722 | +5.806 ms (+5.95%)；min 口径 +5.963 (+6.19%) | 2.637 | GO |
+   | bs=16 ctx=65536 | — | — | **物理不可行** | — | 容量上限 |
+
+   bs=8 上 p50/min 两口径一致（5.95%/6.19%），bs=1 的 p50 偏高、min 偏低，
+   **对外统一口径：bs=1 与 bs=8 都约 6%**。
+   bs=16 @ per-request 64K 需 `num_blocks=8192` -> 单次 16 GiB `rtMalloc` -> `207001`，
+   canary 只剩 `13.21 GiB` free；P1a 不改 footprint（只多 `[16,512]` FP32 `logit_buf`
+   ≈32 KB/instance，对 24.86 GiB/rank weight pool 可忽略）。按 codex 建议报到 bs=8 并说明上限，
+   **不用 bs=16/ctx=4096 冒充 per-request 64K**。
+3. **精度 = byte-exact**（比 vanilla oracle 更硬，且更便宜）：
+   bs=1 三臂 hidden tensor payload sha256 全部 =
+   `567b206bb03d89f84020e1dddd61098a8f79f32f81b8f4fcf56443113e27f03e`
+   （即 N256 发布版 golden），tail token `14371` 全臂精确；
+   bs=8 三臂全部 = `1fcd4fcc9d0775a7c5fb08784725f9570246858291c85788fad6d4b234a8722e`。
+
+**机理闭环（candidate swimlane，rank0）**：MoE-only 段 15 hop -> **14 hop**，
+`norm_quant_moe_input` **不在关键路径上**；链头 `81.8 us -> 56.5 us`（**-25.3 us/层**），
+段合计 `296.7 -> 280.0 us`；on-path task 数 `99 -> 96`。
+`gate_topk` 3.1 -> 10.3 us 正是搬进去的尾巴，被移走的 25.8 us 完全覆盖。
+`-25.3 us x 42 层 = 1.06 ms`，与事前预估 1.08 ms 吻合。
+
+### 同轮被证伪 / 被否的方向（记下来避免复发）
+
+- **`expert_gate_up` + `expert_gate_up_act` 合并 = NO-GO（实测）**。
+  机理本身成立（`ROUTED_GATE_MM_N_CHUNK=256` : `ROUTED_GATE_ACT_N_CHUNK=64` = 4:1，
+  act body 在列方向纯 elementwise、无跨列归约，可干掉 `gate_i32`/`up_i32` 两块
+  `[local_recv_max, inter]` INT32 GM bridge）。但 codegen 直接失败：
+  `expert_gate_up_aiv: Vec buffer usage (401472 bytes) exceeds platform limit (188416 bytes)`。
+  根因 = `known-pypto-pitfalls.md §7`：`pl.range(4)` 是常量 range，展开且**不复用 SSA buffer**，
+  epilogue 向量工作集被独立分配 4 份。预期收益仅 0.42~0.61 ms，不值得为绕 UB 返工，已回退。
+- **`expert_gate_up_act` + `routed_h_quant` 合并 = 不做**。
+  两者 grid 维度不同（`active_experts x (inter/chunk)` vs `active_experts`），
+  且 h_quant 要对整行 `inter` 求 amax，必须等该行所有 act N-chunk 完成。
+  要合就得把 act 降成 per-expert grid，bs=1 时 `active_expert_count` 只有 2~3，act 会显著变慢。
+- **`tp_all_reduce` 降 ring step = 前提未证实，不执行**。
+  修正后的账：on-path AR 是 `45 attention + 3 dense = 48` 次（**不是**把 5 层的 8 次 x9 得 72 —— 那样会把
+  仅 3 个 dense AR 放大成 27 个），AR task-span 约 `2.20 ms`、含前置 gap 约 `2.51 ms`，
+  占实测 25.8 ms 的 `8.5~9.7%`（**不是** 15%）。42 个 MoE shared-expert AR 被 routed/combine 分支压住
+  （早于 join 47.8/59.9 us），不计入当前关键路径。
+  更关键的反例：candidate swimlane 里**单个 AR 花了 35,530.5 us**（AR family 占 makespan 95.1%），
+  128 KB payload 不可能有 35.5 ms 搬运 -> 该时间全是等 peer 的 spin，即 skill 记录的
+  「collective spin-wait 被记成 kernel compute」陷阱。所以 AR 主要是**吸收 rank skew 的 barrier**，
+  降 step 救不了 barrier 该等的最慢 rank。但 clean baseline 8 次 AR 是
+  42.2/39.4/44.6/43.3/43.1/41.8/54.6/42.7 us，紧凑度不像纯 skew -> 另有约 42 us 地板。
+  结论：两效应叠加，**拿到 step 级证据前不碰 collectives**。
+- **旧结论「64k 下 `tp_all_reduce` 只占 span 1.84%、routed expert busy 0.99%，所以 C/D/F 系低 ROI」被推翻**：
+  那是 instrumented span 占比（被 attention task 数放大 5.21x），不是关键路径占比。
+  但**修正口径后 AR 是 8.5~11%**，不是我一度说的 15.4%。
+
+### 基础设施事实（下次撞到别误判）
+
+- 第一次 bs=8 campaign 的 A1-parent（**未改动的发布版源码**）在 codegen 崩了
+  `swa_moe_chip_orch_swiglu7_silu_expert_gate_up | ptoas compilation failed`（错误正文为空）。
+  **没有 rotate 任何 knob**，改用 compile-only 在同 image / 同 NB=4096 / 同串行 codegen 下
+  对 parent 与 candidate 各编一次：两边都 `COMPILE_OK` 88.3s / 88.4s（远大于 NB=512 的 13.3s，
+  说明确实跑完整 codegen）。故判为 **ptoas 瞬时崩溃**，与源码和改动无关，整个 campaign 作废重跑
+  （归档 `...-ABORTED-ptoas-flake` + `ABORT_REASON.md`）。
+- **非 root `fuser /dev/davinciN` 不可信**：cards 0-7 明明有 8 个 `VLLMWorker_TP`（各 54.7 GiB）
+  也报 free。占卡前必须 `sudo -n fuser` + `npu-smi info -t proc-mem` 双查、fail-closed。
+- `a2a3` profile 是**烤在镜像 ENV 里**的（`PYPTO_STEP3P5_ATTN_TASK_PROFILE`），不在 run script 里；
+  4 个带 a2a3 的镜像原本都是 untagged `<none>`，已打 tag
+  （`keep-a2a3-n256-baseline` / `keep-a2a3-moe-focused-20260806` /
+  `keep-a2a3-taskmajor-20260806` / `keep-a2a3-misc`）。
+- 历史 `49.796 -> 35.778 ms` 的 14 ms 落差**不是 warmup 口径**：`max_device_wall` median
+  `39.662 -> 25.758 ms`，而 `bind.args` 只从 `6.735 -> 6.384`。真凶是
+  `a2a3` profile + commit `c9af5790`（attention taskmajor，已在 develop 里）的 bundle。
+
+**下一步**：MoE 的剩余空间在**跨 rank 负载均衡**（codex P3），不在本地 kernel 合并 ——
+已证明 `combine_wait` 由本 rank active local expert 数决定（rank0：L3 有 1 个 -> wait 19.26 us；
+L4 有 0 个 -> wait 155.40 us），且 skew 又反过来放大 AR，两件事同源。
+
+---
+
 ## 2026-08-10 —— MoE BS1 N256 优化发布到 `stepfun/develop` ✅
 
 - `csy0225/pypto-lib:stepfun/develop` 已前进到
@@ -21,6 +122,34 @@
   `NO_GO_NO_RERUN`。
 - 详见
   [`../benchmark/2026-08-10-step3p5-moe-n256-final.md`](../benchmark/2026-08-10-step3p5-moe-n256-final.md)。
+
+## 2026-08-04 —— vLLM live-front co-resident round-trip 打通到 decode ABI（H3），下一墙 = live prefill（H4）⏳
+
+- 分支 `feat/vllm-live-front-wiring`，device 0162 **cards 0-7**（未触碰 8-15 及
+  保护 PID 2045390-2045397），镜像 `vllm-pypto:wave5-local`。
+- **tail-only vLLM + 常驻 whole-net sidecar 同卡 co-resident 跑通到真实请求进入 gate**：
+  vLLM 8 worker `--load-format pypto` tail-only（kept=3/skipped=109539）导出 W8A8
+  decoder 权重（8 keys）+ paged KV（8 keys, Main-only）；sidecar `--serve --kv-ipc`
+  零拷贝导入 weight+KV IPC，`whole_decode_step3p5` 在 8 chip co-resident
+  编译+prewarm+run（`simpler_run` device_wall spans ~50ms），**0 次
+  HcclCommInitRootInfo failed、0 次 507018、无 card poison/force-reset**。
+- **两处 wiring 修复**：
+  (1) **block_table ABI**：vLLM 默认 max-model-len(~262144)→flat 32768 ≠ compiled
+  `BTF=512`；固定 vLLM `--max-model-len 4096`（宽 32 × storage batch 16 = 512）。
+  (2) **G4 NO_HCCL 补丁不在发布镜像**：release/Wave 镜像都是 standalone(8-15)构建，
+  `comm_hccl.cpp` 无 `SIMPLER_COMM_NO_HCCL` gate → env 空转、`comm_init` 撞
+  `HcclCommInitRootInfo failed: 7`。从 git `878f3742` 重建 patch，在 wave5 镜像内
+  patch comm_hccl.cpp（5 anchor）+ `build_runtimes --platforms a2a3` 重编，mount
+  patched `libhost_runtime.so`（host_build_graph + tensormap_and_ringbuffer）进 sidecar。
+- 另修 3 个 vLLM 侧 backend bug（分支 commit，未 push）：`a9573180` loader
+  load_format="pypto" 强制 coerce 到 "auto"；`c9af2a6a` MTP profile no-op 提到 1..16
+  ABI 校验之前（16384-row profile batch）；`d35a71bf` KVPOOL MTP-optional（去掉
+  第二次 24.86 GiB 权重导出触发的 OOM，改 Main-only）。
+- **下一墙 = live prefill（H4，非 wiring 缺陷）**：真实请求首个 forward 是 prefill
+  (`AscendAttentionState.PrefillNoCache`)，`whole_decode_step3p5` 是 decode-only，
+  gate 正确 fail-closed (`DecodeMetadataError: unsupported attention state
+  PrefillNoCache`) → EngineCore 退出。端到端出 token 须先 prefill 填 KV 再 decode。
+- 详见 [`../blockers.md`](../blockers.md) Phase 28 live serving §2026-08-04 更新。
 
 ## 2026-08-03 —— Wave5 TP all-reduce source publication 稳定性闭环 + 0162 发布 ✅
 
