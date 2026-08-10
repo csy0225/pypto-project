@@ -113,6 +113,7 @@ producer → 数学变换/quant/route-map → transport/window
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
 | J1 | L0–L4 routed gate/up stage split + task-grain tuning | P0 | 🟦 | codex | A1, C1–C3, D1–D2, G1, I2 | 产品代码 `7928a275` 已合入 `stepfun/develop`：普通 expert 使用 `row16/K512/N64/down-N256`，保留 scatter→wait 真依赖与 L43/L44 原 specialization。0162 六档独立 64K normal/correctness/counterbalance PASS，L3/L4 hidden bit-exact；BS1/2/4/7/8/16 p50 reduction=`0.04/6.629/12.113/3.652/9.229/11.135%`。剩余 gate：formal matched-source DFX 12 runs、route-aware publication reanalysis、最终 all-rank swimlane 固定路径与 hash。设计见 [`05-moe-optimization.md`](05-moe-optimization.md) | 2026-08-06 |
+| J2 | gate fan-out 与 norm/quant 解耦（deferred `inv_rms`） | P0 | ✅ | claude | J1 | 已发布 `stepfun/develop@d13b2ca6`（单 commit FF，只改 `decode_fwd.py` +63/-35，sha `d392311c… -> 28080c53…`）。`gate_expert_fanout` 只写 raw FP32 logits，`inv_rms/sigmoid/bias` 尾巴搬进本来就等 `inv_rms` 的 `gate_topk`；算子顺序与数值语义不变，codegen 侧 `params_t70` 不再 `add_input(moe_inv_rms)`，task 数与 `block_num=9` 不变。0162 三臂 A/B/A：bs=1/64k/nb512 p50 `36.494 -> 33.849 ms`（**+7.25%**，地板 0.634）、bs=8/64k/nb4096 p50 `97.528 -> 91.722 ms`（**+5.95%**，地板 2.637）；bs=16 物理不可行（16 GiB 单次 rtMalloc → `207001`）。**两档三臂 hidden payload 各自 byte-exact**（bs=1 = N256 golden `567b206b…`、bs=8 `1fcd4fcc…`）→ 按项目口径 sha256 即准出。机理：MoE-only 段 15→14 hop、`norm_quant` 离开关键路径、链头 `81.8 -> 56.5 us`。数据见 [`../../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md`](../../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md) | 2026-08-10 |
 
 ---
 
@@ -122,11 +123,11 @@ producer → 数学变换/quant/route-map → transport/window
 |------|------|
 | ⬜ TODO | 6 |
 | 🟦 IN PROGRESS | 2 |
-| ✅ DONE | 13 |
+| ✅ DONE | 14 |
 | ⛔ BLOCKED | 0 |
-| **合计** | **21** |
+| **合计** | **22** |
 
-**base 校正后关键路径**：A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2 已 ✅；
+**base 校正后关键路径**：A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2/J2 已 ✅；
 historical pull C2 仅作回归基线。当前 performance 看板只剩
 **B3（KV resident/in-place 的连续多轮 row-diff/liveness 证据）**处于进行中。
 Attention/Vec 与 TP all-reduce stability 已在 0162 release-qualified；J1 产品实现
@@ -151,6 +152,7 @@ Attention/Vec 与 TP all-reduce stability 已在 0162 release-qualified；J1 产
 
 | 日期 | ID | 变更 | 备注 |
 |------|----|----|------|
+| 2026-08-10 | J2 | gate fan-out 与 norm/quant 解耦已发布，整网再拿约 6% | `pypto-lib stepfun/develop@d13b2ca6`（FF over `a31977fb`），`decode_fwd.py` SHA256 `28080c53…`。bs=1/64k/nb512 p50 `36.494 -> 33.849 ms`（+7.25%）、bs=8/64k/nb4096 p50 `97.528 -> 91.722 ms`（+5.95%）；两档三臂 hidden byte-exact。5 层 swimlane（bs=1、已发布代码）在 `perf-2026q3/swimlane-p1a-candidate-20260810-130154`，rank2 makespan `2.210 ms`、static CPM 81.7%、stall 19.5% 全 data-wait，`tp_all_reduce` 占 15.9%（8 次 on-path）。同轮三个 NO-GO 与两条新硬约束（UB per-kernel-per-core、`pl.pipeline` 可行性）见 [`../../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md`](../../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md) |
 | 2026-08-06 | J1 | 产品代码合入并完成六档独立 64K normal gate | `pypto-lib stepfun/develop@7928a275`（base=`56b3d477`），`decode_fwd.py` SHA256=`7884da7c…`；36/36 normal、correctness finalize、counterbalance PASS；六档 hidden bit-exact，p50 均 non-regression。formal DFX/publication/all-rank swimlane 待补，根目录 `/mnt/persist/chensiyu/workspace/moe-opt/tmp/moe-formal-act-n64-20260806-v1` |
 | 2026-08-04 | J1 | 历史短 workload 诊断完成 | context=1 repeated p50 `12.1777→10.7677 ms`，gate/up AIC p50 `≈144→12.7–12.9 µs`；该证据用于 task-grain 选择，不再作为最终 64K DFX/swimlane 发布路径 |
 | 2026-08-03 | J1 | 建立 focused MoE 专项并冻结五层、双 hidden 与 0162 验证合同 | 仅 L0–L4；L4 消费 L3；禁止用 whole-net/64K 或 mock hidden 替代；设计见 [`05-moe-optimization.md`](05-moe-optimization.md) |

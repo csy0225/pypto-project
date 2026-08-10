@@ -1,6 +1,6 @@
 # Milestones —— 2026 Q2
 
-## 2026-08-10 —— P1a gate 解耦：swimlane critical path 定向优化，bs1/bs8 各约 6%，byte-exact ✅
+## 2026-08-10 —— P1a gate 解耦：swimlane critical path 定向优化，bs1/bs8 各约 6%，byte-exact，已发布 `stepfun/develop@d13b2ca6` ✅
 
 **方法**：只看 swimlane critical path（5 层 FiveLayerMoe 代表整网），改动全部收在
 `pypto-lib/models/step3p5/decode_fwd.py`。
@@ -52,6 +52,9 @@ pad 列 0/NEG_INF 的处理不变。算子顺序完全不变，只多一次 FP32
 ### 同轮被证伪 / 被否的方向（记下来避免复发）
 
 - **`expert_gate_up` + `expert_gate_up_act` 合并 = NO-GO（实测）**。
+  ⚠ **本条的根因归因已被同日「更正 ①」推翻**：不是 `pl.range` 展开不复用 buffer，
+  而是融合新增 c2v pipe slot；且融合本身可行（树内已有能编过的路径）。
+  正确的 NO-GO 理由是 **ROI 低于检测地板**。以下为当时记录，保留作过程痕迹。
   机理本身成立（`ROUTED_GATE_MM_N_CHUNK=256` : `ROUTED_GATE_ACT_N_CHUNK=64` = 4:1，
   act body 在列方向纯 elementwise、无跨列归约，可干掉 `gate_i32`/`up_i32` 两块
   `[local_recv_max, inter]` INT32 GM bridge）。但 codegen 直接失败：
@@ -98,6 +101,87 @@ pad 列 0/NEG_INF 的处理不变。算子顺序完全不变，只多一次 FP32
 **下一步**：MoE 的剩余空间在**跨 rank 负载均衡**（codex P3），不在本地 kernel 合并 ——
 已证明 `combine_wait` 由本 rank active local expert 数决定（rank0：L3 有 1 个 -> wait 19.26 us；
 L4 有 0 个 -> wait 155.40 us），且 skew 又反过来放大 AR，两件事同源。
+
+### 同日追加：落地发布 + 两条根因更正
+
+**发布**：`csy0225/pypto-lib:stepfun/develop` 由 `a31977fb` **fast-forward 到 `d13b2ca6`**
+（单 commit，只改 `decode_fwd.py` +63/-35）。合并后 `decode_fwd.py` sha256 仍是
+`28080c53…`，与 A/B/A 的 candidate 臂**逐字节相同**，所以上面全部设备数据直接绑定发布代码、
+不需要重测。0162 `base-tree` 已同步到 `d13b2ca`（下一轮 A/B/A 的 parent）。
+⚠ 0162 连不上 GitHub 443，push 走 `git bundle` 从 0162 带回本地再推。
+
+**更正 ①（`gate_up+act` 的 NO-GO 理由从"能力上限"改为"ROI"）**：上面写的根因
+「`pl.range(4)` 常量 range 展开不复用 SSA buffer，epilogue 工作集被独立分配 4 份」
+**是错的**，本轮用预测-验证闭环逐条推翻：
+
+- 切分三档全部无效：`pl.range(4)` 401472、`pipeline(4,stage=2)` 402496、
+  `pipeline(8,stage=2)` 397888、极简 epilogue 393216 —— 迭代数减半 buffer 反而涨，
+  与"展开不复用"预测相反。
+- K_CHUNK 扫描证伪展开假说：256→393216、512→786432、1024→1572864，**线性于 KC**。
+  拟合出 `融合 = 1536×KC`、`baseline = 512×KC`；据此预测 `KC=128 -> 196608 FAIL`、
+  `KC=64 -> 98304 PASS`，实测精确命中。
+- pass dump 给出直接证据：baseline `expert_gate_up_aiv` 只有 **2 个** `alloc(Vec, 65536)`
+  （offset 0 / 65536），16 次 K 迭代全部复写同两 offset —— **复用本来就生效**。
+  融合后 `dir_mask` 2→3、新增本地 `c2v_slot_buffer`、body 多 `tpop_from_aic×2 + cast×4`，
+  账目 `2×65536 + 4×65536 = 393216` 精确等于报错值。多出的 3 份是**新增的 c2v pipe slot**，
+  不是 load/compute/store。
+- 树内本来就有能编过的融合路径
+  `full_moe_chip_orch_swiglu7_swiglu16_expert_gate_up_aiv`（`4×8192 = 32768 B`，
+  走 `K=64 / N=64 / RECV_SPECIAL_TILE=32`）→ **融合可行，是 tiling 取舍问题**。
+
+真正的 NO-GO 理由是 ROI：`expert_gate_up_act` 在干净 baseline swimlane（rank2）只占
+`7.1+7.5 = 14.6 us = 0.65%`，映射整网 `0.13~0.17 ms`，**远低于 bs=1 的 0.634 ms 检测地板**
+—— 单独上 A/B/A 只会得到"统计不可区分"。
+
+**更正 ②（新硬约束：AIV Vec 预算是 per-kernel-per-core）**：之前那句
+"四个 UB 大户加 stage=2 都装不下"措辞像聚合约束，实际不是。实证
+（`33_after_AllocateMemoryAddr.py` sha256 `e3f9d292…`，脚本 + JSON 在
+`0162:/mnt/persist/chensiyu/workspace/perf-2026q3/ub-scope-20260810/`）：
+
+- 149 个 AIV 函数的 Vec 分配总和 `4676512 B = 24.8×` 的 `188416 B` 限额，**而编译通过**；
+- 每个函数的 `mem_vec_*` offset 从 0 重新开始（榜首全部 `min_offset=0`）；
+- `combine_reduce` 的 spmd `core_num=16`、每核 `40960 B`；若跨 grid 共享需 `655360 B` 会 FAIL。
+
+→ UB 是每个 AIV core 的 scratchpad，kernel 进入时按静态 offset 布局、退出即失效，
+**kernel 边界天然隔离，不靠任务依赖**。反过来说 kernel **不能**把中间结果留在 UB 给下一个
+kernel 用 —— 这才是"融合"必须同时装下两份 staging 的机制。全网 UB 排名
+（`swa_qk_norm_zc` 148352 / `full_rmsnorm_zc` 135488 / `attn_residual_hold` 131072 /
+`expert_gate_up_aiv` 131072 / `tp_all_reduce` 98304 / `combine_reduce` 40960）是
+**各自独立**的占用率。
+
+**K 归约 matmul 加 `pl.pipeline` 可行性（已验证）**：按 deepseek v4 `exp_gate_mm` 形式
+（`pl.create_tensor` 预建 accumulator + `pl.pipeline(0, HIDDEN, KC, stage=2)` +
+`k0==0` 用 `pl.matmul`、其余 `pl.matmul_acc`）改写 `expert_gate_up`：
+`KC=256/stage=2` → `262144 B` FAIL（精确等于预测）；`KC=128/stage=2` → `131072 B`
+**COMPILE_OK**，且 pass dump 证实结构真生效（Vec 分配 `2×65536 -> 4×32768`、
+`pipe: (32768, 4)`、`27_after_LowerPipelineLoops.py` 496 处 pipeline）。
+代价是 K trips `16 -> 32`、K tile 减半，cube 效率损失 vs overlap 收益方向不确定。
+`combine_reduce`（40960×2 = 81920 ✓）是唯一不用缩 tile 就能试的，可作 pipeline 收益校准点。
+
+**前 5 层 swimlane（bs=1、发布代码）固定路径**：
+`0162:/mnt/persist/chensiyu/workspace/perf-2026q3/swimlane-p1a-candidate-20260810-130154`
+→ `runtime/build_output/FiveLayerMoe_20260810_050452/dfx_outputs/rank{0..7}/d0/`
+（`critical_path_report.md` / `deps.json` / `l2_swimlane_records.json` /
+`merged_swimlane_20260810_0506*.json` / `CPM_static.json` / `CPM_observed.json` / `name_map.json`），
+汇总 stdout 在 `runtime/dfx_analysis/critical_path_stdout.txt`。
+LOW-WAIT rank2：makespan `2.210 ms`、static CPM `1.806 ms (81.7%)`、
+stall `0.431 ms (19.5%)` 全 data-wait、`tp_all_reduce` 占 `15.9%`（8 次 on-path）。
+该 run `rc=1` 仅因 analyzer 的 task-level 结构契约在 rank0/1/3/6 各报 5 个
+`missing_on_swim`；**rank2/4/5/7 契约干净**，8 rank artifact 全部完整落盘。
+其 5 层 `p50 = 13.552 ms` 含 DFX 插桩放大，**不可当干净延迟、不可乘 9 反推整网**。
+
+**执行主机契约立规**：发现 codex 在本地机器跑了 P3 swimlane 分析。已 re-home 到
+`0162:/mnt/persist/chensiyu/workspace/perf-2026q3/p3-rehome-20260810/` 指向原始 DFX 重跑
+—— CSV byte 级一致、JSON 68 处差异全是 provenance 路径字符串、数值差异 0（结论未被推翻）。
+新增契约 [`../reference/execution-host-contract.md`](../reference/execution-host-contract.md)
+（0162 镜像 `EXECUTION-HOST-CONTRACT.md`）+ 半机锁 `0162-cards0-7.lock` / `0162-cards8-15.lock`
++ 无卡 codegen 门 `0162:/mnt/persist/chensiyu/workspace/compile_gate.sh`（约 13.5s @ NB=512，
+必带 `--net host --security-opt apparmor=unconfined`）。
+
+**修正后的下一步**：① 跨 rank 负载均衡（天花板最高，codex P3，但无设计）；
+② cube matmul 的 tile + pipeline 作为**一个 bundle** 上 A/B/A（合计约 10 ms，10% = 1 ms
+≈ 整网 4%，高于地板；前置工作是四个 UB 大户先缩 tile）；③ `tp_all_reduce` 等 codex 的
+step 级插桩证据再决定。**不再逐个 kernel 试融合** —— 单个都低于检测地板。
 
 ---
 
