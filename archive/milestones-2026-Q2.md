@@ -259,6 +259,62 @@ step 级插桩证据再决定。**不再逐个 kernel 试融合** —— 单个�
 - 详见
   [`../benchmark/2026-08-10-step3p5-moe-n256-final.md`](../benchmark/2026-08-10-step3p5-moe-n256-final.md)。
 
+## 2026-08-08 —— MoE session 收尾：统一源码 tip、harness 与 pending build spec
+
+- 远端 `csy0225/pypto-lib:stepfun/develop` 权威 tip 已核对为
+  `491267c45875e9b1e0071eed224e2e73526799e2`。该提交链包含
+  `7928a275` 五层 MoE compute 优化、`63814d4a` SWA mask 修复、
+  `cd19fe6b` active-route scheduling，以及 `491267c4` route/precision
+  release harness。
+- pypto-lib 定向合同回归：
+  `test_live_precision_ab_contract.py`、`test_gen_vanilla_oracle.py`、
+  `test_five_layer_moe_route_contract.py`、`test_five_layer_moe_dfx_analysis.py`、
+  `test_performance_bc_contract.py`，结果 `122 passed, 1 warning`。
+- pypto-project 中当前 pin、MoE 设计、task tracking、handoff、canonical test、
+  version matrix 与 container admission pin 已同步到 `491267c4`。
+- 新增 pending build spec：
+  `deployment/docker/builds/stepfun-develop-20260808-moe-opt-latest-source.env`；
+  显式要求 PyPTO=`8e92b468`、attention profile=`a2a3` 和
+  `l2_swimlane_reuse_dep_gen`，不固定 `BUILD_JOBS`。
+- 本次未构建镜像、未执行 0162 长回归。历史 `c9af5790` digest/golden/A/B 只保留
+  为 pre-fix evidence；`491267c4` 的 immutable N=128、六档 BS×64K、formal DFX
+  和 all-rank swimlane 仍是下一 session 的 release gate。
+
+## 2026-08-06 —— workload-sized Attention 合入最新 MoE 基线
+
+- `pypto-lib stepfun/develop` 从 `7928a275` fast-forward 到
+  `c9af5790d5fe450e14fd43c88099b87539089d17`。合入内容包括 Full/SWA
+  workload-sized RoPE producer、显式双 TaskId 依赖、SWA unaligned
+  trailing-window 首尾 mask、Full out-proj publication 修复和 A2A3
+  blocks-per-task=`22/16/22` profile；不固定物理核心数。
+- focused 两层验证分支 `1ea76e0f` 完成 bs1/2/4/8/16/7、每请求64K 的
+  linear/reverse matrix、fresh-process exact replacement、SWA ctx65535 direct
+  oracle，以及 bs1/7/16 DFX。该证据证明 attention delta。
+- 合入前 source-mounted 整网 bs1、每请求64K、warmup=5、50 次：
+  min/mean/p50/p99/max =
+  `49.328/50.046/49.880/56.362/56.362 ms`，hidden finite、TP spread=0。
+  相对 Wave5 p50 `49.796 ms` 为 `+0.17%`，属于噪声，不能宣称 latency 收益。
+- 最新源码 immutable 镜像
+  `stepfun-develop-20260806-attn-taskmajor-canonical` 已发布：manifest
+  `sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479`，
+  config
+  `sha256:a6095ba550aa8207e66a10ad2e8923d120af957c9e014349d26915d7ba33d216`。
+  credential/pin/clean-tree/profile audit PASS；0162 digest-only、无源码挂载。
+- 同镜像整网 bs1×64K 50 次 min/mean/p50/p99/max =
+  `39.057/39.594/39.612/40.680/40.680 ms`，hidden finite、TP spread=0。
+  相对 Wave5 p50 降 `20.45%`，但比较跨越最新 MoE 等整栈变化，不能全归因于
+  attention。
+- 同镜像两层 bs1×64K p50 `3.6323 ms`，reference exact、TP spread=0；
+  DFX `8/8` rank PASS，LOW-WAIT `rank2/d0` makespan `690.1 us`、TP AR
+  span-sum `176.24 us`。
+- 整网 bs16、每请求64K 使用 `8192` blocks，compile 成功；KV pool
+  `22.541 GiB/卡`、weight pool `24.857 GiB/卡`，prewarm 前约
+  `52,013 MiB/卡`，申请 `17,179,870,207` bytes pooled static arena 时
+  `rtMalloc 207001`。没有有效 bs16 ITL；runtime-memory A/B 按要求暂停，
+  container 和 cards 8–15 均已清理。
+- canonical attention 文档和性能优化 skill 已同步；skill 只沉淀 workload/task、
+  producer submit、dependency、DFX 和多 batch 性能分析方法，项目状态保留在
+
 ## 2026-08-04 —— vLLM live-front co-resident round-trip 打通到 decode ABI（H3），下一墙 = live prefill（H4）⏳
 
 - 分支 `feat/vllm-live-front-wiring`，device 0162 **cards 0-7**（未触碰 8-15 及
@@ -391,7 +447,6 @@ step 级插桩证据再决定。**不再逐个 kernel 试融合** —— 单个�
 按 session 划分的 milestone 日志，append-only，按日期降序。
 高层 Phase 01-19 总结见
 [`prototype-phase-01-19-summary.md`](prototype-phase-01-19-summary.md)。
-
 
 
 ## 2026-07-26 —— canonical-only Step3p5 release + 0162 镜像内 N=256 回归 ✅
@@ -736,7 +791,6 @@ token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant
 - **下个 session**：(1) 整网 device-output chain（`_stage_whole_decode_run.py:311` TODO#11，resident DeviceTensor 层间串联）；(2) gap-5 精度（提上游 issue + 等修 / 或本地 fix `infer_tile_memory_space_pass`）。
 
 
-
 ## 2026-07-08 —— blocker-1 (整网 co-prepare 死锁) 定位收敛 + Option-C 数值 handoff 落地 + L3 device 精度 PASS ✅
 
 **团队 `vllm-pypto-e2e`（reverse-review / hw-analyst / sw-analyst / upstream-scout + moe-implementer）。**
@@ -764,7 +818,6 @@ token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant
   8001 down，cards 8-15 OK，8000 up，0 worker。
 
 
-
 ## 2026-07-05 (later-7) —— live MoE A/B 迭代调试：507018 co-tenancy 定为 definitive blocker ⏸
 
 - **3 轮 live 部署迭代调错**：(1) 默认 env → routed worker `507018`（co-tenancy）；(2) 加
@@ -784,7 +837,6 @@ token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant
   compute 已验证 bad=0，8 commit 入库）。部署已全接线 + 可复现（w8a8 logdir：`start_8001_moe.sh`
   gpu-mem 0.55、`restart_routed_workers.sh` +PTO2 ring env、`pypto_patch_moe/`）。收尾机器干净：8001 down，
   cards 8-15 OK，8000 oracle up，0 worker。
-
 
 
 ## 2026-07-05 (later-6) —— live 单层 MoE 部署实跑 → 运行时 507018 co-tenancy blocker（实测定位）⏸
@@ -814,7 +866,6 @@ token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant
   `restart_routed_workers.sh` / `pypto_patch_moe/`）供下个 session 直接复现。
 
 
-
 ## 2026-07-05 (later-5) —— backend↔co-resident-worker code path 完成：live 单层 MoE 代码全就绪 ✅
 
 - **`pypto_moe_backend.py`（pypto-lib `bdcb1b7`）改用 co-resident worker 协议**：`RoutedClient` 从
@@ -833,7 +884,6 @@ token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant
   专家权重 LRU/按需（~47GB/rank，多周硬点；单层可放下）。
 
 
-
 ## 2026-07-05 (later-4) —— co-resident worker routed op device PASS：live worker config 成立 ✅
 
 - **`pypto_mlp_worker.py` 加 `op=routed`（pypto-lib `0249700`）**：把 `routed_experts_jit` 注册进与
@@ -850,7 +900,6 @@ token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant
   （全驻 ~47GB/rank → LRU/按需，多周硬点；单层可放下）；(c) 8001 拉起 + backend client 指向 worker
   的 routed sock（协议 BE >I + nbytes + int16 bf16）+ live A/B vs 8000。五个组件均已单独 device 验证 +
   入库，剩余是 live 组装 + 内存扩展。
-
 
 
 ## 2026-07-05 (later-3) —— @pl.jit routed device-run PASS：co-resident live 路径解锁 ✅
@@ -872,7 +921,6 @@ token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant
   layer_idx 注入 + 42 层权重内存（LRU/按需）+ 8001 拉起 + A/B。
 
 
-
 ## 2026-07-05 (later-2) —— MoE routed backend hook `_apply_mlp` 落地 + device glue-test PASS ✅
 
 - **backend hook 代码写完（不是 spec，是可用代码）**：`pypto-lib/tools/step3p5/pypto_moe_backend.py`
@@ -889,7 +937,6 @@ token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant
   多步重建 + 8 个 per-rank routed worker + install 进 sitecustomize）；(2) 多层的 layer_idx 注入
   （单层现成）；(3) **42 层专家权重内存**（全驻留 ~47GB/rank → 需 per-layer LRU / 按需加载，真正多周
   硬点）；(4) live A/B vs 8000。见 `deployment/moe-routed-live-wiring.md`。
-
 
 
 ## 2026-07-05 (later) —— MoE routed worker `routed` op device round-trip 验证通过 + _serve bf16 bug 修复 ✅
@@ -909,7 +956,6 @@ token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant
   可靠做法是 worker 跑在一条**保持打开的前台 ssh**（后台 hold）+ 另开 ssh poll log/跑 client。
 - **边界**：这坐实了 worker 侧（内核 + 真权重 + socket 往返）完全 OK；剩余仍是 backend `_apply_mlp`
   hook（层号注入 + shared 合并 + group_list→CSR）多周工程，见 `deployment/moe-routed-live-wiring.md` §4.2。
-
 
 
 ## 2026-07-04/05 —— MoE routed-expert 内核真权重验证 + vLLM serving 从零重建 + pypto dense/attn/tail live 逐字对齐 ✅
@@ -979,7 +1025,6 @@ token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant
   container overlay，非 repo；仅 `vllm_routed_experts.py` + `_routed_jit_probe.py` 入 git。
 
 
-
 ## 2026-07-03 —— 零拷贝 KV-IPC 集成 step 1-5 验证通过 + IPC 主卡点解除 + 重制定 plan ✅
 
 - **背景/纠偏**：项目此前偏成「算子桥接」（每 rank 独立 worker + socket/device-IPC 桥单算子，丢融合收益 + host round-trip ~2.6 tps）。按用户+技术专家 7 步路线，验证「PyPTO runtime 通过 device-IPC 零拷贝接管 vLLM KV 计算」。
@@ -995,7 +1040,6 @@ token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant
 - **0162 现状**：为腾卡验证 kill 了 8001 + 8 个 pypto attn worker（cards 8-15 空）；**8000 baseline 保留**（cards 0-7，200）。
 
 
-
 ## 2026-07-02 —— Step3p5 attention 多 position (ctx>1 / prefill) 乱码根因定位 + 修复 ✅
 
 - **症状**：step3p5 full-attention 在**多 position（ctx_len>1 / prefill、带历史的 batched decode）**输出乱码，**单 position（ctx_len=1）正确**。离线复现（`_stage_attn_e2e.py`，`seq_lens=arange(BATCH)+1` crossrow）：row 0（ctx=1）对，rows 1..15 全错（`bad_ratio≈0.90`）。因为 `test_decode_layer_full_dense_st` 只测 ctx=1，一直没暴露；2026-06-30 的 attention device-shared e2e 也是 ctx=1（`bad_ratio=0.0000`），同样掩盖了它。
@@ -1009,7 +1053,6 @@ token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant
 - **遗留**：SWA 修复已应用+编译通过，但 SWA ST 在共享卡 runtime OOM（tensor-14 需 3.3GB，co-tenant 占内存，非本修复回归）→ SWA runtime + crossrow 精度待空闲卡验证；`prefill_attention_full.py` 已用 `[1,32]` 逐 token 切片，大概率不受影响，待单独确认；深度技术 writeup 按协议应落 `pypto-lib/docs/known-pypto-pitfalls.md`（待 pypto-lib push 时补）；上游 pypto/ptoas codegen bug 待用 `_stage_scope12_qk.py` 提。
 
 
-
 ## 2026-06-30 —— Step3p5 attention 设备共享 e2e PASS + device-shared 地基提交 ✅
 
 - 在 `gpu-a910x-0162` 打通 **attention 层经 device-IPC 共享 KV 的离线端到端**：独立进程 ctypes 零初始化 `(2,4096,128)` bf16 KV 块 + `aclrtIpcMemGetExportKey`；worker 编译 `select_decode_layer(0)`（full_dense，L3 fork chip child）→ `DistributedWorker` → `rt.import_ipc(key)` → K/V `DeviceTensor` → `rt.run`，对 torch golden（`_torch_attn_no_gate + _torch_dense_mlp`）`bad_ratio=0.0000`。脚本 `_stage_attn_e2e.py`。
@@ -1019,7 +1062,6 @@ token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant
 - 8001 在线服务恢复（dense 0-2 + shared 3-44），8000=200/8001=200，8 worker，正常出 token。**修正恢复顺序铁律**：先起 8001 做完 TP=8 HCCL init → `Application startup complete` → 再起 pypto worker；worker 占卡 8-15 期间 vLLM HCCL init 会 `hcclCommInitRootInfoConfig error 15 / rtBinaryGetFunction 107000` 全挂，`aclrtResetDeviceForce` 不解。另：`pkill -f pypto_mlp_worker` 自匹配 ssh shell → 用 `'[p]ypto_mlp_worker'`；e2e exporter 须 `aclrtIpcMemClose`（泄漏 exbus 句柄会脏卡）。
 - 涉及仓库：`pypto pypto/device-shared:0c4b8749`（local）、`simpler pypto/device-shared:18bddac2`（local）、`vllm-ascend pypto/attention-integration:ba72967`（local，0162）、`pypto-project main`（本提交）。
 - 边界：attention 设备共享 **离线 e2e + 机制 + 地基齐备，未接 live vLLM**；live 接线（worker `attn` op + 每层 KV 导出 + 窗口 A/B）按蓝图 S1-S4 推进，最大卡点 KV-rows ABI。
-
 
 
 ## 2026-06-25 —— Step3p5 BF16 0~47 vLLM-vs-PyPTO detail precision PASS ✅
@@ -1032,7 +1074,6 @@ token-exact 留 live A/B）；(3) L43/L44 standalone `SplitIncoreOrch`（`_quant
 - BF16 回归数据已打包为 `/mnt/nvme1/chensiyu/logs/step3p5_910b_v017/step3p5_bf16_e2e_st_regression_20260625.tar`，包含 coarse golden、全层 detail、MTP3 detail、final logits artifacts 与报告。
 - 本次涉及仓库 commit 组合：`pypto-lib d4c01b9`、`pypto-project b771c7e`（本次文档记录提交，后续文档补记会前进）、`pypto b00c8b23`、`pto-isa e25732f0`、`PTOAS da011a3d`、`simpler c66b4120`。
 - BF16 tar SHA256：`bce502f4cbafb61fe541385ab1828d33a1f9c32bdfb7d2009e871adba4c896c4`。
-
 
 
 ## 2026-06-24 —— Final e2e precision readiness preflight landed 🟡

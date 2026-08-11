@@ -23,11 +23,19 @@ test -d "$ROOT"
 test -d "$SOURCE"
 test -d "$CKPT"
 test -x "$SCRIPTS/container_five_layer_case.sh"
+test -s "$SCRIPTS/image_capability_probe.py"
 if [ -e "$OUT" ]; then
   echo "refusing to overwrite $OUT" >&2
   exit 17
 fi
 mkdir -p "$OUT"
+
+sudo -n "$NC" run --rm --net host \
+  --security-opt apparmor=unconfined \
+  -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro \
+  "$IMG" bash -lc 'bash /workspace/pypto-image-audit.sh' \
+  > "$OUT/image_audit.log" 2>&1
+grep -Fx "IMAGE_IMMUTABLE_AUDIT=PASS" "$OUT/image_audit.log" >/dev/null
 
 for index in 0 1 2 3 4 5 6 7; do
   if fuser "/dev/davinci${index}" >/dev/null 2>&1; then
@@ -51,17 +59,26 @@ date -Ins > "$OUT/started_at.txt"
 printf '%s\n' "$IMG" > "$OUT/image_ref.txt"
 printf '%s\n' "$NONCE" > "$OUT/run_nonce.txt"
 sha256sum "$SCRIPTS/container_five_layer_case.sh" \
+  "$SCRIPTS/image_capability_probe.py" \
   > "$OUT/container_script_sha256.txt"
 
+CAPABILITY_ENV_ARGS=()
+if [ "$MODE" = dfx ]; then
+  CAPABILITY_ENV_ARGS=(
+    --env PYPTO_REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN=1
+  )
+fi
 set +e
 sudo -n "$NC" run --name "$CONTAINER" --rm --net host --ipc host \
   --privileged --security-opt apparmor=unconfined \
   --env CASE_MODE="$MODE" \
+  --env CASE_IMAGE_REF="$IMG" \
   --env ACTIVE_BATCH="$BS" \
   --env RUN_NONCE="$NONCE" \
   --env SOURCE_KIND="$SOURCE_KIND" \
   --env CASE_ITERS="${CASE_ITERS:-3}" \
   --env CASE_WARMUP="${CASE_WARMUP:-2}" \
+  "${CAPABILITY_ENV_ARGS[@]}" \
   "${DEVS[@]}" \
   --device /dev/davinci_manager \
   --device /dev/hisi_hdc \
@@ -81,6 +98,7 @@ date -Ins > "$OUT/finished_at.txt"
 if [ "$RC" -ne 0 ]; then
   exit "$RC"
 fi
+test -s "$OUT/capability_report.json"
 for index in 0 1 2 3 4 5 6 7; do
   if fuser "/dev/davinci${index}" >/dev/null 2>&1; then
     echo "device /dev/davinci${index} remained busy after $RUN_NAME" >&2

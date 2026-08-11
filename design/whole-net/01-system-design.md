@@ -7,8 +7,8 @@
 
 ## 1. 目标与边界
 
-**目标**：把 step3p5 的**完整 Main 45 层 decode 融进一个 `@pl.program`**
-（"N=1 whole-net fusion"），在 8 卡 Ascend 910B 上以 TP=8 / EP=8 跑通，W8A8
+**目标**：把 step3p5 的**完整 Main 45 层 decode 融进一个 `@pl.program`**，
+在 8 卡 Ascend 910B 上以 TP=8 / EP=8 跑通，W8A8
 native INT8 权重，token-exact 对齐 vLLM 参考。**strict raw-hidden 边界**：整网只
 输出 pre-final-norm hidden，final RMSNorm + lm_head + sampling 在下游（host/vLLM），
 **不在 pypto program 内**。
@@ -17,7 +17,9 @@ native INT8 权重，token-exact 对齐 vLLM 参考。**strict raw-hidden 边界
 
 1. 生产形态**只允许单个 whole-net `@pl.program`**——禁止退回 per-layer 多 program（多 program 有 co-prepare 死锁墙，见 [`../../postmortems/08-multiprogram-coprepare-deadlock.md`](../../postmortems/08-multiprogram-coprepare-deadlock.md)）。
 2. **native W8A8 不回退**——routed expert INT8 权重 + FP32 scale + in-kernel dequant；禁止 BF16-dequant 权重。
-3. 验收金标准唯一：[`../../reference/canonical-test.md`](../../reference/canonical-test.md)（P42 → token 6127 → argmax 303）。
+3. 验收金标准唯一：
+   [`../../reference/canonical-test.md`](../../reference/canonical-test.md)；
+   首 token 只作 smoke，多步 precision/liveness/image gate 必须分开。
 
 **非目标**：prefill（仍由 vLLM 原生完成）、tokenizer/sampler（vLLM）。
 

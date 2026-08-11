@@ -30,10 +30,13 @@ export PYPTO_PROG_BUILD_DIR=/out/runtime/build_output
 unset ASCEND_RT_VISIBLE_DEVICES ASCEND_VISIBLE_DEVICES
 
 test ! -e /runtime-override
-test "$PYPTO_IMAGE_PYPTO_COMMIT" = \
-  8e92b46808f9f7c09b6431ad4691503f09c12ee5
-test "$PYPTO_STEP3P5_ATTN_TASK_PROFILE" = a2a3
-test "$PYPTO_REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN" = 1
+/usr/local/python3.11.14/bin/python3 \
+  /campaign-scripts/image_capability_probe.py \
+  --output /out/capability_report.json \
+  --image-ref "$MATRIX_IMAGE_REF" \
+  --expected-pypto 8e92b46808f9f7c09b6431ad4691503f09c12ee5 \
+  --expected-pypto-lib 491267c45875e9b1e0071eed224e2e73526799e2 \
+  --expected-attn-profile a2a3
 
 cd /workspace/pypto-lib
 sha256sum -c SOURCE_SHA256SUMS > /out/source_verify.log
@@ -67,6 +70,7 @@ sha256sum \
   /out/runtime/hidden_l4.pt \
   /out/runtime/five_layer_moe_report.json \
   > /out/output_sha256.txt
+test -s /out/capability_report.json
 cp MOE_TILE_SWEEP_PROFILE.txt /out/MOE_TILE_SWEEP_PROFILE.txt
 printf '%s\n' "$TILE_VARIANT" > /out/tile_variant.txt
 echo MOE_TILE_SWEEP_CASE=PASS

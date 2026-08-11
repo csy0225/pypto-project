@@ -1,20 +1,25 @@
 # vLLM + pypto 集成 · 系统设计（HLD）
 
-> **2026-08-03 current-source override（优先于下方历史正文）**：当前 source/release
+> **2026-08-08 current-source override（优先于下方历史正文）**：当前 source/image
 > pins 见
 > [`deployment/version-matrix.md`](../../deployment/version-matrix.md)。
-> `pypto-lib stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0` 的唯一默认 Main 是
+> `pypto-lib stepfun/develop@491267c45875e9b1e0071eed224e2e73526799e2`
+> 与 `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`
+> 是当前源码；唯一默认 Main 是
 > `models.step3p5.decode_fwd:whole_decode_step3p5`，固定 0724
 > 环境 N=256 canonical-only 清理前后 replacement `256/256` exact；这只关闭了
 > standalone/Main replacement 子 gate。Wave5 的 audit/smoke/Main+MTP compile、
-> Main N=128×3、Main batch16、MTP batch1/batch16×2、64K/batch16 ITL/DFX 已通过；
-> Main N=128 三轮均 `123/128` 且 TP spread=0，因此在 0162 release-qualified。
+> Main N=128×3、Main batch16、MTP batch1/batch16×2、64K/batch16 ITL/DFX 已通过，
+> 因此 Wave5 是完整 production release-qualified 回退基线。历史 `c9af5790`
+> image manifest `sha256:3eb694e…` 已通过 BS1×64K Attention/ITL/DFX partial
+> gate，但当前 `491267c4` 尚无 immutable image。
 > 独立 live front 接管、真实 paged-KV
 > bridge、同代 MTP absolute gate 和 3-way HBM 仍是 active work，不得把本设计
 > 中的历史 plumbing 证据写成完整 production serving 平替，也不能把 0162 结果外推
 > 到其它机器/架构。
 >
-> 下方较早历史正文及其 pins 属历史上下文；当前 pin 以本段和版本矩阵为准。
+> 历史 R1/R2 已 supersede。下方较早历史正文及其 pins 属历史上下文；当前 pin
+> 以本段和版本矩阵为准。
 >
 > **层级**：System Design / High-Level Design。回答"vLLM 与 pypto 怎么分工、
 > 怎么在同 8 卡共驻、请求怎么走到 pypto 整网再回来"。落地实现细节（monkey-patch

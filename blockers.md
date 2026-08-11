@@ -10,7 +10,7 @@
 如 507899/507018、co-tenancy(G4)、tmov Vec-LHS、gate_topk、多程序 co-prepare 死锁、
 gap-5、scheduler-timeout、attention 乱码、G5b import_ipc、swa_moe const-fold 等均已归档。
 
-**最后检视**：2026-08-03。
+**最后检视**：2026-08-05。
 
 ---
 
@@ -145,41 +145,24 @@ ITL 才能计入收益**，不能再按 bench 的 `5.6 µs/call` 记账。
 
 ---
 
-## 🔴 ACTIVE — N1-S-0234：pypto-lib 同步后记录的 whole-net stall，待完整 manifest 复核
-
-**范围必须分开**：`N1-S-0162 = release-qualified`（`0e7a0fdd` exact-source / P42 /
-pull+pull，20/20 argmax=303）；`N1-S-0234 = active / root cause unknown`（项目记录称
-pypto-lib 三个 release 文件与 `0e7a0fdd` byte-match 后 devices 0..7 fresh canonical
-3/3 stall，但完整 pypto/simpler/runtime binary/environment 等价性未验证）。
-
-0162 的 release gate 已关闭，**不能外推到 0234**，也不能把"0234 只拉了 pypto-lib"
-当成三仓/binary/环境一致。2026-07-16 `ssh infra@gpu-a910x-0234...` 返回
-`Permission denied (publickey,password)`，该 3/3 结果只能标记为**既有记录、未独立复核**。
-
-**优先排查**：① 核对三仓 commit/dirty/submodule；② editable/source 实际加载文件 +
-runtime `.so` hash/mtime；③ CANN/PTOAS/checkpoint/device/ring env；④ 对齐后仍 stall
-则存同轮 TASK/CLUSTER/COND + `kernel_config.py` + build hash + dmesg delta；⑤ 不把
-512B signal isolation 当跨机器充分条件或唯一根因。
-
-**解除条件**：恢复 0234 访问 → 生成完整 manifest → 按 [`reference/canonical-test.md`](reference/canonical-test.md)
-重跑；若仍 stall，定位机器/runtime/environment delta 或新通信边界。参见
-[`postmortems/07-whole-net-scheduler-timeout.md`](postmortems/07-whole-net-scheduler-timeout.md)。
-
----
-
 ## 🔴 ACTIVE — Phase 28 live serving：per-layer KV bridge + 3-way HBM / redundant weights
 
-**当前代码边界（2026-08-03）**：`pypto-lib stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0`
+**当前代码边界（2026-08-06）**：
+`pypto-lib stepfun/develop@c9af5790d5fe450e14fd43c88099b87539089d17`
+与 `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`
 只保留 `models.step3p5.decode_fwd:whole_decode_step3p5`。C/D/G、BS1 correctness、
 Attention/Vec I1 与 Wave5 TP all-reduce stability 已合入；Wave5 在 0162
-release-qualified。本节只描述 Phase 28 live serving 缺口，不再把 BS1 的旧
+完整 release-qualified。最新源码 canonical image manifest
+`sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479`
+已完成 BS1×64K ITL/DFX gate；旧 R2 已 supersede。本节只描述 Phase 28 live serving
+缺口，不再把 BS1 的旧
 `6127` 结果视为当前代码状态，也不把 0162 的结论外推到其它机器。
 `models/step3p5_opt`
 package、`whole_decode_opt` 和 `WholeDecodeOpt` 已删除。0726 已发布镜像内
 canonical-only N=256 与清理前 canonical 镜像 token/hidden `256/256` exact、
 `max_abs_diff=0`、TP spread `0.0`，所以 compatibility removal regression 已关闭。
 对同一 vanilla oracle raw 为 `240/256=93.75%`，低于历史 95% raw gate；不能写成
-raw PASS，也不能外推成完整 Main+MTP serving 已平替。该结论不覆盖 N1-S-0234。
+raw PASS，也不能外推成完整 Main+MTP serving 已平替。
 2026-07-27 已删除 retired 0724 unroll source、rollback selector 和自定义
 Main module/name 参数；后续 blocker 定位只允许 canonical。
 
@@ -240,17 +223,21 @@ Main module/name 参数；后续 blocker 定位只允许 canonical。
    resident per-layer KV 并完成多步回归；缺口是从真实 vLLM paged KV pool
    导入 per-layer BF16 slice，并按请求/step 传
    `block_table`/`slot_mapping`/`seq_lens` 与 dynamic batch metadata。
-2. **3-way HBM / redundant weights**：vLLM W8A8 常驻权重 + exporter 的 whole-net INT8
-   IPC 权重 + whole-net runtime working set 同时存在时，0162 live 报 `207001` OOM。
-   不是 standalone stall，也不是调小 ring heap 能解决；需消除 vLLM/exporter 重复权重，
-   或做等价 in-place/shared-weight 方案。
+2. **HBM 容量有两个独立口径**：
+   - live 3-way：vLLM W8A8 常驻权重 + exporter whole-net INT8 IPC 权重 +
+     runtime working set 同时存在时，0162 报 `207001`；需消除重复权重或做等价
+     in-place/shared-weight 方案；
+   - standalone bs16×每请求64K：KV pool `22.541 GiB/卡`、weight pool
+     `24.857 GiB/卡`，prewarm 前约 `52,013 MiB/卡`，再申请约 16 GiB pooled
+     static arena 时 `207001`。该口径没有 live 重复权重，也尚无有效整网 ITL；
+     ring-heap/task-window 容量 A/B 已暂停，不能与 live 3-way 根因混写。
 3. **独立 live front + 同代 MTP absolute gate**：sidecar 默认 canonical Main wiring 已完成，
    但真实 online request 接管、current Main 输出进入 MTP 后的 absolute
    token/hidden oracle 尚未闭环。
 
 **解除条件**：完成 live paged-KV/dynamic batch 接线 + device 验证；解决重复权重与
 live HBM 预算；完成独立 live-front A/B 和同代 MTP absolute gate。详见
-[`planning/phases/28-n1-live-integration.md`](planning/phases/28-n1-live-integration.md)、
+[`planning/phases/28-live-integration.md`](planning/phases/28-live-integration.md)、
 [`design/vllm-pypto/02-detailed-design.md`](design/vllm-pypto/02-detailed-design.md)。
 
 > **历史定位结论降级**：旧文档把 PUSH/TPUT/某 stuck kernel/signal bit 写成唯一硬件根因

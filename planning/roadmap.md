@@ -5,14 +5,15 @@
 > SSOT）；此刻状态在 [`../STATUS.md`](../STATUS.md)；接力上下文在
 > [`handoff.md`](handoff.md)。想讲进度给别人听 → 看本文。
 >
-> **2026-08-03 current-source override**：Attention/Vec 与 Wave5 TP all-reduce
-> stability 已合入
-> `pypto-lib stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0` 与
-> `pypto stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。clean
-> Wave5 immutable 的 audit/smoke/Main+MTP compile、Main N=128×3、Main batch16、
-> MTP batch1/batch16×2、64K/batch16 ITL/DFX 已通过；N=128 三轮均
-> `123/128` 且 TP spread=0，64K p50 `49.796 ms`，当前为
-> **0162 release-qualified**。其它机器/架构仍需独立 gate。下方 B2/Phase 28 的
+> **2026-08-08 current-source override**：当前源码为
+> `pypto-lib stepfun/develop@491267c45875e9b1e0071eed224e2e73526799e2` 与
+> `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。
+> 历史 `c9af5790` image manifest `sha256:3eb694e…` 已通过其源码层级的 BS1×64K
+> Attention/ITL/DFX partial gate（整网 p50 `39.612 ms`）；当前 `491267c4`
+> 尚无 immutable image。Wave5 仍是最后一个完成
+> Main N=128×3、Main batch16、MTP batch1/16 等全量 matrix 的 production
+> release-qualified 回退基线。历史 R1/R2 已 supersede。
+> 其它机器/架构仍需独立 gate。下方 B2/Phase 28 的
 > 2026-07-26 状态保留为历史里程碑，当前准出以
 > [`../STATUS.md`](../STATUS.md) 与 [`../blockers.md`](../blockers.md) 为准。
 
@@ -40,9 +41,9 @@ graph TD
 | **Phase 1** | pypto kernel 原型（config→attention→MoE→45 层 decode→MTP→prefill→TP/EP 重构→frontend bring-up→codegen→单卡/多卡 NPU） | ✅ 2026-06-22 | 见 [`../archive/prototype-phase-01-19-summary.md`](../archive/prototype-phase-01-19-summary.md) |
 | Phase 16 | 多卡三剑合璧（driver/firmware/CANN） | ✅ 2026-06-19 | [`../deployment/phase16-three-pillars.md`](../deployment/phase16-three-pillars.md) |
 | Phase 23 | 零拷贝 KV-IPC 验证（IPC 主卡点解除） | ✅ 2026-07-03 | [`../archive/completed-phases/23-zero-copy-kv-ipc-validation.md`](../archive/completed-phases/23-zero-copy-kv-ipc-validation.md) |
-| **Phase 27** | **N=1 整网融合**（单 `@pl.program` Main） | ✅ 2026-07-18 | 历史 P42 20/20；0724 canonical baseline 保留为 rollback |
+| **Phase 27** | **单程序整网融合**（历史代号 N1） | ✅ 2026-07-18 | 历史 P42 20/20；仅作演进证据 |
 | **B2 release** | **45 层 loop-form Main replacement** | ✅ 2026-07-26 | `stepfun/develop@563fe62a` canonical-only 默认 `whole_decode_step3p5`；0162 历史发布镜像内清理前后 N=256 token/hidden 均 `256/256` exact |
-| **Phase 28** | **N=1 整网 → vLLM live 集成** | 🟡 进行中 | Main replacement、Attention/Vec 与 0162 Wave5 all-reduce release gate 已完成；live front、paged KV、同代 MTP absolute gate、HBM 待完成 |
+| **Phase 28** | **整网 → vLLM live 集成** | 🟡 进行中 | Main replacement、Attention/Vec 与 0162 Wave5 all-reduce release gate 已完成；live front、paged KV、同代 MTP absolute gate、HBM 待完成 |
 
 > Phase 20/21/22/24/25/26 的设计/中间态已归档到
 > [`../archive/completed-phases/`](../archive/completed-phases/)（被 27/28 取代或吸收）。
@@ -53,7 +54,7 @@ graph TD
 
 - **当前形态**：单个 `@pl.program`，45 层 loop-form Main，TP=8/EP=8，
   native W8A8；0724 hidden-only unroll baseline 仅作显式 rollback。
-- **已达成**：当前源码已前进到 `pypto-lib stepfun/develop@7099476b`；
+- **已达成**：当前源码已前进到 `pypto-lib stepfun/develop@491267c4`；
   正式路径仍为 `models.step3p5.decode_fwd:whole_decode_step3p5`；0162 的 0726 历史发布镜像内
   N=256 清理前后 token/hidden `256/256` exact、`max_abs_diff=0`、
   TP spread `0.0`。

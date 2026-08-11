@@ -1,5 +1,8 @@
 # N1 案例：原始证据索引
 
+> **历史证据索引，非当前 SSOT。** 其中“当前/最新/stable”均保留原案例语境，
+> 不得用于选择今天的 checkout、镜像或构建 pin。
+
 > 本文只负责“去哪里找证据”。当前结论先看 [案例入口](n1-case-study.md)，
 > 历史过程看 [完整时间线](n1-timeline.md)，排查方法看 [排障实践](n1-debugging-playbook.md)。
 
@@ -7,7 +10,7 @@
 
 ```mermaid
 flowchart TB
-    A[当前 stable / canonical] --> B[主 phase 与状态]
+    A[案例当时 stable / canonical] --> B[主 phase 与状态]
     B --> C[设计 notes / deployment]
     C --> D[原始日志与 build artifact]
     D --> E[Git 历史恢复点]
@@ -18,25 +21,23 @@ flowchart TB
 
 | 要验证的事实 | 先看 | 再看 |
 |---|---|---|
-| 当前 0162 single-submit canonical、20/20 | `N1-CANONICAL-TEST.md` | `workspace/logs_n1/single_submit_cleanup_p42_repeat20_20260718_174948/` |
-| 当前 0162 stable pins / clean scope | `N1-STABLE-ENV-0162-20260717.md` §1.0 | pypto `e49ce111` + pypto-lib `3af13f4f` |
-| latest MTP3 的 synthetic 64K resident NPU timing（历史 non-canonical） | `N1-STABLE-ENV-0162-20260717.md` §11 | `workspace/logs_n1/synth64k_resident_20260717/` |
+| 案例当时 0162 single-submit canonical、20/20 | Git history 中的 `N1-CANONICAL-TEST.md` | `workspace/logs_n1/single_submit_cleanup_p42_repeat20_20260718_174948/` |
+| 案例当时的 0162 stable pins / clean scope | `N1-STABLE-ENV-0162-20260717.md` §1.0 | pypto `e49ce111` + pypto-lib `3af13f4f` |
+| 案例当时 MTP3 synthetic 64K resident NPU timing（历史 non-canonical） | `N1-STABLE-ENV-0162-20260717.md` §11 | `workspace/logs_n1/synth64k_resident_20260717/` |
 | 某个 stall 是否真的发生在 kernel | [stall 定位入口](n1-stall-localization.md) | 同轮 run 目录、TASK/CLUSTER 和 build |
 | 512B isolation 的因果边界 | [关键因果链](n1-causal-chains.md) | `notes/09-cache-line-and-signal-isolation.md` |
 | 新项目如何启动 | [项目准入入口](n1-project-admission.md) | Gate 0～10 与 Day 0 模板 |
 
 ## 17. 原始证据索引
 
-以下索引按“先看当前事实、再看过程、最后看架构约束”的顺序排列。旧的
+以下索引按“先看案例事实、再看过程、最后看架构约束”的顺序排列。旧的
 `NEXT-SESSION-N-1.md` 已经清理了 active prompt；需要恢复被删除的阶段记录时，
 应从 Git history 按提交读取，而不是把历史快照当作当前状态。
 
-### 17.1 当前 stable / canonical
+### 17.1 案例当时的 stable / canonical
 
-- [`N1-CANONICAL-TEST.md`](../../../../N1-CANONICAL-TEST.md)：唯一 standalone canonical 命令、完整 42 个 MoE 层、
-  fresh exporter、20-run gate、dmesg 窗口和三仓复现边界。
 - [`N1-STABLE-ENV-0162-20260717.md`](../../../../develop/N1/N1-STABLE-ENV-0162-20260717.md)：0162 stable
-  SSOT，源码/runtime pin、clean-pin smoke、实际 layout 和未覆盖范围。
+  历史快照，记录当时源码/runtime pin、clean-pin smoke、实际 layout 和未覆盖范围。
 - [`N1-NEXT-SESSION-HANDOFF-20260715.md`](../../../../develop/N1/N1-NEXT-SESSION-HANDOFF-20260715.md)：
   final pull+pull boundary、512B isolation、20/20 与因果措辞。
 - [`N1-W8A8-ROUTED-BOUNDARY-DESIGN-20260716.md`](../../../../develop/N1/N1-W8A8-ROUTED-BOUNDARY-DESIGN-20260716.md)：
@@ -44,13 +45,11 @@ flowchart TB
 
 ### 17.2 主过程记录
 
-- [`phases/27-n1-whole-net-fusion.md`](../../../../phases/27-n1-whole-net-fusion.md)：从全网 compile、
+- [`archive/completed-phases/27-single-program-whole-net-fusion.md`](../../../../archive/completed-phases/27-single-program-whole-net-fusion.md)：从全网 compile、
   runtime/SDMA、comm-window alias、IPC bring-up 到最终 release 的主 phase 记录。
-- [`STATUS.md`](../../../../STATUS.md)：跨 phase 的状态变化、0162/0234 scope 和 live blocker。
-- [`blockers.md`](../../../../blockers.md)：N1-S-0162、N1-S-0234、Phase 28 live blocker 及历史纠正。
-- [`notes/08-integration-churn-postmortem.md`](../../../../notes/08-integration-churn-postmortem.md)：
+- [`postmortems/12-integration-churn-meta.md`](../../../../postmortems/12-integration-churn-meta.md)：
   为什么“ready”会被更强验证推翻，以及如何建立证伪优先的流程。
-- [`notes/09-cache-line-and-signal-isolation.md`](../../../../notes/09-cache-line-and-signal-isolation.md)：
+- [`reference/cache-line-signal-isolation.md`](../../../../reference/cache-line-signal-isolation.md)：
   signal 物理隔离、512B line、base/offset 约束的设计背景。
 
 ### 17.3 早期 blocker 和部署背景
@@ -61,11 +60,11 @@ flowchart TB
   包含 07-04～07-17 的关键里程碑。
 - [`deployment/phase16-three-pillars.md`](../../../../deployment/phase16-three-pillars.md)：driver/firmware/CANN
   三件套和 IPC capability 约束。
-- [`deployment/troubleshooting-multirank-507899.md`](../../../../deployment/troubleshooting-multirank-507899.md)：
+- [`postmortems/01-multirank-ipc-507899-507018.md`](../../../../postmortems/01-multirank-ipc-507899-507018.md)：
   507899、507018、stale runtime 和 SDMA workspace 的区分。
-- [`deployment/troubleshooting-moe-block-8card-gate-topk.md`](../../../../deployment/troubleshooting-moe-block-8card-gate-topk.md)：
+- [`postmortems/06-gate-topk-deadlock.md`](../../../../postmortems/06-gate-topk-deadlock.md)：
   gate_topk 的 V0 TASK→kernel→mrgsort 修复链。
-- [`deployment/moe-block-nextwork-and-constraints.md`](../../../../deployment/moe-block-nextwork-and-constraints.md)：
+- [`reference/moe-constraints.md`](../../../../reference/moe-constraints.md)：
   native W8A8、DeepSeek 对齐、不得绕过 gate 和测试纪律。
 
 ### 17.4 Git 历史恢复点

@@ -12,9 +12,9 @@ description: >
 
 # step3p5 性能优化立项门 + 回归 runbook
 
-> **单一入口**：设计在 [`design/performance/`](../../design/performance/README.md)，状态在
-> [`task-tracking.md`](../../design/performance/task-tracking.md)，性能数据在
-> [`benchmark/`](../../benchmark/)（按 `YYYY-MM-DD-<主题>.md` 命名）。本 skill 讲
+> **单一入口**：设计在 [`design/performance/`](../../../design/performance/README.md)，状态在
+> [`task-tracking.md`](../../../design/performance/task-tracking.md)，性能数据在
+> [`benchmark/`](../../../benchmark/)（按 `YYYY-MM-DD-<主题>.md` 命名）。本 skill 讲
 > "改之前怎么判断值不值得做 + 改完之后按什么顺序回归 + 更哪些文档"。
 >
 > **四条铁律**：① **天花板 < 地板就别写**（Step 0.5）；② 路径**全走环境变量**，勿硬编码主机路径；
@@ -102,7 +102,7 @@ tile + pipeline）**打成一个 bundle 一次上 A/B/A**：合计基数够大�
 
 ## Step 1 · Liveness 冒烟（快，先过这关）
 
-确认 whole-net 跑通 + 首 token 对 + 不 hang。命令模板见 [`reference/canonical-test.md §3`](../../reference/canonical-test.md)，
+确认 whole-net 跑通 + 首 token 对 + 不 hang。命令模板见 [`reference/canonical-test.md §3`](../../../reference/canonical-test.md)，
 **把其中的主机路径按环境变量替换**（`$WS`、`$CKPT`、`--device "$DEVICES"`）。必须同时满足：
 
 ```text
@@ -236,7 +236,7 @@ unset PAT
 
 ## 相关
 
-- 设计索引：[`design/performance/README.md`](../../design/performance/README.md)
+- 设计索引：[`design/performance/README.md`](../../../design/performance/README.md)
 - **UB 预算模型 / 融合与 pipeline 的硬约束**：`$WS/pypto-lib/docs/known-pypto-pitfalls.md` §8
   （per-kernel-per-core 预算、融合的 c2v pipe 附加成本、`pl.pipeline` 用 buffer 换 overlap、
   「拟合定律再预测数字」的方法）；§7 有 `pl.range` 展开的**反例**（展开本身不涨 UB，
@@ -247,5 +247,5 @@ unset PAT
 - attention 专项优化方法：`.claude/skills/pypto-attention-performance/`
 - 整网 hang 排查：`.claude/skills/pypto-whole-net-hang-debug/`
 - 执行主机契约（0162 唯一执行主机 / 卡与锁 / 并发计时约束）：
-  [`reference/execution-host-contract.md`](../../reference/execution-host-contract.md)
-- 金标准：[`reference/canonical-test.md`](../../reference/canonical-test.md)
+  [`reference/execution-host-contract.md`](../../../reference/execution-host-contract.md)
+- 金标准：[`reference/canonical-test.md`](../../../reference/canonical-test.md)

@@ -376,3 +376,163 @@ def test_validate_matched_policy_binding_fails_closed(
             expert_release=expert_release,
             admission=admission,
         )
+
+
+def _write_image_identity_fixture(
+    run: Path,
+    *,
+    image_ref: str,
+    mode: str,
+) -> None:
+    run.mkdir(parents=True, exist_ok=True)
+    audit = "\n".join(
+        (
+            "[audit] pin pypto      "
+            "8e92b46808f9f7c09b6431ad4691503f09c12ee5 clean",
+            "[audit] pin pypto-lib  "
+            "491267c45875e9b1e0071eed224e2e73526799e2 clean",
+            "[audit] git credential scrub: PASS",
+            "[audit] attention profile: a2a3",
+            "[audit] prepared swimlane reuse capability: "
+            "{'available': True, 'constructed': True, 'required': '1'}",
+            "[audit] build jobs: 2 (resource only)",
+            "IMAGE_IMMUTABLE_AUDIT=PASS",
+        )
+    ) + "\n"
+    (run / "image_audit.log").write_text(audit, encoding="utf-8")
+    audit_sha = validator._sha256(run / "image_audit.log")
+    (run / "image_audit_invocation.json").write_text(
+        json.dumps(
+            {
+                "audit_log_sha256": audit_sha,
+                "image_ref": image_ref,
+                "passed": True,
+                "phase": "pre-source-mount",
+                "schema": validator.IMAGE_AUDIT_SCHEMA,
+                "source_mount": False,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run / "capability_report.json").write_text(
+        json.dumps(
+            {
+                "attention_profile": "a2a3",
+                "image_commits": {
+                    "pypto": validator.IMAGE_PYPTO_COMMIT,
+                    "pypto_lib": validator.IMAGE_PYPTO_LIB_COMMIT,
+                },
+                "image_ref": image_ref,
+                "pypto_git_head": validator.IMAGE_PYPTO_COMMIT,
+                "reuse_capability": {
+                    "environment_present": mode == "dfx",
+                    "environment_value": "1" if mode == "dfx" else None,
+                    "fields_available": True,
+                    "required": mode == "dfx",
+                    "reuse_config_constructed": True,
+                },
+                "schema": validator.CAPABILITY_SCHEMA,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_pre_mount_audit_and_capability_are_identity_bound(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / "candidate-r1-dfx-bs1-64k"
+    image_ref = "hub.i.basemind.com/stepcast/vllm-pypto@sha256:" + "a" * 64
+    _write_image_identity_fixture(run, image_ref=image_ref, mode="dfx")
+    audit = validator._validate_pre_mount_image_audit(
+        run,
+        image_ref=image_ref,
+    )
+    capability = validator._validate_capability_report(
+        run,
+        image_ref=image_ref,
+        mode="dfx",
+    )
+    assert len(audit["image_audit_log_sha256"]) == 64
+    assert len(capability["capability_report_sha256"]) == 64
+
+    invocation = json.loads(
+        (run / "image_audit_invocation.json").read_text(encoding="utf-8")
+    )
+    invocation["source_mount"] = True
+    (run / "image_audit_invocation.json").write_text(
+        json.dumps(invocation) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(AssertionError, match="source_mount"):
+        validator._validate_pre_mount_image_audit(
+            run,
+            image_ref=image_ref,
+        )
+
+
+def test_dfx_raw_evidence_requires_eight_merged_rank_traces(
+    tmp_path: Path,
+) -> None:
+    batch_dir = tmp_path / "runtime" / "bs1"
+    raw = batch_dir / "dfx_raw"
+    dep_hashes = {}
+    swim_hashes = {}
+    for rank in range(8):
+        dispatch = raw / f"rank{rank}" / "d0"
+        dispatch.mkdir(parents=True)
+        for name, content in (
+            ("deps.json", "{}\n"),
+            ("l2_swimlane_records.json", "{}\n"),
+            ("name_map.json", "{}\n"),
+            ("critical_path_report.md", "# trace\n"),
+        ):
+            (dispatch / name).write_text(content, encoding="utf-8")
+        (dispatch / "merged_swimlane_fixture.json").write_text(
+            json.dumps(
+                {
+                    "traceEvents": [
+                        {
+                            "dur": 1.0,
+                            "name": f"rank{rank}-task",
+                            "ph": "X",
+                            "ts": 0.0,
+                        }
+                    ]
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        dep_hashes[
+            f"dfx_outputs/rank{rank}/d0/deps.json"
+        ] = validator._sha256(dispatch / "deps.json")
+        swim_hashes[
+            f"dfx_outputs/rank{rank}/d0/l2_swimlane_records.json"
+        ] = validator._sha256(dispatch / "l2_swimlane_records.json")
+
+    artifacts = {
+        "dep_gen_artifacts": dep_hashes,
+        "dep_gen_preserved_after_swim": True,
+        "swimlane_artifacts": swim_hashes,
+    }
+    evidence = validator._validate_dfx_raw_evidence(
+        batch_dir,
+        dfx_artifacts=artifacts,
+    )
+    assert evidence["rank_count"] == 8
+    assert evidence["merged_swimlane_count"] == 8
+    assert set(evidence["sha256_by_rank"]) == {
+        str(rank) for rank in range(8)
+    }
+
+    (raw / "rank7" / "d0" / "merged_swimlane_fixture.json").unlink()
+    with pytest.raises(AssertionError, match="merged swimlane"):
+        validator._validate_dfx_raw_evidence(
+            batch_dir,
+            dfx_artifacts=artifacts,
+        )

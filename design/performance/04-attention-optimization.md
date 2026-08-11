@@ -1,6 +1,6 @@
 # 04 · Attention 优化专项（step3p5 full / SWA flash decode）
 
-> **最终实现覆盖说明（2026-08-03）**：本文已合并原
+> **最终实现覆盖说明（更新至 2026-08-08）**：本文已合并原
 > `attention/attention-tiling-and-partitioning.md` 的最终 task/tile 设计。§0–§9
 > 保留专项探索过程，包含早期 fixed-24 lane、四阶段 split、standalone Pass-A/B/C
 > 与 cast 默认关闭等历史状态；**这些内容不得再作为当前实现说明。** 当前权威状态以
@@ -9,20 +9,31 @@
 > logical task 数按 active workload 推导，runtime 再映射到物理 AIC/AIV；
 > 5–10 us 仅是 task-grain 搜索起点；Full 的 SV 与 segment-local recurrence 已融合，
 > 只保留必要的 `full_online_softmax_reduce/finalize`；Full/SWA out-proj cast 默认都融合。
-> 当前源码为 `pypto-lib stepfun/develop@7099476b` 与
-> `pypto stepfun/develop@defa97c5`。Wave5 以 self-target TPUT 显式发布 all-reduce
-> source partial，已完成 immutable audit、Main/MTP compile、Main N=128×3、
-> Main batch16、MTP batch1/batch16×2、64K/batch16 ITL/DFX，状态为
-> **0162 release-qualified**；其它机器/架构未由本轮独立证明。
+> 本轮新增 workload-sized RoPE producer、显式双 TaskId 依赖、SWA trailing-window
+> 首尾 mask、Full out-proj publication 修复与 A2A3 softmax grain=16。该代码已合入
+> 当时的 `pypto-lib stepfun/develop@c9af5790`；该提交现已成为当前
+> `stepfun/develop@491267c4` 的祖先。0162 的 focused device 证据来自合入前、
+> attention delta 相同的
+> `perf/attn-rope-taskmajor-lifetime-20260805@1ea76e0f`。该候选已完成
+> 每请求 64K 的 bs1/2/4/8/16/7 linear+reverse matrix、独立 fresh-process
+> replacement、SWA ctx65535 direct oracle 和 bs1/7/16 DFX；其它机器/架构未由
+> 本轮独立证明。整网仅得到有效 bs1 ITL；bs16×每请求64K 在 prewarm static-arena
+> 分配阶段 HBM OOM，不能给出性能数字。详见 §14。
 >
 > **性质**：LLD 专项。聚焦 decode 阶段 flash-attention kernel 本体（`attention_full.py` /
 > `attention_swa.py`）的重写路线，独立于 README 主表里的 Track A–H。收敛后其中的子项会以
 > `PERF-*` ID 回填 [`task-tracking.md`](task-tracking.md)。
 >
-> **当前源码基线**：pypto-lib `stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0`，
-> pypto `stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`；canonical Main =
+> **当前源码基线**：pypto-lib
+> `stepfun/develop@491267c45875e9b1e0071eed224e2e73526799e2`
+> （包含当时的 Attention merge `c9af5790`、MoE `7928a275`、SWA mask 修复和
+> active-route scheduling），pypto
+> `stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`；canonical Main =
 > `models/step3p5/decode_fwd.py:whole_decode_step3p5`。正文中的旧 file:line 只对应当时快照，
-> 不能覆盖当前源码。
+> 不能覆盖当前源码。`c9af5790` 的历史 immutable BS1×64K ITL/DFX gate 已完成；
+> manifest 为 `sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479`。
+> 当前 `491267c4` 对应的 immutable image 尚未构建，因此该 manifest 只作
+> pre-fix evidence。
 >
 > **审计口径**（沿用 [`README.md` 顶层审计方法](README.md)）：任何“step3p5 独有 / 必须保留”
 > 判断都要沿 `producer → 数学变换 → transport → consumer → rounding/reduction → lifetime`
@@ -619,11 +630,16 @@ FP32 SV partials，且同样按 16 行过量写（`:684`）。方案 D（UB 滚�
 
 ### 5.5 scratch 膨胀只发生在 FULL-attn 层，SWA 被 sliding-window cap 住
 
-`SLIDING_WINDOW=512`（`config.py:173`）→ SWA 每步最多看 512 token = 4 blocks，**与 context 无关**。当前 SWA scratch 的物理行宽使用 `SWA_Q_PAD_ALIGNED=32`，不是有效布局行数 `Q_HEAD_PAD_SWA=24`；账本必须按 32 重算。
+`SLIDING_WINDOW=512`（`config.py:173`）把 SWA 每步的**有效 token 数**限制为
+512，但不能据此直接写成“永远 4 个物理 block”。正确区间是
+`[max(0, seq_len - 512), seq_len)`：边界对齐时覆盖 4 个 block；起点/终点
+不对齐时最多覆盖 5 个 block。当前实现按
+`ceil(512 / 128) + 1 = 5` 预留 scratch，并分别 mask 首尾无效列。
+该上界仍然**与最大 context 无关**。SWA scratch 的物理行宽使用
+`SWA_Q_PAD_ALIGNED=32`，不是有效布局行数 `Q_HEAD_PAD_SWA=24`；账本必须按 32 重算。
 所以随最大 context 增长的 source-shape 只出现在 **12 个 FULL-attn 层**（1 full_dense +
 10 full_moe + 1 full_moe_swiglu16）；**33 个 SWA 层**（2+30+1）scratch 是小且恒定的。
-SWA 当前源码明确用 `SWA_WIN_BLOCKS=ceil(SLIDING_WINDOW/BLOCK_SIZE)=4` 分配并用同一上界迭代，
-因此不会按 `MAX_SEQ` 分配；它仍有 capacity 方向的 inactive-row 浪费。
+SWA 不会按 `MAX_SEQ` 分配；它仍有 capacity 方向的 inactive-row 浪费。
 → 显存优先级：FULL 是长 context 静态 shape 的重点；但在拿到 allocation/liveness 前，不能写成
 bs=16 OOM 的大头。SWA 主要是 capacity/inactive 分区问题。方案 A.3 对两者都有效，但 B/D 的
 省显存收益集中在 FULL 路径。而 §2.2 的 SV over-compute
@@ -715,7 +731,9 @@ per-kernel 数值 + liveness 定位。**建议先补 ST**，否则 A–E 每步�
 
 1. ~~**§5.2**：cube matmul M=8/M=12 是否合法？~~ ✅ **已答（device 2026-07-29）：非法**——cube
    boxed tile 行须 ×16，M=8/12 被 ptoas 拒；且 16 是 fractal 最小单位，trim 无 cube 收益。A.2 撤回。
-2. **§5.5**：SWA 当前已核实按 `SWA_WIN_BLOCKS=4` 分配；后续只需补 allocation/liveness 实测，确认 transient tensor 的生命周期和峰值。
+2. **§5.5**：SWA trailing window 已修正为 aligned=4 / unaligned≤5 blocks，
+   scratch 上界为 5；后续只需补 allocation/liveness 实测，确认 transient tensor
+   的生命周期和峰值。
 3. **§5.1**：V4 已核实为 FP32 `row_sum` + BF16 PV；step3p5 接受该 rounding 变化的
    whole-net 精度已过 canonical 8-step token-exact（A.1），**formal N=128 vs live vanilla 待补**。
 4. **§5.3**：`active_tokens` 能否安全做 `create_tensor` 首维（dynamic）？→ dynamic-shape 编译 probe。
@@ -804,8 +822,8 @@ per-block fusion 的回退，只能说明**在原 batch-only core mapping 下融
    再做小型 merge，减少当前 per-block scratch 和 Stage4 GM 读取；
 4. 最后再做 KV block grouping（建议 1/2/4 个物理 block/task）和
    MTE/cube/Vec 双缓冲流水；
-5. SWA 暂不照搬：window 只有 4 blocks，context-split 的并行收益不足，
-   仍应保留 batch-oriented path。
+5. SWA 暂不照搬：window 在 aligned 边界覆盖 4 blocks、unaligned 最多 5，
+   context-split 的并行收益不足，仍应保留 row-oriented 高密度 path。
 
 ---
 
@@ -857,8 +875,9 @@ pypto stepfun/develop
 各行 workload 求和。uniform batch16/64K 的 online grain 单轮结果中，16 与 24 仅差
 约 0.17%，不足以把 batch-aware 分支硬编码进数学语义。
 
-Full 的长 context 需要 context split 和层次归约；SWA 最多 4 个 KV blocks，保持每个
-active row 一个高密度 task，不机械复制 Full 的 reduction graph。
+Full 的长 context 需要 context split 和层次归约；SWA 的 512-token window 在
+aligned 边界覆盖 4 个 KV blocks、unaligned 边界最多 5 个，仍保持每个 active row
+一个高密度 task，不机械复制 Full 的 reduction graph。
 
 ### 10.3 clean canonical candidate
 
@@ -1084,8 +1103,8 @@ A2A3 上已经出现过 task body 接近 10 us 但因多一 wave 而慢于约 15
 | Q physical pad | 16 | 24/32（阶段相关） |
 | `HEAD_DIM` | 128 | 128 |
 | KV cache block | 128 tokens | 128 tokens |
-| 最大有效 KV blocks | context 决定；64K 为 512 | window 512 tokens，即最多 4 |
-| storage batch capacity | 16 | 16 |
+| 最大有效 KV blocks | context 决定；64K 为 512 | window 512 tokens：aligned=4，unaligned≤5 |
+| storage batch capacity | 默认 16；编译时可配置，已验证 32 | 默认 16；编译时可配置，已验证 32 |
 
 必须区分：
 
@@ -1100,6 +1119,26 @@ A2A3 上已经出现过 task body 接近 10 us 但因多一 wave 而慢于约 15
 256-token fused matmul。
 
 ### 13.3 Full attention 最终任务图
+
+```text
+full_rope_q ───────────────┐
+                           ├─>
+full_rope_kv_cache ────────┘
+                               full_qk_matmul
+                               -> full_softmax
+                               -> full_sv_matmul
+                               -> full_online_softmax_reduce
+                               -> full_online_softmax_finalize
+                               -> full_out_proj_matmul_{aic,aiv}
+```
+
+其中两个 RoPE/KV producer 都使用 `pl.spmd(active_tokens)`：每个 active row
+各产生一个 logical task，QK 显式依赖两个 TaskId。旧的
+`pl.parallel(BATCH)` + row 内 `pl.at(CORE_GROUP)` 会在 lowering 后形成逐 row
+invocation，batch 放大时把本应并行的 producer 串行化。当前实现不增加 staging
+tensor，也不引入 app-side worker queue，只把现有工作移到 workload-sized SPMD DAG。
+
+后续主链为：
 
 ```text
 full_qk_matmul
@@ -1132,14 +1171,14 @@ A2A3 默认：
 
 ```text
 QK blocks/task       = 22
-softmax blocks/task  = 12
+softmax blocks/task  = 16
 ```
 
 64K、batch1 时：
 
 ```text
 QK       ceil(512 / 22) = 24 logical tasks
-softmax  ceil(512 / 12) = 43 logical tasks
+softmax  ceil(512 / 16) = 32 logical tasks
 ```
 
 这里的 `24` 是 workload 与 grain 的结果，不是源码固定使用 24 个物理核心。
@@ -1156,9 +1195,12 @@ QK 使用 AIC、softmax 使用 AIV，wave 必须按两类资源分别计算。
 因此历史 Pass-A 已消失。A2A3 profile：
 
 ```text
-SV + segment recurrence blocks/task = 16
+SV + segment recurrence blocks/task = 22
 reduce fan-in                        = 8
 ```
+
+这里的 22 是显式 `a2a3` profile；默认 `portable` fallback 仍为 16。两者都按
+实际 workload 计算 task 数，不表示固定使用 22 或 16 个物理核心。
 
 两个后继 kernel 仍需保留：
 
@@ -1172,11 +1214,15 @@ reduce fan-in                        = 8
 
 ### 13.4 SWA 保持不同结构
 
-SWA 的有效 window 最多 4 个 KV blocks。当前每个 active row 是一个 logical task，
-task 内顺序处理完整 window：
+SWA 的有效区间是 `[max(0, seq_len - 512), seq_len)`。aligned 64K 边界覆盖
+4 个 KV blocks；例如 `seq_len=65535` 的 unaligned window 覆盖 5 个 block，
+并分别 mask 第一个 block 的 prefix 与最后一个 block 的 suffix。当前每个 active
+row 是一个 logical task，task 内顺序处理完整 window：
 
 ```text
-swa_qk_matmul -> swa_softmax -> swa_sv_matmul -> swa_online_softmax
+swa_rope_q ───────────────┐
+                         ├─> swa_qk_matmul -> swa_softmax
+swa_rope_kv_cache ───────┘      -> swa_sv_matmul -> swa_online_softmax
 ```
 
 `swa_online_softmax` 的代表性执行约 `2.9–3.2 us`；进一步拆层次归约会增加
@@ -1209,25 +1255,45 @@ FP32 matmul accumulator
 
 独立开关仍保留，便于新架构发现 mixed-kernel 不合适时回退。
 
-### 13.6 active batch=16 与异构 context
+Full 与 SWA 的 lowering 细节仍保持独立。Full 的 grouped-N mixed task 不再使用
+`UP_DOWN` split：该 split 曾使首个 N tile 偶发只发布 suffix；取消 split 后
+`[BATCH_TILE, N]` accumulator 仍在 tile budget 内。SWA 未复现该问题，继续保留
+原 split，避免把 Full 的稳定性 workaround 扩散为全局规则。
 
-`BATCH=16` 只决定 tensor/ABI capacity。logical tasks 由 `active_tokens` 和
-每行 `seq_lens` 推导；inactive rows 不参与 attention/KV metadata 工作。
+这里的 out-proj logical task 数由输出 N tiles 决定；batch 外层仍按静态
+`BATCH_TILE=16` capacity 执行。因而“attention 已按 active workload 切分”只适用于
+RoPE、Full context stages 和 SWA row stages，不能扩写成 out-proj 也已消除所有
+inactive-row capacity work。
 
-已验证：
+### 13.6 active batch=1–16、每请求 64K 与异构 context
 
-- active-batch=16、ctx=1：16 行 finite/nonzero，TP spread=0；
-- 异构 16-row context：task 数按各行 `ceil` 求和；
-- uniform batch16/64K online grain：
+默认 `BATCH=16` 只决定 tensor/ABI capacity。logical tasks 由 `active_tokens` 和
+每行 `seq_lens` 推导；inactive rows 不参与 attention/KV metadata 工作。最终发布
+矩阵明确使用**每个 request 都是 `context=65536`**，而不是把总 context 固定为
+64K 后分摊到各 row：
 
-| grain | logical tasks | 两层 wall p50 |
-|---:|---:|---:|
-| 16 | 512 | 5.5590 ms |
-| 24 | 352 | 5.5494 ms |
-| 32 | 256 | 5.6126 ms |
+| active batch | 每 request context | 总 token | QK tasks | softmax tasks | online tasks | fresh-process 两层 p50 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 65536 | 65536 | 24 | 32 | 24 | 3.5837 ms |
+| 2 | 65536 | 131072 | 48 | 64 | 48 | 5.0313 ms |
+| 4 | 65536 | 262144 | 96 | 128 | 96 | 3.9684 ms |
+| 8 | 65536 | 524288 | 192 | 256 | 192 | 4.2073 ms |
+| 16 | 65536 | 1048576 | 384 | 512 | 384 | 4.7132 ms |
+| 7 | 65536 | 458752 | 168 | 224 | 168 | 4.1188 ms |
 
-16 与 24 相差约 0.17%，不足以新增 batch-aware 产品分支。若未来 batch16 是主服务
-点，应补多轮 median，再形成独立 architecture/workload profile。
+六个 case 都在独立进程中与同一最终 linear matrix 做 bitwise replacement：
+`atol=rtol=max_bad_ratio=0`、`exact=true`、finite、TP spread=0、逐迭代
+`unique_count=1`。linear/reverse 两个 20-iteration matrix 还覆盖 A/B input、
+inactive-row isolation、Q publication 和 device KV slot/readback 审计。
+
+fresh-process p50 不是单调曲线，尤其 bs2 会受到 collective 到达状态影响；因此
+不能用单个 host p50 反推 attention task grain。参数选择仍以 task/span/wave、
+all-rank DFX、重复稳定性和 correctness 的联合证据为准。
+
+异构 context 的 task 数仍按逐 row `ceil` 求和，而不是按最大 row 给所有请求铺满。
+compile-time capacity=32 只能证明 ABI/容量边界，不能替代本节的 per-request-64K
+性能验证；bs32 的 RoPE grid dependency、KV footprint 和 task-wave 仍列为后续工作，
+当前不宣称已经达到最优。
 
 ### 13.7 all-reduce 与 Vec 邻接优化边界
 
@@ -1267,19 +1333,48 @@ transfer grain=512 是通信 profile，不应机械继承给 residual Vec epilog
 dispatch 覆盖。真正的 persistent worker/device-side work queue 需要修改 runtime ABI；
 当前证据不支持为了它替换现有模式。
 
-### 13.9 A2A3 当前 profile 与跨架构校准
+### 13.9 portable / A2A3 profile 与跨架构校准
 
 ```text
-Full QK blocks/task                    = 22
-Full block-softmax blocks/task         = 12
-Full SV+segment recurrence blocks/task = 16
-Full online reduce fan-in              = 8
-Full/SWA out-proj matmul N              = 64
-Full/SWA out-proj tiles/task            = 3
-Full/SWA vector N                       = 128
-Full/SWA out-proj cast fusion           = 1
-TP all-reduce transfer chunk            = 512
+                              portable(default)  a2a3(explicit)
+Full QK blocks/task                    22              22
+Full block-softmax blocks/task         12              16
+Full SV+segment recurrence blocks/task 16              22
+Full online reduce fan-in               8               8
+four uniform O(1) mappings              0               1
 ```
+
+两者当前共享的 out-proj/collective 默认值：
+
+```text
+Full/SWA out-proj matmul N             = 64
+Full/SWA out-proj tiles/task           = 3
+Full/SWA vector N                      = 128
+Full/SWA out-proj cast fusion          = 1
+TP all-reduce transfer chunk           = 512
+```
+
+`--platform a2a3` 不隐式选择 attention profile。0162 A2A3 运行必须显式设置：
+
+```text
+PYPTO_STEP3P5_ATTN_TASK_PROFILE=a2a3
+```
+
+生产镜像已有对应 build contract：
+
+```text
+ATTN_TASK_PROFILE=a2a3 deployment/docker/build.sh ...
+```
+
+当前验证不再设置 `MAX_JOBS=1` 或其它等价的单线程限制，镜像构建使用脚本默认并发。
+这只是构建资源策略的更新，不改变 attention profile 或运行时 task 粒度。
+
+Dockerfile 会把该 build arg 固化为镜像内
+`PYPTO_STEP3P5_ATTN_TASK_PROFILE=a2a3`，smoke/audit 再核对运行时值。默认 build
+继续使用 `portable`，避免把 0162 参数错误外推到其它架构。
+
+八个 QK/softmax/online/reduce 单项 override 的优先级高于 profile；做可信 profile
+A/B 前必须清除它们，避免得到未命名的混合配置。
 
 新架构必须重新 sweep。建议目标：
 
@@ -1296,3 +1391,243 @@ subject to:
   finite + TP consistency
   canonical precision gate
 ```
+
+### 13.10 lowering、DFX 与负面候选门禁
+
+本节 focused sweep 的历史源码：
+
+```text
+pypto-lib perf/attn-rope-taskmajor-lifetime-20260805
+1ea76e0f2d3e6c132198dc6214034968daeaf2f2
+base: 56b3d477953ab1e2df87213aef3a536c64051dcc
+
+pypto stepfun/develop
+defa97c526fec7e8f032dbbfcc39c820add02bf7
+```
+
+当前 Git 权威源码是 pypto-lib `stepfun/develop@491267c4` 与 pypto
+`stepfun/develop@8e92b468`；上面的 pin 只用于解释本节既有 focused artifacts，
+不能作为当前 checkout。
+
+focused 源码验证为 `254 passed, 3 skipped`；`py_compile`、`git diff --check`、
+skill quick validation 和 differential Ruff（忽略仓库既有 DSL
+`F401/F821`）均通过。compile-only 还会读取真实生成的
+`orchestration/chip_orch.cpp`，检查 Full/SWA 各 stage 的动态 launch bound、
+launch/scalar SSA 一致性、TaskId publication 和完整 dependency chain；checker
+必须返回空列表，不能只用“编译成功”替代 lowering 合同。
+
+最终 correctness artifacts：
+
+```text
+/mnt/persist/chensiyu/workspace/attn-opt/out/
+rope_taskmajor_final_matrix_perrow64k_linear_s16_early_20260806/
+rope_taskmajor_final_matrix_perrow64k_reverse_s16_early_20260806/
+rope_taskmajor_final_fresh_perrow64k_linear_bs{1,2,4,8,16,7}_s16_early_20260806/
+rope_taskmajor_final_swa_direct_ctx65535_reverse_s16_early_20260806/
+```
+
+最终 DFX：
+
+| bs | LOW-WAIT rank | makespan | TP all-reduce span-sum | Full QK | Full softmax | Full SV |
+|---:|---|---:|---:|---:|---:|---:|
+| 1 | rank2 | 687.2 us | 168.44 us | 16.00 us | 17.36 us | 31.54 us |
+| 7 | rank1 | 1143.8 us | 178.96 us | 142.76 us | 79.32 us | 168.54 us |
+| 16 | rank2 | 1642.8 us | 180.06 us | 311.12 us | 161.88 us | 379.52 us |
+
+对应目录：
+
+```text
+/mnt/persist/chensiyu/workspace/attn-opt/out/
+rope_taskmajor_final_dfx_perrow64k_linear_bs1_s16_early_20260806/
+rope_taskmajor_final_dfx_perrow64k_linear_bs7_s16_early_20260806/
+rope_taskmajor_final_dfx_perrow64k_linear_bs16_s16_early_20260806/
+```
+
+每个目录都包含 `uniformity_report.json`、`critical_path_stdout.txt`，以及所有 rank
+的 `critical_path_report.md` 和 `l2_swimlane_records.json`。三个 batch 中 Full/SWA
+两个 RoPE producer 均为 `invocation_count=1`，logical blocks 分别为
+`1/7/16`。与未开 producer early-resolve 的同 workload DFX 相比，Full
+producer→QK 的全 rank 中位 gap 在 bs1/7/16 上由
+`3.46/4.74/7.53 us` 降到 `0.93/3.46/5.06 us`；SWA 由
+`1.84/4.06/6.11 us` 降到 `0.77/1.99/4.14 us`。
+
+其它 rank 的数百毫秒 collective 主要是 peer-arrival spin wait 被计入 kernel
+duration，不能解释为 attention 算术时间。DFX 没有 logical-block count warning。
+
+Full/SWA RoPE packed staging 保持 **NO-GO**：bs12 独立 40 轮出现
+`unique_count=40` 和明显数值错误，且早期速度数据未包含最终 TaskId chain。
+在最终图上完成隔离 A/B 和逐迭代稳定性证明前，不得恢复该候选。
+
+### 13.11 当前收尾判断与后续方向
+
+在 bs1/7/16 LOW-WAIT swimlane 中，Full 主链相邻 stage 的正 gap 约为
+`1–9.4 us`；没有旧报告中的 `100+ us` online-softmax 空洞。out-proj 到 residual
+之间的 `52–62 us` 包含 TP all-reduce，不是 attention idle bubble。
+
+因此当前 bs≤16、每请求 64K 范围内没有新的、同时满足最小改动与稳定收益的
+attention 候选。后续只在新增证据时继续：
+
+1. capacity=32 重新编译后验证 per-request-64K bs32；重点检查两个 32-task RoPE
+   grid 的 tail barrier、KV/scratch 峰值和 `22/16/22` 是否仍最优；
+2. 若 runtime 支持更细的 dependency publication，再评估 producer→consumer
+   per-row 依赖；当前不能用模型层 fake dependency 替代；
+3. out-proj 仍按静态 `BATCH_TILE=16` 执行，可在证明 inactive-row work 位于关键
+   路径后再设计 active-batch mapping；
+4. reduce/finalize 只有在保持 write-disjoint ownership、reduction order 和
+   publication 的前提下才可继续融合；不能只为少 kernel 强删。
+
+## 14. 2026-08-06 历史合入与整网验证状态
+
+### 14.1 源码合入状态
+
+workload-sized attention delta 已从验证分支 `1ea76e0f` 移植到当时最新的
+`stepfun/develop@7928a275`，并以 fast-forward 方式推送：
+
+```text
+pypto-lib stepfun/develop
+c9af5790d5fe450e14fd43c88099b87539089d17
+```
+
+合入没有源码冲突；MoE 的 `KV_NUM_LAYERS` 配置与 attention 的
+blocks-per-task=`22/16/22` profile 同时保留。合入后的 CPU 定向验证为：
+
+- attention/两层 harness：92 项通过；另有 1 项未被本次 delta 修改的既有
+  MoE C3 contract 失败；
+- 最新 MoE/main compatibility：20 项通过；
+- 除两个仓库既有 DSL lint-debt 文件外，本次其余改动文件 Ruff 通过。
+
+focused device matrix、fresh-process replacement 和 DFX 是在 `1ea76e0f` 上产生；
+它们证明 attention delta。`c9af5790` 的 post-merge immutable image 复验见
+§14.2 和 §14.5。
+
+截至 2026-08-08，当前源码 tip 已前进到 `491267c4`；本节所有镜像与性能数据仍
+绑定 `c9af5790`，不能自动升级为当前 tip 的发布结论。
+
+### 14.2 整网 bs1、每请求64K
+
+运行口径：
+
+```text
+active_batch = 1
+context_len = 65536
+num_blocks = 512
+warmup = 5
+measured iterations = 50
+profile = a2a3 (QK/softmax/online blocks-per-task=22/16/22, reduce fan-in=8)
+```
+
+合入前 source-mounted 候选 `1ea76e0f`：
+
+| metric | ITL |
+|---|---:|
+| min | 49.328 ms |
+| mean | 50.046 ms |
+| p50 | 49.880 ms |
+| p99 / max | 56.362 ms |
+
+hidden finite、TP spread=0、进程 RC=0。相对 Wave5 p50 `49.796 ms`，
+变化为 `+0.17%`，处于噪声范围；因此本轮只能声明 task graph 的泛化性和
+correctness 改进，不能用该次数据声明 bs1 整网 latency 收益。
+
+最新源码 immutable 镜像：
+
+```text
+tag      stepfun-develop-20260806-attn-taskmajor-canonical
+manifest sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479
+config   sha256:a6095ba550aa8207e66a10ad2e8923d120af957c9e014349d26915d7ba33d216
+```
+
+| metric | immutable ITL |
+|---|---:|
+| min | 39.057 ms |
+| mean | 39.594 ms |
+| p50 | 39.612 ms |
+| p99 / max | 40.680 ms |
+
+保存的 hidden shape 为 `[8,16,4096]`，全 finite，active row 和全 capacity 的
+TP max spread 都为 `0.0`，进程 RC=0。相对 Wave5 p50 下降 `20.45%`；
+但 `c9af5790` 的 parent 同时包含最新 MoE 等整栈改动，**不能把 10.184 ms
+全部归因于 attention delta**。
+
+artifact：
+
+```text
+/mnt/persist/chensiyu/workspace/attn-opt/out/
+image_attn_taskmajor_canonical_20260806_c9af5790_3eb694e0/
+bs1_ctx65536_whole_net_itl/
+```
+
+### 14.3 整网 bs16、每请求64K
+
+运行严格使用每个 request 独立 64K，而不是总 context=64K：
+
+```text
+active_batch = 16
+context_len = 65536 for every row
+num_blocks = 16 * 512 = 8192
+```
+
+整网 compile 成功，但 prewarm 前每卡已占约 `52,013 MiB`：
+
+| component | 每卡占用 |
+|---|---:|
+| KV pool | 22.541 GiB |
+| weight pool | 24.857 GiB |
+| runtime 申请的 pooled static arena | 17,179,870,207 bytes（约16 GiB） |
+
+随后 `rtMalloc` 返回 `207001`，`ensure_static_arenas` 失败。该失败发生在
+kernel 执行前，不是 attention task-grain、数值或依赖错误；当前 64 GiB 卡无法在
+标准 runtime-memory 配置下同时容纳已有工作集和该 static arena。因此：
+
+- **没有有效 bs16 整网 ITL**，不得用两层 attention p50 代替；
+- ring heap `4→2 GiB` / task window `131072→65536` 的容量 A/B 已按要求暂停；
+- 暂停后 container 和 8–15 卡进程均已清理。
+
+失败 artifact：
+
+```text
+whole_net_bs16_each_ctx65536_current_1ea76e0f_a2a3_20260806/
+```
+
+### 14.4 当前准出边界
+
+两层 attention 的 bs1/2/4/8/16/7、每请求64K matrix 已完成；整网当前只有
+bs1 有有效 ITL，bs16 是容量失败，bs2/4/8/7 尚未在 `c9af5790` 上完成整网复验。
+
+`c9af5790` 镜像已完成其源码层级的 immutable BS1×64K ITL/DFX partial gate；
+当前 Git 权威源码是 `491267c4`，尚无对应 immutable image。旧镜像既不能自动
+继承 Wave5 的完整 production release-qualified 标签，也不能代表当前 tip。
+历史 R1/R2 已 supersede，完整记录见
+[`../../benchmark/2026-08-05-attention-canonical-r1-r2.md`](../../benchmark/2026-08-05-attention-canonical-r1-r2.md)。
+
+### 14.5 latest-source immutable 两层 DFX
+
+同一 manifest 的 BS1×64K 前两层结果：
+
+```text
+two-layer min/mean/p50/p99/max =
+3.5238/3.9131/3.6323/10.1127/13.8748 ms
+reference exact = true
+max_abs_diff = 0
+hidden TP spread = 0
+swimlane ranks = 8/8
+```
+
+Full workload-derived QK/softmax/SV-online logical tasks 为 `24/32/24`。生成
+`chip_orch.cpp` 中没有 Pass-A/B/C 和 Full/SWA standalone out-proj cast。
+LOW-WAIT 为 `rank2/d0`，makespan `690.1 us`、TP all-reduce span-sum
+`176.24 us`；其它 rank 的数百毫秒 span 是 DFX collective peer-arrival spin
+wait，不能代替 50 次 wall-clock timing。
+
+LOW-WAIT swimlane：
+
+```text
+/mnt/persist/chensiyu/workspace/attn-opt/out/
+image_attn_taskmajor_canonical_20260806_c9af5790_3eb694e0/
+bs1_ctx65536_two_layer_dfx/build_output/
+TwoLayerAttnPerf_20260806_090839/dfx_outputs/
+rank2/d0/l2_swimlane_records.json
+```
+
+完整审计与 artifact 见
+[`../../benchmark/2026-08-06-attention-taskmajor-canonical.md`](../../benchmark/2026-08-06-attention-taskmajor-canonical.md)。

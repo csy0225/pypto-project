@@ -26,8 +26,9 @@ vLLM fork（见 [`design/00-context-and-goals.md`](design/00-context-and-goals.m
 | [`archive/`](archive/) | **历史**（追加式）：session 日志、原型摘要、已完成 phase、交付快照 |
 | 根 | [`STATUS.md`](STATUS.md)（当前状态）· [`blockers.md`](blockers.md)（活跃 open）· [`GLOSSARY.md`](GLOSSARY.md)（术语） |
 
-> `.claude/skills/`（pypto-dev-constraints / pypto-whole-net-hang-debug）与
-> `develop/N1/`（脚本 + 0162 stable env SSOT）是运行工具/冻结环境，原地保留。
+> `.claude/skills/` 是运行工具；`develop/N1/` 是历史 N1 复现材料，不是当前 pin
+> 或环境 SSOT。当前状态只看 [`STATUS.md`](STATUS.md)、远端 ref 和
+> [`deployment/version-matrix.md`](deployment/version-matrix.md)。
 
 ## 🔎 查什么去哪里
 

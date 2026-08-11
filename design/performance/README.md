@@ -1,29 +1,46 @@
 # Performance 性能优化专项
 
-> **2026-08-03 current-source override（优先于下方历史快照）**：当前 attention/Vec
-> 与 TP all-reduce stability 源码为
-> `pypto-lib stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0`，
-> 配套 pypto 为 `stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。
-> A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2 已完成；B3 仍在进行。
-> Wave5 在 0162 release-qualified：Main N=128×3 均 `123/128` 且 TP spread=0，
-> 64K immutable ITL p50 为 `49.796 ms`。下方 2026-07-27 状态、65 ms 分账和
-> 旧依赖关系保留为
-> 历史分析，不能覆盖 [`task-tracking.md`](task-tracking.md) 的当前状态。
+> **2026-08-11 current-source override（优先于下方所有历史快照）**：当前源码为
+> `pypto-lib stepfun/develop@cb96747e`，配套 pypto 为
+> `stepfun/develop@1c048a74`。这两个 tip 分别是下面 2026-08-08 快照里
+> `491267c4` / `8e92b468` 的后继，只多了 **K8 选择性清零** 的落地件：模型侧把
+> 7 个 control buffer 声明成 window 连续前缀（`decode_fwd.py` +11/−7），runtime
+> 侧只清那 `47,616 B`（`distributed_runner.py`，带 16-buffer 指纹 fail-closed
+> 回退全清）。整网 A/B/A 双 bracket 一致：ITL p50 `33.84 → 32.08 ms`
+> （**−1.7455 ms / −5.16%**，89.5× 检测地板），`_reset_persistent_domains`
+> body `2253 → 518 µs`，`hidden_sha256` `567b206bb03d…` byte-exact、
+> token `14371`。详见 [`task-tracking.md`](task-tracking.md) 2026-08-11 行。
 >
-> **2026-08-06 L0–L4 focused MoE 当前状态**：调优对象严格裁剪为
+> **2026-08-08 current-source 快照（K8 之前）**：源码为
+> `pypto-lib stepfun/develop@491267c45875e9b1e0071eed224e2e73526799e2`，
+> 配套 pypto 为
+> `stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。
+> A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2 已完成；B3/J1 仍在进行。
+> `63814d4a` 修复 SWA sliding-window score mask：将 `pl.cmp` predicate
+> 转换路径替换为 typed INT32 数值区间 mask。0162 source-overlay N=128 为
+> `127/128=99.21875%`、TP spread=0；唯一 miss 为
+> `step94 expected=478 actual=320`。当前没有包含最新 `491267c4` 的 immutable
+> image；下一步按 pending spec 构建。`sha256:3eb694e…` 与
+> `sha256:cab8966…` 都只作为 `c9af5790` pre-fix evidence；Wave5 仍是最后一个
+> 完成全量 Main/MTP matrix 的回退基线。下方 2026-07-27 状态、65 ms 分账和旧
+> 依赖关系只作历史分析，不能覆盖
+> [`task-tracking.md`](task-tracking.md) 的当前状态。
+>
+> **2026-08-08 L0–L4 focused MoE 集成进行中**：调优对象严格裁剪为
 > `L0 Full+dense → L1/L2 SWA+dense → L3 SWA+MoE → L4 Full+MoE`，且 L4
-> 消费真实 L3 输出。最终将 routed fused gate/up 拆为独立 gate、up 和 activation，
+> 消费真实 L3 输出。产品代码 `7928a275` 已是上述 `491267c4` 的祖先：将 routed
+> fused gate/up 拆为独立 gate、up 和 activation，
 > 使用 `row=16, K=512, N=64`，并将 down 设为 `N=256`；L43/L44 specialization
-> 保持原配置。产品实现已合入
-> `pypto-lib stepfun/develop@7928a2751930b04c866788a396a7337b62c6d32f`。
-> 0162 cards `8–15` 已完成 BS=`1,2,4,7,8,16`、每 sequence 独立 64K 的三轮
-> counterbalanced normal campaign；六档 `hidden_l3/hidden_l4` 均 BF16 bit-exact、
-> finite、TP spread=0，candidate p50 reduction 分别为
-> `0.04/6.629/12.113/3.652/9.229/11.135%`。formal matched-source DFX、
-> route-aware publication gate 和最终 all-rank swimlane 尚待完成；证据根目录为
-> `/mnt/persist/chensiyu/workspace/moe-opt/tmp/moe-formal-act-n64-20260806-v1`。
-> 该结论不是 45 层 whole-net 或 L43/L44 发布结论；详见
-> [`05-moe-optimization.md`](05-moe-optimization.md)。
+> 保持原配置。pre-fix digest `sha256:cab8966…` 上，BS `1/2/4/7/8/16`、每请求独立
+> `context_len=65536` 的 36 个 fresh-process run 已 seal；三轮 p50 分别改善
+> `9.16/1.83/3.52/6.07/0.53/11.61%`，完整 `hidden_l3/hidden_l4` 跨轮 hash
+> exact，六档无性能回退；但 SWA mask 已变化，旧 golden/性能不能自动升级为
+> 最终 release evidence。matched-source whole-net 的 1-step×2、2-step×2 已
+> 8/8 sealed PASS；source-overlay N=128 已过线。J1 仍需在最终 immutable image
+> 上重跑六档 64K、双 hidden、N=128，并完成 formal matched-source DFX、
+> route-aware reanalysis 与 all-rank swimlane。该结论不是 whole-net 或 L43/L44
+> 发布结论；
+> 详见 [`05-moe-optimization.md`](05-moe-optimization.md)。
 
 > **2026-07-27 当前目标快照**：已完成并保留完成态的优化为 **A1、B1、B2**。
 > historical fixed-slot pull C2仅作为回归基线；目标通信架构已改为直接迁移
@@ -90,7 +107,7 @@ producer → 数学变换/quant/route-map → transport/window
 | **PERF-H1** | retained window 清零：host 搬零 → device `aclrtMemset` | H host per-step | **P0** | ✅ 清零 `21.50→2.21 ms`、ITL p50 `85.02→65.55 ms`（−22.9%）、每步 H2D `244.7 MiB→0`；语义等价 | A1 | S (~1d) |
 | **PERF-H2** | per-rank 视图重建 hoist 到 `prepare()`（= 跨卡起跑阶梯病根） | H host per-step | P1 | submit 3.49 ms 的大部分；起跑阶梯实测 2.914 ms。**v4-flash 同形状**，属 codegen 通用改进 | H1 | M (~1w) |
 | **PERF-H3** | DFX run 第一 barrier 假长条（观测性，非性能） | H host per-step | P2 | 让 swimlane 可信——该假长条曾把 `tp_all_reduce` 误判成 74.1% wall | A1 | S (~2d) |
-| **PERF-J1** | L0–L4 routed gate/up stage split + task-grain tuning | J MoE compute | **P0** | ✅ gate/up AIC p50 `≈144→12.7–12.9 µs`；focused p50 `12.1777→10.7677 ms`（-11.58%）；两套 L3/L4 hidden bit-exact | A1, C1–C3, D1–D2, G1, I2 | M |
+| **PERF-J1** | L0–L4 routed gate/up stage split + task-grain tuning | J MoE compute | **P0** | 🟦 pre-fix 六档 64K 与双 hidden 已通过；source-overlay N=128 已过线，final image 六档/精度/DFX 待补 | A1, C1–C3, D1–D2, G1, I2 | M |
 
 优先级：**P0** 零/低风险且解锁其它项，先做；**P1** 收益大的主体；**P2** 微调/收尾。
 工作量：S ≤ 3d，M ≈ 1w，L ≈ 2w，XL 多周。
@@ -113,7 +130,7 @@ Track A–J 是**按 workstream 分工**（谁认领）。但同一个 ITL 数�
 | **L0 · 核内流水** | 一个 AICore 内 cube/vector/MTE 的 pipeline 重叠 | **单 task 时长** | l0_swimlane（`simpler_setup.tools.l0_swimlane`） | （暂无立项；`expert_gate_up_aiv` 与 `aic` 同耗时是候选线索） |
 | **结构 / codegen** | program 形态本身：层展开 vs `pl.range`、权重 resident、调度轴、动态 batch | 以上各层的**上界** | 源码体量、编译产物、IR | B1 ✅ · B2 ✅ · B3 · G1 ✅ |
 | **可观测性** | 让上面每一层可测且可信 | —— | —— | A1 ✅ · H3 |
-| **MoE compute** | routed expert 的 expert/feature/tile 调度与 W8A8 cube/vec pipeline | **L0–L4 focused graph 的 L3/L4 gate/up/down** | focused clean A/B + all-rank DFX/swimlane + memory | **J1 ✅：gate/up split，row16/K512/N64，down N256** |
+| **MoE compute** | routed expert 的 expert/feature/tile 调度与 W8A8 cube/vec pipeline | **L0–L4 focused graph 的 L3/L4 gate/up/down** | focused clean A/B + all-rank DFX/swimlane + memory | **J1 🟦：实现与 pre-fix normal A/B 已完成；final image 六档/precision/DFX 待补** |
 
 ### 当前 ITL 65 ms 按层分账（ctx=64k / bs=16，实测）
 

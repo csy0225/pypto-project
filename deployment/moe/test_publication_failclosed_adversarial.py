@@ -61,6 +61,10 @@ def _policy_with_normal_records(
         target["timing_protocol"]["warmup"] = 4
     elif mutation == "run_identity":
         target["run"] = "candidate-r9-normal-bs4-64k"
+    elif mutation == "performance_gate":
+        performance["passed"] = False
+        performance["performance_non_regression_all_batches"] = False
+        performance["batches"]["4"]["candidate_p50_non_regression"] = False
 
     _write_json(performance_path, performance)
     authority["normal_performance_report"]["sha256"] = _sha256(
@@ -206,7 +210,10 @@ def test_publication_recomputes_route_tensor_correctness(
     _expect_publication_rejected(analyzer.main)
 
 
-@pytest.mark.parametrize("mutation", ("iters", "warmup", "run_identity"))
+@pytest.mark.parametrize(
+    "mutation",
+    ("iters", "warmup", "run_identity", "performance_gate"),
+)
 def test_publication_rejects_invalid_normal_capture_record(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

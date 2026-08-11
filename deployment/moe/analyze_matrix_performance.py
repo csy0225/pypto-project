@@ -74,6 +74,14 @@ def _round_ids(text: str) -> tuple[int, ...]:
     return values
 
 
+def _performance_gate_passed(
+    *,
+    hidden_exact: bool,
+    non_regression: bool,
+) -> bool:
+    return hidden_exact and non_regression
+
+
 def _stable_write(path: Path, content: str) -> None:
     if path.exists() and path.read_text(encoding="utf-8") != content:
         raise FileExistsError(f"refusing to replace different report: {path}")
@@ -453,8 +461,13 @@ def main() -> int:
             "candidate_p50_non_regression": batch_non_regression,
         }
 
+    gate_passed = _performance_gate_passed(
+        hidden_exact=hidden_exact,
+        non_regression=non_regression,
+    )
     result = {
         "schema": "step3p5.five-layer-moe-64k-performance.v2",
+        "passed": gate_passed,
         "measurement_integrity_passed": hidden_exact,
         "correctness_report_passed": True,
         "hidden_hash_exact_across_selected_rounds": hidden_exact,
@@ -478,13 +491,14 @@ def main() -> int:
     )
     print(json.dumps(
         {
+            "passed": gate_passed,
             "measurement_integrity_passed": hidden_exact,
             "performance_non_regression_all_batches": non_regression,
             "report": str(out / "matrix_performance_report.json"),
         },
         sort_keys=True,
     ))
-    return 0 if hidden_exact else 1
+    return 0 if gate_passed else 1
 
 
 if __name__ == "__main__":

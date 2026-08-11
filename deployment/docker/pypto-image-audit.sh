@@ -51,6 +51,7 @@ echo "[audit] git credential scrub: PASS"
 
 python - <<'PY'
 import os
+from dataclasses import fields
 
 from models.step3p5 import config
 from pypto.runtime.runner import RunConfig
@@ -63,19 +64,33 @@ assert config.ATTN_TASK_PROFILE == expected_profile, (
     config.ATTN_TASK_PROFILE,
     expected_profile,
 )
-required = (
-    os.environ.get("PYPTO_REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN", "0")
-    == "1"
-)
-available = (
-    "l2_swimlane_reuse_dep_gen"
-    in RunConfig.__dataclass_fields__
-)
-assert available or not required, (
-    "required l2_swimlane_reuse_dep_gen is unavailable"
-)
+requirement = os.environ.get("PYPTO_REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN")
+assert requirement in (None, "0", "1"), requirement
+field_names = {field.name for field in fields(RunConfig)}
+required_fields = {
+    "enable_l2_swimlane",
+    "enable_dep_gen",
+    "l2_swimlane_reuse_dep_gen",
+}
+available = required_fields <= field_names
+constructed = False
+if available:
+    reuse_config = RunConfig(
+        platform="a2a3",
+        enable_l2_swimlane=True,
+        enable_dep_gen=False,
+        l2_swimlane_reuse_dep_gen=True,
+    )
+    constructed = reuse_config.l2_swimlane_reuse_dep_gen is True
+if requirement == "1":
+    assert available and constructed, (
+        "required l2_swimlane_reuse_dep_gen is unavailable"
+    )
 print("[audit] attention profile:", config.ATTN_TASK_PROFILE)
-print("[audit] prepared swimlane reuse capability:", available)
+print(
+    "[audit] prepared swimlane reuse capability:",
+    {"available": available, "constructed": constructed, "required": requirement},
+)
 PY
 
 ptoas --version

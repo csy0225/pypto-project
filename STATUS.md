@@ -3,292 +3,230 @@
 > **只放当前真相**：当前 phase、组件 pin、活跃 blocker、机器状态。
 > 每日流水在 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)；
 > 整体规划在 [`planning/roadmap.md`](planning/roadmap.md)；接力面在
-> [`planning/handoff.md`](planning/handoff.md)。
-> **最后更新：2026-08-10。**
+> [`planning/handoff.md`](planning/handoff.md)；镜像组合在
+> [`deployment/version-matrix.md`](deployment/version-matrix.md)。
+> **最后更新：2026-08-11。**
 
-## 两条线（项目结构）
+## 0. Agent 判定当前状态的强制顺序
 
-本项目现聚焦**两条清晰的线**：
+1. 读取本文件和 [`planning/handoff.md`](planning/handoff.md) 的日期与状态。
+2. 用 GitHub 远端 `refs/heads/stepfun/develop` 核对 commit；**不得用本地同名分支、
+   worktree 名称或历史 N1 文档推断当前 tip**。
+3. 区分“当前源码 tip”和“最新 release-qualified 镜像”。源码前进不代表新镜像已准出。
+4. 镜像只认 manifest digest、明确 pin 和 immutable gate；禁止借用旧镜像数据。
+5. `develop/N1/`、旧 phase、旧 benchmark 和 hang-debug case study 都是历史证据，
+   不能作为当前 checkout、构建 pin 或发布状态。
 
-1. **Track A — pypto 本身开发**（kernel / 整网 / 精度）：代码在
-   `workspace/{pypto, pypto-lib, pto-isa, PTOAS, pypto/runtime(simpler)}`，均已在 git 跟踪。
-2. **Track B — vllm + pypto 接线**（集成，命名 **`vllm-pypto`**，原 `pypto-lib-live` worktree）：
-  - pypto 侧集成 Python（hidden-only 程序 / holder / sidecar / backend / monkey-patch / CI）在
-     `workspace/vllm-pypto`（pypto-lib worktree，`stepfun/develop`）；
-   - vLLM 侧集成在 fork `vllm/`（`PYPTO_STEP3P5_TAIL_ONLY` 主网 tail-only +
-     `PyPtoMetadataOnlyStep3p5DecoderLayer` + MTP-proposer 挂点 + MTP3 `hf_overrides` boot fix，
-     commit `1b3e538c`）+ `vllm-ascend/` fork。
+## 1. 当前源码（已推送）
 
-> **2026-08-10 P1a gate 解耦（已发布到 `stepfun/develop`，在 N256 之上再拿约 6%）**：
->
-> ```text
-> csy0225/pypto-lib:stepfun/develop  d13b2ca6   (FF over a31977fb)
-> decode_fwd.py sha256
->   28080c536a3731a9f40ad360b7d064f59bf70686de89e718cd99957d9984a07c
-> image  hub.i.basemind.com/stepcast/vllm-pypto@sha256:cab89668...  (ATTN_TASK_PROFILE=a2a3 baked)
-> ```
->
-> `gate_expert_fanout` 的 cube matmul 本不需要 `norm_quant_moe_input` 的任何输出，
-> 只因 `inv_rms` 缩放写在同一 task 里而被串行。改为 fanout 只存 raw FP32 logits、
-> `inv_rms/sigmoid/bias` 尾巴搬进 `gate_topk`（它本来就等 inv_rms）。算子顺序不变。
->
-> | 工作点 | parent_center | candidate | gain | 裁决 |
-> |---|---:|---:|---:|---|
-> | bs=1 ctx=64k nb=512 | 36.494 | **33.849** | +2.645 ms (+7.25%)；min +4.87% | GO |
-> | bs=8 ctx=64k nb=4096 | 97.528 | **91.722** | +5.806 ms (+5.95%)；min +6.19% | GO |
-> | bs=16 ctx=64k | — | — | 物理不可行（16 GiB 单次 rtMalloc -> 207001） | 容量上限 |
->
-> **统一口径：bs=1 与 bs=8 都约 6%，byte-exact**（bs=1 三臂 hidden sha256 =
-> `567b206b...` 即 N256 发布 golden、tail token 14371；bs=8 三臂 = `1fcd4fcc...`）。
-> 机理：MoE-only 段 15 hop -> 14 hop，`norm_quant` 离开关键路径，链头 81.8 -> 56.5 us。
-> ⚠ bs=1 用 `blocks=512`、bs=8 用 `blocks=4096`，编译期容量不同，**绝对值不可横比**。
->
-> **前 5 层 swimlane（bs=1，已发布代码）**：
-> `0162:/mnt/persist/chensiyu/workspace/perf-2026q3/swimlane-p1a-candidate-20260810-130154`
-> → `runtime/build_output/FiveLayerMoe_20260810_050452/dfx_outputs/rank{0..7}/d0/`。
-> LOW-WAIT rank2 makespan `2.210 ms`、static CPM `1.806 ms (81.7%)`、
-> stall `0.431 ms (19.5%)` 全 data-wait；`tp_all_reduce` 占 15.9%（8 次 on-path）。
-> 该 run `rc=1` 仅因 analyzer 结构契约在 rank0/1/3/6 各报 5 个 `missing_on_swim`；
-> rank2/4/5/7 契约干净，8 rank artifact 全部完整落盘。
->
-> 同轮被否：`gate_up+act` 融合改判为 **ROI NO-GO**（不是能力上限 —— 树内已有能编过的
-> 融合路径 `..._expert_gate_up_aiv` 用 `4×8192 B`；该 kernel 在关键路径只占 0.65%，
-> 映射整网 0.13~0.17 ms < 0.634 ms 检测地板）；`act+h_quant` grid 维度不兼容；
-> `tp_all_reduce` 降 ring step **前提未证实不执行**（AR 主要是吸收 rank skew 的
-> barrier —— candidate swimlane 里单个 AR 达 35,530 us，128 KB payload 不可能是搬运）。
-> AR 正确口径是 48 次 on-path、约 8.5~9.7%，**不是** 15%。
->
-> **新增两条硬约束**（实证，见 benchmark §6）：① AIV Vec 预算 `188416 B` 是
-> **per-kernel-per-core**，不是全局共享（149 个 AIV 函数总和 `4676512 B = 24.8×` 限额
-> 却编译通过；`combine_reduce` `core_num=16`、每核 `40960 B`）→ kernel 不能把中间结果
-> 留在 UB 给下一个 kernel，这才是融合要装两份 staging 的根因；② K 归约 matmul 加
-> `pl.pipeline(stage=2)` **可行但需先缩 tile**（`KC=128` → `131072 B` PASS、
-> `KC=256` → `262144 B` FAIL；pass dump 证实 staging `2×65536 -> 4×32768`）。
->
-> 详见 [`benchmark/2026-08-10-step3p5-p1a-gate-decouple.md`](benchmark/2026-08-10-step3p5-p1a-gate-decouple.md)。
+> **2026-08-11 K8 落地（本仓最新真相，优先于下方任何 pin 快照）**：模型侧 7 个
+> control buffer 提到 window 最前面 + runtime 只清那 `47,616 B`。整网 A/B/A 双 bracket
+> 一致：ITL p50 `33.84 → 32.08 ms`（**−1.7455 ms / −5.16%**，89.5× 检测地板），
+> `hidden_sha256` `567b206b…` byte-exact、token `14371`。
 
-> **2026-08-10 MoE BS1 N256 发布真相**：
->
-> ```text
-> csy0225/pypto-lib:stepfun/develop
->   a31977fbb7ced6d2e599539c223d07813f161140
-> merge parents
->   491267c45875e9b1e0071eed224e2e73526799e2
->   7d3e02ae4ed447ded543fb716a479350f1f89db6
-> decode_fwd.py sha256
->   d392311ce1f38a67ddaa007173bb012c87e68cafeb5dca6b47813a2424683eea
-> ```
->
-> 最终改造把普通 routed expert hidden quant N chunk 扩到 `256`，gate/up 从
-> `K512xN64` 改为 `K256xN256`，配置四个 split slots，把每 expert N work
-> 从 `20` 降到 `5`；empty-rank scatter 判定移入 kernel，early staging 保留。
->
-> 0162、BS1、ctx/max-seq `65536`、512 blocks 的 45-layer hidden-only A/B/A：
-> mean `36.354 -> 35.055 ms`（**3.57%**），p50
-> `35.778 -> 34.271 ms`（**4.21%**），裁决 `GO_GAIN_CONFIRMED`，三臂 hidden
-> payload byte-exact。100 样本 harness 的 p99 下标为 99，因此等于 max，只作诊断。
->
-> 精度 targeted replay 为 `123/128 >= 122`、128/128 TP spread=0，step77
-> token-exact；candidate 的 0162 pytest 30/30、ruff、compile-only 全 PASS。
-> 合并远端 release harness 后，merge tree 在 0162 再跑 pytest 30/30 与 ruff PASS；
-> 产品 `decode_fwd.py` SHA 未变化。DFX/PMU PASS，但 PMU event2 仅为 busy-cycle，
-> 不可反推 HBM GB/s 或对比 `1.6 TB/s` 峰值。`down24` 因下游相位与 L4 terminal
-> 回退冻结为 `NO_GO_NO_RERUN`。
->
-> 详见
-> [`benchmark/2026-08-10-step3p5-moe-n256-final.md`](benchmark/2026-08-10-step3p5-moe-n256-final.md)。
+| 仓库/组件 | 分支或 pin | 当前 commit | 状态 |
+|---|---|---|---|
+| pypto-lib | `csy0225/pypto-lib:stepfun/develop` | `cb96747e` | 远端 tip；= `27a43f6a` + K8 control-prefix 重排（`decode_fwd.py` +11/−7） |
+| pypto | `csy0225/pypto:stepfun/develop` | `1c048a74` | 远端 tip；= `8e92b468` + reset 仪表 + K8 选择性清零（`distributed_runner.py` +174/−22） |
+| simpler | immutable pin | `e2efebcbd190302609c0775d2984f409f5f42c76` | 当前 canonical image pin |
+| pto-isa | immutable pin | `ecb6c303f797749f811a494742c3c08156aacabb` | 当前 canonical image pin |
+| PTOAS | immutable pin | `fc8c6caee561914b4fb991dfc8427bb63194269e` | 当前 canonical image pin |
+| ptoas-bin | release | `v0.50` | 当前 canonical image pin |
+| vLLM overlay | immutable pin | `1b3e538c35999e62b6d24e0651b3a85b7d16c826` | 当前 canonical image pin |
 
-> **2026-08-06 MoE focused 阶段性结果（已由 2026-08-10 N256 发布取代）**：
+> **已发布的三个性能优化（按时间倒序，细节在 benchmark/，流水在 archive/）**：
+> ① **K8 选择性清零**（`cb96747e`/`1c048a74`）bs=1 ctx=64k p50 `33.84 → 32.08 ms`
+>   （−5.16%），byte-exact，见 [`design/performance/task-tracking.md`](design/performance/task-tracking.md)
+>   2026-08-11 行；
+> ② **P1a gate 解耦**（`d13b2ca6`）bs=1 `36.494 → 33.849 ms`（+7.25%）、
+>   bs=8 `97.528 → 91.722 ms`（+5.95%），两档 byte-exact（bs=1 三臂 sha =
+>   `567b206b…` = N256 发布 golden、tail token 14371），见
+>   [`benchmark/2026-08-10-step3p5-p1a-gate-decouple.md`](benchmark/2026-08-10-step3p5-p1a-gate-decouple.md)；
+> ③ **MoE BS1 N256**（`a31977fb`）bs=1 p50 `35.778 → 34.271 ms`（4.21%），
+>   三臂 byte-exact，精度 replay `123/128`、TP spread=0，见
+>   [`benchmark/2026-08-10-step3p5-moe-n256-final.md`](benchmark/2026-08-10-step3p5-moe-n256-final.md)。
 >
-> ```text
-> scope:
->   physical layers L0-L4 only
-> workload:
->   BS=1,2,4,7,8,16
->   context_len_per_sequence=65536
-> code:
->   pypto-lib stepfun/develop
->   7928a2751930b04c866788a396a7337b62c6d32f
-> image:
->   hub.i.basemind.com/stepcast/vllm-pypto@
->   sha256:b43e704ae878283575b77178501371bdb47848c4db97b2db6dbc3d7007a4995d
-> evidence:
->   /mnt/persist/chensiyu/workspace/moe-opt/tmp/
->   moe-formal-act-n64-20260806-v1
-> ```
->
-> 产品实现已将普通 routed expert 调整为 receive row16、gate/up K512/N64、
-> activation N64、down N256；L43/L44 specialization 保持原 row32/down N128。
-> formal normal campaign 已完成 36/36 fresh-process run、correctness finalize 和
-> counterbalance。BS1/2/4/7/8/16 的 candidate median-round p50 reduction 分别为
-> `0.04/6.629/12.113/3.652/9.229/11.135%`，六档 `hidden_l3/hidden_l4`
-> 均 BF16 bit-exact、finite、TP spread=0；每个 sequence 独立使用 64K context。
->
-> 当时未完成 formal matched-source DFX、route-aware publication reanalysis 和最终
-> all-rank swimlane；这些缺口已由上方 2026-08-10 N256 ITL/DFX/precision/landing
-> 证据链取代并关闭。旧 publication authority
-> `authority/normal_seal_authority_v1.json`（SHA256
-> `16ac43432d0462e34bb939b11fb71e146cb2b9c2b068d9c3c5eec9901faa54be`）
-> 仅保留为历史阶段证据。
+> ⚠ bs=1 用 `blocks=512`、bs=8 用 `blocks=4096`，编译期容量不同，**绝对值不可横比**；
+> bs=16 ctx=64k 物理不可行（16 GiB 单次 `rtMalloc` → `207001`）。
+> **生产 baseline 权威 `hidden_sha256` = `567b206bb03d89f84020e1dddd61098a8f79f32f81b8f4fcf56443113e27f03e`、
+> tail token `14371`**；任何整网 A/B 都以它为精度门。
 
-> **2026-08-03 当前真相：Attention/Vec 与 TP all-reduce 稳定性已在 Wave5
-> immutable 镜像完成 0162 发布 gate。**
->
-> 源码：
->
-> ```text
-> pypto-lib stepfun/develop
->   7099476b7c4f13112b159e237e7a64344803caf0
->
-> pypto stepfun/develop
->   defa97c526fec7e8f032dbbfcc39c820add02bf7
-> ```
->
-> `7099476b` 把 Wave 1 前的 source partial publication 从普通 local store 改为
-> self-target synchronous TPUT，并保持既有 reduce-scatter + push all-gather 与
-> Wave 1/2/3 lifetime。Main、MTP、two-layer harness 与返回值 lineage 同步对齐。
-> 当前证据支持 source publication/lifetime ordering 是 0162 的关键边界，但不外推为
-> 所有硬件的唯一根因。task grain 与 attention/Vec 决策不变：不固定 24 核，
-> `5--10 us` 仅为 sweep 起点；Full Pass-A 已并入 SV，只保留必要
-> reduce/finalize；Full/SWA out-proj cast 均融合；无稳定收益的
-> AR+residual/RMS/projection 融合不合入。
->
-> 最新 canonical release：
->
-> ```text
-> hub.i.basemind.com/stepcast/vllm-pypto:
->   stepfun-develop-20260803-attn-final-wave5
-> manifest: sha256:4acc77cdce05c40fff7fdbcedb5612fa49c2edc847a534c218389ddc08667b32
-> config:   sha256:4f2539c17fe60e61062bd27d96082a707e581b81fe716208c1bca4139dfd7394
-> ```
->
-> audit/smoke/Main+MTP compile/codegen、Main N=128 预定义三轮、Main batch16、
-> MTP batch1/batch16×2、64K 与 batch16 ITL/DFX 全 PASS；immutable 验证无宿主
-> 源码挂载，只使用 cards `0--7`。
->
-> 固定 oracle 的 Main N=128 三轮完全一致：
->
-> ```text
-> 123/128 = 96.09375%
-> miss = [2,8,13,22,82]
-> hidden finite = true
-> tp_spread_max = 0.0
-> ```
->
-> Main batch16 为 `8/8 exact`、finite、TP spread=0；MTP batch1/batch16 两轮均为
-> token `[6178,410,303]`、pass rate 1.0、max diff 0、TP spread=0。
->
-> ITL：
->
-> ```text
-> batch1/context=65536 p50 = 49.796 ms
-> batch16/context=1     p50 = 112.827 ms
-> ```
->
-> DFX LOW-WAIT heuristic 为 rank2：64K makespan `38.367 ms`、TP AR compute
-> `2.437 ms`；batch16 makespan `107.076 ms`、TP AR compute `2.429 ms`。其余 rank
-> 的超长 AR span 主要吸收 kernel 内自旋等待，不得当算术耗时。证据见
-> [`benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md`](benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md)。
->
-> **2026-07-29 集成现状快照**：唯一 release Main 仍为
-> `models.step3p5.decode_fwd:whole_decode_step3p5`；retired unroll、rollback
-> selector、自定义 Main module/name 参数和 `models/step3p5_opt` 均保持删除。
-> `stepfun/develop@563fe62a` 已完成 C1/C2/C3/D1/D2/G1：V4-Flash-style
-> shared EP window/epoch、expert-lane dispatch/combine、deferred norm/INT8
-> producer、routed-expert W8A8 与 runtime active batch/token 均已收口。
->
-> BS1 错误不是输入输出透传，也不是 gate/top-k：根因是 local experts 被压入动态
-> prefix slab，BS1/BS2 会改变 expert 的物理基址，破坏“增加相同 row1 不得改变 row0”
-> 的 batch-extension invariance。`b404a3c9` 恢复固定 expert physical lane bases 后，
-> BS1/2/16 单步均为 `6127→303`、TP spread `0`，BS1 row0 hidden 与 BS2/BS16
-> bit-identical；BS1 persistent 4-step 为 `6127→303→1207→19384→872`。
->
-> **PERF-H1（历史性能镜像，2026-07-29）**：`hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-perf-h1`
-> （registry digest `sha256:b4e8c8a457a5…`；pin = pypto `1f704616` / pypto-lib `4513007d` /
-> pto-isa `ecb6c303` / PTOAS `fc8c6cae` / simpler `e2efebcb` / ptoas-bin `v0.50`）。
-> 在下方 C4 发布镜像上把 retained CommDomain window 清零从 per-step host H2D reset 改为
-> device `aclrtMemset`（`_CTRL_MEMSET` + 8 卡并行 `broadcast_control_all`，runtime-only，不动 kernel/数值）。
-> 0162 回归：smoke PASS、整网 CI `ok=true`（Main token `303,1207,19384,872,428,6127,4231,2636`
-> 全 exact + MTP single/batch16 `6178,410,303` exact、`hidden_tp_spread=0`）、N=256 H1 vs C4
-> **token 256/256 exact**（step127/128/255 含）全步 finite（raw-hidden run-to-run 抖动 = C4 push
-> all-reduce 归约顺序，H1a-vs-H1b 复跑证实非 H1 回归）。**ITL p50（`--num-blocks 512`）：1024
-> `50.9` / 8192 `52.0` / 32768 `58.0` / 65536 `64.1` ms —— 较下方 C4 同工作点降 23–27%**；
-> PMU/scope 与 C4 逐项一致（cube_int8 `46.35%`、ring heap 峰值 `79.9%`、`dropped=0`）。
-> ⚠ 两点：MTP oracle-wiring 修复 `0f3650c7`(test-only) 为 mount 验证、**未烤进本镜像**；
-> live N=128 vanilla-raw 精度门未跑（token 与 C4 一致 → 等价 `240/256`）。benchmark 见
-> [`benchmark/2026-07-29-perf-h1-image-itl-dfx.md`](benchmark/2026-07-29-perf-h1-image-itl-dfx.md)。
->
-> 上一发布 / N=256 等价基线镜像（PERF-C4）
-> `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push`
-> （digest `sha256:7924925f4b2816c5645910b90fd2a9fa9469baace2f48f7e0ee41a587bd5d6ba`，
-> config `sha256:5402e07ba0d19b315935bfda1e9f6b445d1a3fdc9067c634a2ce302fd7f2a3dd`；
-> 代码 pin = pypto `6933b1aa` / pypto-lib `cfbdcce8` / pto-isa `ecb6c303` /
-> PTOAS `fc8c6cae` / simpler `8459d60f` / ptoas-bin `v0.50`）已推 registry，
-> 含 PERF-C4 TP all-reduce reduce-scatter + push all-gather。0162 immutable-image
-> 回归：5 pin 与 spec 逐字一致、五仓工作树全 clean、credential / canonical-only /
-> allreduce-push audit 全 PASS、smoke PASS；整网 CI `rc=0`（198.3 s）6 项 check 全
-> true，token `303,1207,19384,872,428,6127,4231,2636` 全 exact；`hidden_tp_spread`
-> 在 ci/main + rep1/rep2/rep3 共 **32 步全 `0.0`**（PERF-C4 准出指标）；ITL p50
-> `65.942 ms`(ctx=1024) / `66.455 ms`(ctx=4096)。N=256 teacher-forced raw vanilla
-> 95% gate **仍不宣称通过**（0726 镜像为 `240/256=93.75%`）；MTP oracle 在镜像外，
-> 本轮 `--skip-mtp`，其缺失不作为 Main 失败。
->
-> 该镜像在 ctx=65536 的实测：ITL p50 **83.349 ms**（active_batch=1，`--num-blocks 512`；
-> 1024→65536 只涨 18.8%），active_batch 扫描 bs≤8 可跑（bs=8 p50 145 ms ≈ 4.6× 吞吐）、
-> **bs=16 撞 device HBM**。DFX 给出两条可用结论：① `tp_all_reduce` 在 64k 只占 span
-> **1.84%**、routed expert busy 仅 **0.99%** —— **C 系与 D/F 系对 64k 单 token 延迟都已低 ROI**，
-> 与 0724 那份 ctx≈1 采集的结论（通信 74% wall）相反；② ITL 曲线给出硬约束：context ×64
-> 只涨 13.3 ms，即**随 context 变化的部分 ≤16%，≈70 ms（84%）是与 context 无关的固定 floor**，
-> 而该 floor 的构成当前 DFX 回答不了（插桩开销占了 span 的 4/5）。
-> ⚠ 不要把 DFX 里 attention 的 97.9% 当延迟占比 —— 插桩 span 是真实单步的 5.21×，
-> attention 占 56% task 数因而被系统性放大。下一步是**同镜像 ctx=1024 vs 65536 的 DFX A/B**
-> 相减，把 floor 拆开再决定动谁。ring heap 峰值 79.9% 是唯一偏紧的 runtime 资源。
->
-> 详见 [`deployment/docker/README.md`](deployment/docker/README.md)、
-> [`benchmark/2026-07-29-release-image-64k-dfx-itl.md`](benchmark/2026-07-29-release-image-64k-dfx-itl.md)、
-> [`benchmark/2026-07-28-tp-allreduce-push.md`](benchmark/2026-07-28-tp-allreduce-push.md)、
-> [`postmortems/13-tp-allreduce-pull-notify-race.md`](postmortems/13-tp-allreduce-pull-notify-race.md)。
->
-> vLLM 侧 tail-only + MTP proposer 挂点仍在 `1b3e538c`；真实在线请求接管、
-> KV bridge、动态 batch 映射与同代 MTP absolute gate 仍属于 Phase 20/28 后续。
-> **历史 push 状态（2026-07-29）**：GitHub `csy0225/pypto-lib:stepfun/develop` = `cfbdcce8`、
-> `csy0225/simpler:stepfun/develop` = `8459d60f`、`csy0225/pypto:stepfun/develop` = `6933b1aa`
-> （runtime gitlink → simpler `8459d60f`）—— 三者即镜像 pin。之后各多一个纯测试提交
-> （`pypto ce7fcb64` / `pypto-lib cc850ee5`），不改产品代码；
-> GitHub `csy0225/pypto-project:main` 已同步本轮 C/D/G 状态文档；GitLab
-> `sys/stepcast/vllm:csy/pypto-tail-mtp-integration` 保持 `1b3e538c`。
+默认 Main 仍为：
 
-## 阶段跟踪
+```text
+models.step3p5.decode_fwd:whole_decode_step3p5
+```
 
-| 阶段 | 标题 | 状态 | 详情 |
-|-----:|------|------|------|
-| **1** | pypto kernel 原型 | ✅ 已完成 | [`archive/prototype-phase-01-19-summary.md`](archive/prototype-phase-01-19-summary.md) |
-| **2** | vLLM Ascend 后端集成 | 🟡 进行中 | 见下 |
+## 2. 镜像与验证状态
 
-### Phase 2 sub-phases
+### 最终统一发布镜像（待构建）
 
-| Sub-phase | 范围 | 状态 | 文档 |
-|-----------|------|------|------|
-| **20** | vLLM monkey-patch e2e（整模型 patch `Step3p5Model.forward`） | 🟡 sidecar canonical Main wiring 已完成；独立 live front 接管仍待验证 | [`design/vllm-pypto/02-detailed-design.md`](design/vllm-pypto/02-detailed-design.md) |
-| **21** | 与 vLLM 原生精度对比 harness（L1/L2/L3） | ✅ dump-based 闭环；在线 gate 待 Phase 20 | [`archive/completed-phases/21-precision-validation.md`](archive/completed-phases/21-precision-validation.md) |
-| **22/26** | Perf baseline + 优化；TP=8 多卡 | 📐 设计已落；gate 见 roadmap | [`archive/completed-phases/22-perf-baseline.md`](archive/completed-phases/22-perf-baseline.md) |
-| **27** | N=1 单 `@pl.program` whole-net standalone | ✅ canonical P42 20/20 `argmax=303`（2026-07-18 single-submit 合入三仓 `stepfun/develop`） | [`planning/phases/27-n1-whole-net-fusion.md`](planning/phases/27-n1-whole-net-fusion.md) |
-| **28** | N=1 whole-net → vLLM live single-handoff | 🟡 C/D/G + BS1 + 自包含镜像 Main 已收口；live-8001 接管、同代 MTP absolute gate、3-way HBM 仍待完成 | [`planning/phases/28-n1-live-integration.md`](planning/phases/28-n1-live-integration.md) |
+截至 2026-08-11，**没有 immutable image 包含**当前 tip
+pypto-lib=`cb96747e` / pypto=`1c048a74`（= `491267c4` / `8e92b468` 之后又叠了 K8）。
+下一次按 `deployment/docker/builds/` 的 pending spec 构建并执行 0162 标准回归；
+不把 pending spec 或历史 digest 标成发布镜像。
 
-> 交付分级 / 到 v1.0 的规划见 [`planning/roadmap.md`](planning/roadmap.md)。
-> **口径提醒**：dump-based 精度闭环 ≠ 真实 vLLM 请求已走 PyPTO NPU runner；
-> production backend（Phase 20）仍未完成。
->
-> **2026-07-23 主网 multi-decode 精度验证（device 0162, `stepfun/develop a632c42e`+CI `e66bda25`）**：
-> 用 **live vanilla vLLM W8A8 oracle** 逐 token teacher-forced 对比，seed=6127 / N=128 →
-> **ALIGNED=124/128=96.9%（≥95% L3 PASS）**；4 个 miss 全是 vanilla 自身 near/dead-tie
-> （pypto 的选择 = vanilla fresh 查询 #1）。**即 pypto 整网 decode 与 vanilla 逐 token 对齐、
-> 精度正常**。CI: `tests/step3p5/ci/LIVE_PRECISION_AB.md`。
-> ⚠ **历史口径更正**：此前 session 里"multi-decode step-3 发散 / near-tie 未解决"的结论
-> **作废**——根因是 harness 硬编码 `DEFAULT_ORACLE_TOKENS[2]=19384` 是过时/串位常量
-> （one-shot `encode(text)` 边界串位），对相同 no-BOS 上下文 vanilla 自己也出 6127，pypto 无误。
+因此，下方 digest 都是旧源码层级的 **pre-fix evidence**，不能标成当前源码
+的最终发布镜像，也不能把其 golden、性能或 DFX 自动升级为当前 tip 的准出结论。
 
-## 组件 Pin Snapshot（最新）
+### 最近一次 Attention canonical image（pre-fix evidence）
+
+```text
+tag:
+hub.i.basemind.com/stepcast/vllm-pypto:
+  stepfun-develop-20260806-attn-taskmajor-canonical
+manifest: sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479
+config:   sha256:a6095ba550aa8207e66a10ad2e8923d120af957c9e014349d26915d7ba33d216
+```
+
+该镜像绑定 pypto-lib=`c9af5790`，**不包含** §1 的 SWA mask 修复
+`63814d4a`。其 credential、五仓 pin、clean tree、CANN 8.5.1 absence、
+prepared-swimlane `RunConfig` 和 A2A3
+QK/softmax/online blocks-per-task=`22/16/22` profile 审计均 PASS。
+0162 digest-only、无源码/runtime overlay 验证：
+
+- 整网 BS1、每请求64K、warmup=5、50 次：
+  min/mean/p50/p99/max =
+  `39.057/39.594/39.612/40.680/40.680 ms`；hidden finite、TP spread=0；
+- 前两层 BS1×64K：p50 `3.6323 ms`，reference exact、TP spread=0；
+  DFX `8/8` rank 完整，LOW-WAIT 为 `rank2/d0`。
+
+完整记录：
+[`benchmark/2026-08-06-attention-taskmajor-canonical.md`](benchmark/2026-08-06-attention-taskmajor-canonical.md)。
+
+该镜像只完成 `c9af5790` 层级的 Attention/ITL/DFX gate；SWA mask 修复后，
+这些性能与 DFX 只能作 pre-fix 对照。它也未重跑 Wave5 的 Main N=128×3、
+Main batch16 和 MTP 全矩阵，不能自动继承完整 production release-qualified 标签。
+
+### L0–L4 MoE formal image（pre-fix evidence）
+
+```text
+hub.i.basemind.com/stepcast/vllm-pypto@sha256:
+  cab89668164cf85dc75e4f3ac53ef77ef4b8653767c7d147c5113cdee6a9d88c
+```
+
+该 digest 绑定 pypto-lib=`c9af5790`、pypto=`8e92b468`、attention profile=`a2a3`
+和 prepared-swimlane reuse capability。0162 的 focused normal A/B 已完成
+baseline/candidate × BS `1/2/4/7/8/16` × 3 轮，共 36/36 fresh-process run；
+每条 sequence 独立 `context_len=65536`。六档 L3/L4 hidden 跨轮 hash exact，
+性能均无回退。seal：
+
+```text
+/mnt/persist/chensiyu/workspace/moe-opt/tmp/moe-formal-c9af-20260806-v2/
+  campaign/normal_seal_authority.json
+SHA256 875804ddbb81b4f15a907e41e454ed3004aca3b56075063431edef5efc70c531
+```
+
+该 campaign 在 `c9af5790` 上已 seal，但 SWA mask 随 `63814d4a` 发生源码变化，
+因此旧 L3/L4 golden 与性能数据不能自动升级为最终 release evidence。统一发布
+commit 确定后，六档每请求独立 64K、双 hidden golden 和 A/B 必须在最终镜像上重跑。
+
+### 最新完整 release-qualified 回退基线（Wave5）
+
+```text
+hub.i.basemind.com/stepcast/vllm-pypto:
+  stepfun-develop-20260803-attn-final-wave5
+manifest: sha256:4acc77cdce05c40fff7fdbcedb5612fa49c2edc847a534c218389ddc08667b32
+config:   sha256:4f2539c17fe60e61062bd27d96082a707e581b81fe716208c1bca4139dfd7394
+```
+
+Wave5 只对 0162 完整 release-qualified；其源码 pin 是 pypto `defa97c5`、pypto-lib
+`7099476b`，**不是当前源码 tip**。64K p50 `49.796 ms`，Main N=128 三轮均
+`123/128` 且 TP spread=0。
+
+### 历史 2026-08-05 R1/R2（已 supersede）
+
+- R1 已撤销；R2 从未发布，且其 pypto-lib `91c7f46e` 已被当前
+  `491267c4` supersede。不得恢复 R2 或用其状态覆盖上面的当前镜像。
+- 历史记录：
+[`benchmark/2026-08-05-attention-canonical-r1-r2.md`](benchmark/2026-08-05-attention-canonical-r1-r2.md)。
+
+## 3. Attention 当前判断
+
+- `63814d4a` 将 SWA tail-window mask 从 `pl.cmp` predicate 转换路径改为显式
+  typed INT32 数值区间 mask，避免 predicate 数值转换破坏 sliding-window
+  score mask。
+- 0162 使用 `cab896…` substrate + `63814d4a` 精确 source overlay 的 N=128
+  teacher-forced 回归为 `127/128=99.21875%`，唯一 miss 是
+  `step94 expected=478 actual=320`，`hidden_tp_spread_max=0.0`，已通过
+  `>=95%` source-level 精度门。证据：
+  `/mnt/persist/chensiyu/workspace/moe-opt/tmp/moe-precision-fix-20260807-v2/runs/Lmask-v1-n128/summary.json`
+  （SHA256 `7f91dcdb…`）。
+- source-level PASS 不等于 immutable-image PASS；最终镜像上的精度、性能和 DFX
+  仍需重跑，当前不能宣称 SWA 修复无性能回退。
+- Full/SWA 核心计算中主要可避免的调度 bubble 已闭环；logical task 按 workload
+  和 architecture profile 推导，不固定 24 个物理核。
+- Full/SWA RoPE producer 已改为 workload-sized 单次 SPMD submit，QK 显式依赖
+  两个 producer TaskId；A2A3 blocks-per-task profile 为 `22/16/22`、
+  reduce fan-in=8。
+- Full Pass-A 已并入 SV；只保留必要的 online-softmax reduce/finalize。
+- Full/SWA out-proj cast 均融合。
+- 已证伪或无稳定收益的 AR+residual、residual+RMS、RMS+projection 等方案不合入。
+- pre-fix focused 两层矩阵已覆盖 bs1/2/4/8/16/7、每请求64K；`c9af5790` 镜像
+  两层 BS1 p50 `3.6323 ms`，输出 exact，DFX task count 为 `24/32/24`。
+- pre-fix immutable 整网 BS1×64K p50 `39.612 ms`，相对 Wave5 下降 `20.45%`；
+  该比较跨越最新 MoE 等整栈改动，不能把全部收益归因于 Attention。
+- 整网 bs16×每请求64K 在 prewarm 前约 `52,013 MiB/卡` 的基础上申请约
+  16 GiB static arena，`rtMalloc 207001`；没有有效 bs16 ITL。
+- 后续优先级是完整 production matrix 与 BS16 容量门禁，其次才是跨架构
+  profile 校准和可证明的 collective overlap。
+
+设计入口：
+[`design/performance/04-attention-optimization.md`](design/performance/04-attention-optimization.md)。
+
+## 4. MoE 当前判断
+
+- 产品改动 `7928a275` 已包含在当前远端 `stepfun/develop@491267c4` 中；
+  `cd19fe6b` 的 active-route scheduling 和 `491267c4` 的 route/precision
+  release harness 也已进入当前源码 tip。
+- 当前 tip 的 `decode_fwd.py` SHA256=`4b39aec7…`。旧正式 campaign 的 candidate
+  SHA256=`7884da7c…`、baseline `56b3d477` SHA256=`3553664c…` 只绑定历史
+  source policy。
+- `c9af5790` pre-fix 六档 focused normal A/B 与 L3/L4 hidden golden 已通过；
+  p50 改善分别为 `9.16/1.83/3.52/6.07/0.53/11.61%`，但最终镜像必须重跑。
+- matched-source whole-net baseline/candidate 的 1-step×2、2-step×2 共 8/8 run
+  均通过，输出分别为 `303` 和 `303,1207`；publication seal=`PASS`：
+  `.../whole-net-matched-ab-20260807T024525Z/publication_seal_report.json`
+  （SHA256 `c0a03127…`）。
+- J1 保持 🟦/NO-GO：source-overlay N=128 已通过，但 `491267c4` 对应的 final
+  immutable image 精度、六档 64K golden/A/B、formal matched-source DFX 12 runs、
+  route-aware reanalysis 和 all-rank swimlane 尚未完成。
+
+设计入口：
+[`design/performance/05-moe-optimization.md`](design/performance/05-moe-optimization.md)。
+
+## 5. 当前下一步
+
+1. 按 pending spec 构建包含当前 tip（pypto-lib `cb96747e` / pypto `1c048a74`）的
+   immutable image。
+2. 在最终镜像上先完成 whole-net N=128 多步精度，再重跑 BS
+   `1/2/4/7/8/16`、每请求独立 64K、L3/L4 golden 与 counterbalanced A/B。
+3. 为最终 image/source 重新生成 matched source policy：current candidate 必须绑定
+   `4b39aec7…`，baseline 从选定的 immutable control source 独立计算；完成 MoE
+   formal all-rank DFX/swimlane 和 fail-closed 重分析。不得把历史
+   `baseline=3553664c`、`candidate=7884da7c` policy 直接沿用为当前准出。
+4. 用 `pypto-image-verify` 与 `pypto-perf-regression` 对最终 immutable image
+   执行标准回归。
+5. 若提升为完整 production release，按 Wave5 同口径补 Main N=128×3、
+   Main batch16、MTP batch1/16 和 smoke/precision matrix。
+6. BS16×每请求64K 必须先通过 runtime-memory 容量门禁；不能把 OOM 或两层数据
+   写成整网性能。
+7. 新架构重新 sweep workload task grain；不能把 A2A3 blocks-per-task
+   `22/16/22` 或物理核心数当作跨架构常量。
+
+## 6. 其它项目级 active work
+
+真实 vLLM live front、paged-KV/dynamic batch、同代 Main→MTP absolute gate 和
+3-way HBM 仍未闭环；这些属于 serving 集成，不改变本轮 attention/R2 的准出顺序。
+旧 N1 standalone、0234 stall 和早期 pin 只保留为历史案例，不再列为当前源码状态。
+
+## 7. 机器状态口径
+
+0162 是本轮验证机（driver `25.5.2` / firmware `7.8.0.7.220` /
+CANN `9.0.0-beta.1`）。ITL/DFX 完成后 container 已退出，16 张卡均无 NPU
+process；后续作业前仍须重新检查卡占用，不能沿用旧 session 的空闲结论。
+
+## 8. 组件 Pin Snapshot（降序，最新在最上）
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS(src) | simpler | ptoas-bin |
 |------|------|-------|-----------|---------|-----------|---------|-----------|
@@ -312,38 +250,16 @@
 | 2026-07-17 | N=1 stable env freeze（SSOT `develop/N1/N1-STABLE-ENV-0162-20260717.md`） | `n1fusion-base:e277de9f` | `feat/whole-net-n1-fusion:0e7a0fdd` | `ecb6c303` | `72ada0a1` | `n1fusion-base:36957c6b` | v0.45 |
 | 2026-06-22 | Phase 2 设计落地；建项目跟踪仓 | `stepfun/develop:b00c8b23` | `stepfun/develop:b918e60` | `e25732f0` | `da011a3d` | `a6e06406` | v0.45 |
 
-> 完整 pin 历史见 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)。
+> 更早的 pin 历史在 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)。
 
-## 当前 Blocker / Deferred（摘要，详见 [`blockers.md`](blockers.md)）
+## 9. 当前 Blocker / Deferred（摘要，详见 [`blockers.md`](blockers.md)）
 
 | # | Blocker | 严重度 | gate 什么 | 详情 |
 |--:|---------|--------|-----------|------|
 | UPSTREAM-NOTIFY-FENCE | pypto `MakeNotifyCodegenPTO` 把 `dcci`(invalidate-only) 排在 payload drain 之前；最小修复 = 一条 pre-CMO `pipe_barrier(PIPE_ALL)`（device 已证，消融矩阵闭合），Wave2 单点代价 `0.405 µs/call` | 🔴 Active / correctness | 一切「把 payload store 与它自己的 credit 拉近」的 AR 优化（删波次 / 合并波次 / 按 peer 融合） | [`blockers.md`](blockers.md) |
 | N1-S-0234 | 0234 同步 pypto-lib 后 whole-net stall（完整对象未确认） | 🔴 Active / 未独立复核 | 取得 SSH 后核对三仓/runtime/环境重跑 canonical | [`blockers.md`](blockers.md) |
-| N1-L | Phase 28 live：per-layer KV + 3-way HBM + live token-exact A/B | 🔴 Active | live single-handoff | [`planning/phases/28-n1-live-integration.md`](planning/phases/28-n1-live-integration.md) |
+| N1-L | Phase 28 live：per-layer KV + 3-way HBM + live token-exact A/B | 🔴 Active | live single-handoff | [`planning/phases/28-live-integration.md`](planning/phases/28-live-integration.md) |
 | 1 | Phase 20 production backend 未接入 | 🟡 功能 | 真实 vLLM 请求走 PyPTO runner | [`design/vllm-pypto/`](design/vllm-pypto/) |
 | 2 | Prefill MoE L1 overflow（TASK-29） | 🟡 功能/性能 | 真实 PyPTO NPU prefill kernel | [`blockers.md`](blockers.md) |
 | 3 | head_gate 语义（历史 ×1 旁路已由 on-device gate 取代） | 🟡 精度 | 在线 backend L1 parity | [`postmortems/09-attention-multiposition-corruption.md`](postmortems/09-attention-multiposition-corruption.md) |
 | 5 | MTP 集成进 decode | 🟢 Deferred | speculative 吞吐 | [`blockers.md`](blockers.md) |
-
-> 已解 blocker 转为专项复盘：[`postmortems/`](postmortems/)（如 507899/507018、
-> co-tenancy、tmov、gate_topk、gap-5、scheduler-timeout 等）。
-
-## 机器状态
-
-**`gpu-a910x-0162`（Phase 16 验证机，当前主力）**：driver 25.5.2 ✅ / firmware
-7.8.0.7.220 ✅ / CANN 9.0.0-beta.1 ✅；simpler L3 allreduce、前端 smoke、dense/SWA/MoE
-ST、N=1 canonical P42 20/20 均 PASS。2026-07-28 cards 8-15 完成最终自包含镜像
-Main 8-step PASS 与 N=256 teacher-forced 回归（hidden finite `256/256`、TP spread `0`、
-token exact `241/256`），作业退出后无残留主进程。唯一 stable 环境记录见
-[`develop/N1/N1-STABLE-ENV-0162-20260717.md`](develop/N1/N1-STABLE-ENV-0162-20260717.md)。
-
-2026-08-03 Wave5 immutable 验证只使用 cards `0–7`；cards `8–15` 上 PID
-`2045390–2045397` 全程未操作。audit/smoke/Main+MTP compile、Main N=128×3、
-batch16/MTP、64K/batch16 ITL/DFX 完成后 cards `0–7` 无残留进程，保护 PID hash
-保持 `b703fd347215b7f66ef2afe5c0b5838749f63457cffc4a0b71019d3565694e0b`。
-Wave5 在 0162 标记为 release-qualified。
-
-**`gpu-a910x-0234`**：三剑合璧已齐（driver 25.5.2 / firmware 7.8.0.7.220 / CANN
-9.0.0-beta.1）。2026-07-16 起 SSH `Permission denied`，不可达——既不能标 poisoned
-也不能标已验证。恢复步骤见 [`deployment/machine-recovery.md`](deployment/machine-recovery.md)。

@@ -5,6 +5,12 @@ description: 使用隔离日志、PTO2 stall 分类、scheduler TASK/CLUSTER 寄
 
 # PyPTO 整网 Hang 定位
 
+> **历史案例边界（2026-08-05）**：`references/n1-*` 是 2026-06～07 的 N1
+> single-program 排障案例库，不是当前 branch、pin、镜像或 blocker SSOT。案例中
+> “当前”“latest”“stable”等词只相对案例发生时刻成立。开始任何实际任务前必须先读
+> 项目根 [`STATUS.md`](../../../STATUS.md) 和远端 ref；禁止用案例里的 N1 pin
+> 覆盖当前源码。
+
 ## 目标与纪律
 
 把“整网卡死”收敛为可复核的证据链：

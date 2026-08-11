@@ -30,10 +30,16 @@ RUNTIME_SEAL_FIELDS = (
     "kv_key_sha256_by_rank",
 )
 IMAGE_PYPTO_COMMIT = "8e92b46808f9f7c09b6431ad4691503f09c12ee5"
+IMAGE_PYPTO_LIB_COMMIT = "491267c45875e9b1e0071eed224e2e73526799e2"
+IMAGE_ATTN_PROFILE = "a2a3"
+IMAGE_AUDIT_SCHEMA = "step3p5.moe.pre-mount-image-audit.v1"
+CAPABILITY_SCHEMA = "step3p5.moe-image-capability.v1"
+DFX_RAW_SCHEMA = "step3p5.moe.dfx-raw-evidence.v1"
 RUN_RE = re.compile(
     r"^(baseline|candidate)-r([0-9]+)-(normal|dfx)-"
     r"bs(1|2|4|7|8|16)-64k$"
 )
+MERGED_SWIMLANE_RE = re.compile(r"^merged_swimlane_.+\.json$")
 DFX_POLICIES = {
     "baseline": {
         "policy_id": "campaign-baseline-56b3d477-row32-fused-v1",
@@ -196,6 +202,282 @@ def _strict_equal(
             )
         return
     _require(actual == expected, f"value mismatch at {path}")
+
+
+def _validate_pre_mount_image_audit(
+    run: Path,
+    *,
+    image_ref: str,
+) -> dict[str, str]:
+    """Validate the host-side audit that ran before any source was mounted."""
+    log_path = run / "image_audit.log"
+    invocation_path = run / "image_audit_invocation.json"
+    _require(
+        log_path.is_file() and not log_path.is_symlink(),
+        f"missing pre-mount image audit log: {log_path}",
+    )
+    log = log_path.read_text(encoding="utf-8")
+    _require(
+        log.count("IMAGE_IMMUTABLE_AUDIT=PASS") == 1,
+        f"pre-mount image audit did not pass exactly once: {log_path}",
+    )
+    expected_lines = (
+        "[audit] attention profile: a2a3",
+        "[audit] prepared swimlane reuse capability:",
+        "[audit] git credential scrub: PASS",
+    )
+    for line in expected_lines:
+        _require(
+            line in log,
+            f"pre-mount image audit is missing marker {line!r}",
+        )
+    for component, commit in (
+        ("pypto", IMAGE_PYPTO_COMMIT),
+        ("pypto-lib", IMAGE_PYPTO_LIB_COMMIT),
+    ):
+        pattern = re.compile(
+            rf"(?m)^\[audit\] pin {re.escape(component)}\s+"
+            rf"{re.escape(commit)}\s+clean$"
+        )
+        _require(
+            pattern.search(log) is not None,
+            f"pre-mount image audit is missing {component} pin",
+        )
+    build_match = re.search(r"\[audit\] build jobs: ([0-9]+)", log)
+    _require(
+        build_match is not None and int(build_match.group(1)) >= 1,
+        "pre-mount image audit has invalid build jobs",
+    )
+    invocation = _json(invocation_path)
+    _require(
+        set(invocation)
+        == {
+            "audit_log_sha256",
+            "image_ref",
+            "passed",
+            "phase",
+            "schema",
+            "source_mount",
+        },
+        "pre-mount image audit invocation keys are incomplete",
+    )
+    _require(
+        invocation.get("schema") == IMAGE_AUDIT_SCHEMA
+        and invocation.get("passed") is True
+        and invocation.get("phase") == "pre-source-mount"
+        and invocation.get("image_ref") == image_ref,
+        "pre-mount image audit invocation contract failed",
+    )
+    _require(
+        invocation.get("source_mount") is False,
+        "pre-mount image audit source_mount must be false",
+    )
+    audit_sha = _sha256(log_path)
+    _require(
+        invocation.get("audit_log_sha256") == audit_sha,
+        "pre-mount image audit log hash mismatch",
+    )
+    return {
+        "image_audit_log_sha256": audit_sha,
+        "image_audit_invocation_sha256": _sha256(invocation_path),
+    }
+
+
+def _validate_capability_report(
+    run: Path,
+    *,
+    image_ref: str,
+    mode: str,
+) -> dict[str, str]:
+    """Validate the capability probe executed inside the immutable image."""
+    path = run / "capability_report.json"
+    report = _json(path)
+    _require(
+        report.get("schema") == CAPABILITY_SCHEMA,
+        f"unsupported capability report schema: {path}",
+    )
+    _require(
+        report.get("image_ref") == image_ref,
+        "capability report image identity mismatch",
+    )
+    _require(
+        report.get("attention_profile") == IMAGE_ATTN_PROFILE
+        and report.get("pypto_git_head") == IMAGE_PYPTO_COMMIT,
+        "capability report attention/PyPTO identity mismatch",
+    )
+    image_commits = report.get("image_commits")
+    _require(
+        isinstance(image_commits, dict)
+        and image_commits.get("pypto") == IMAGE_PYPTO_COMMIT
+        and image_commits.get("pypto_lib") == IMAGE_PYPTO_LIB_COMMIT,
+        "capability report image commit mismatch",
+    )
+    reuse = report.get("reuse_capability")
+    _require(isinstance(reuse, dict), "capability reuse report is missing")
+    _require(
+        reuse.get("fields_available") is True
+        and reuse.get("reuse_config_constructed") is True,
+        "capability report cannot construct prepared swimlane reuse",
+    )
+    if mode == "dfx":
+        _require(
+            reuse.get("required") is True
+            and reuse.get("environment_present") is True
+            and reuse.get("environment_value") == "1",
+            "formal DFX capability requirement is not enabled",
+        )
+    else:
+        _require(
+            reuse.get("required") is False
+            and reuse.get("environment_value") in (None, "0", "1"),
+            "normal capability requirement is malformed",
+        )
+    return {"capability_report_sha256": _sha256(path)}
+
+
+def _validate_dfx_raw_evidence(
+    batch_dir: Path,
+    *,
+    dfx_artifacts: Any,
+) -> dict[str, Any]:
+    """Validate the complete eight-rank raw DFX tree and merged traces."""
+    raw_root = batch_dir / "dfx_raw"
+    _require(
+        raw_root.is_dir() and not raw_root.is_symlink(),
+        f"missing raw DFX tree: {raw_root}",
+    )
+    expected_dispatches = {f"rank{rank}/d0" for rank in range(TP)}
+    actual_dispatches = {
+        path.relative_to(raw_root).as_posix()
+        for path in raw_root.glob("rank*/d*")
+        if path.is_dir()
+    }
+    _require(
+        actual_dispatches == expected_dispatches,
+        "DFX raw tree must contain exactly rank0..rank7/d0 dispatches",
+    )
+    dep_paths = sorted(raw_root.rglob("deps.json"))
+    swim_paths = sorted(raw_root.rglob("l2_swimlane_records.json"))
+    _require(
+        {
+            path.relative_to(raw_root).as_posix() for path in dep_paths
+        }
+        == {f"rank{rank}/d0/deps.json" for rank in range(TP)},
+        "DFX raw deps.json set is not exactly eight ranks",
+    )
+    _require(
+        {
+            path.relative_to(raw_root).as_posix() for path in swim_paths
+        }
+        == {
+            f"rank{rank}/d0/l2_swimlane_records.json"
+            for rank in range(TP)
+        },
+        "DFX raw swimlane set is not exactly eight ranks",
+    )
+
+    _require(
+        isinstance(dfx_artifacts, dict),
+        "case report DFX artifact metadata is missing",
+    )
+    _require(
+        dfx_artifacts.get("dep_gen_preserved_after_swim") is True,
+        "DFX swim capture did not preserve dep-gen artifacts",
+    )
+    dep_hashes = dfx_artifacts.get("dep_gen_artifacts")
+    swim_hashes = dfx_artifacts.get("swimlane_artifacts")
+    _require(isinstance(dep_hashes, dict), "DFX dep artifact hashes are missing")
+    _require(
+        isinstance(swim_hashes, dict),
+        "DFX swimlane artifact hashes are missing",
+    )
+    expected_dep_hashes = {
+        f"dfx_outputs/{relative}": _sha256(raw_root / relative)
+        for relative in (
+            path.relative_to(raw_root).as_posix() for path in dep_paths
+        )
+    }
+    expected_swim_hashes = {
+        f"dfx_outputs/{relative}": _sha256(raw_root / relative)
+        for relative in (
+            path.relative_to(raw_root).as_posix() for path in swim_paths
+        )
+    }
+    _require(
+        dep_hashes == expected_dep_hashes,
+        "DFX dep artifact hash map does not match the raw tree",
+    )
+    _require(
+        swim_hashes == expected_swim_hashes,
+        "DFX swimlane artifact hash map does not match the raw tree",
+    )
+
+    by_rank: dict[str, dict[str, str]] = {}
+    for rank in range(TP):
+        dispatch = raw_root / f"rank{rank}" / "d0"
+        required = {
+            name: dispatch / name
+            for name in (
+                "deps.json",
+                "name_map.json",
+                "l2_swimlane_records.json",
+                "critical_path_report.md",
+            )
+        }
+        for name, path in required.items():
+            _require(
+                path.is_file() and not path.is_symlink(),
+                f"DFX raw rank{rank} missing {name}",
+            )
+        merged = sorted(
+            path
+            for path in dispatch.glob("merged_swimlane_*.json")
+            if path.is_file() and not path.is_symlink()
+        )
+        _require(
+            len(merged) == 1
+            and MERGED_SWIMLANE_RE.fullmatch(merged[0].name) is not None,
+            f"DFX raw rank{rank} must contain exactly one merged swimlane",
+        )
+        merged_value = json.loads(merged[0].read_text(encoding="utf-8"))
+        trace_events = (
+            merged_value.get("traceEvents")
+            if isinstance(merged_value, dict)
+            else None
+        )
+        _require(
+            isinstance(trace_events, list) and bool(trace_events),
+            f"DFX raw rank{rank} merged swimlane is malformed",
+        )
+        timed_events = [
+            event
+            for event in trace_events
+            if isinstance(event, dict)
+            and event.get("ph") == "X"
+            and isinstance(event.get("name"), str)
+            and bool(event["name"])
+            and isinstance(event.get("ts"), (int, float))
+            and isinstance(event.get("dur"), (int, float))
+            and event["dur"] > 0
+        ]
+        _require(
+            bool(timed_events),
+            f"DFX raw rank{rank} merged swimlane has no timed task events",
+        )
+        by_rank[str(rank)] = {
+            name: _sha256(path) for name, path in required.items()
+        }
+        by_rank[str(rank)]["merged_swimlane"] = {
+            "name": merged[0].name,
+            "sha256": _sha256(merged[0]),
+        }
+    return {
+        "schema": DFX_RAW_SCHEMA,
+        "rank_dispatches": sorted(expected_dispatches),
+        "rank_count": TP,
+        "merged_swimlane_count": TP,
+        "sha256_by_rank": by_rank,
+    }
 
 
 def _run_evidence_sha256(run: Path) -> dict[str, str]:
@@ -965,6 +1247,15 @@ def main() -> int:
         ),
         f"{run}: image is not digest-pinned",
     )
+    pre_mount_audit = _validate_pre_mount_image_audit(
+        run,
+        image_ref=image_ref,
+    )
+    capability = _validate_capability_report(
+        run,
+        image_ref=image_ref,
+        mode=mode,
+    )
 
     matrix = _json(runtime / "matrix_report.json")
     report = _json(batch_dir / "report.json")
@@ -1070,6 +1361,7 @@ def main() -> int:
         )
 
     dfx_gate: dict[str, Any] = {}
+    dfx_raw_evidence: dict[str, Any] = {}
     if mode == "normal":
         _require(report.get("comparisons") == {}, "normal run used golden")
         _require(report.get("dfx") == {}, "normal run unexpectedly has DFX")
@@ -1107,6 +1399,10 @@ def main() -> int:
         )
         dfx_report = _json(
             batch_dir / "dfx_analysis" / "moe_dfx_report.json"
+        )
+        dfx_raw_evidence = _validate_dfx_raw_evidence(
+            batch_dir,
+            dfx_artifacts=report.get("dfx"),
         )
         _require(
             str(dfx_report.get("schema", "")).startswith(
@@ -1301,6 +1597,8 @@ def main() -> int:
         "active_total_context_tokens": batch * CONTEXT_LEN,
         "image_ref": image_ref,
         "run_nonce": nonce,
+        "pre_mount_image_audit": pre_mount_audit,
+        "capability_report": capability,
         "workload": expected_workload,
         "hidden_sha256": hidden_hashes,
         "kv_map_sha256_by_rank": map_hashes,
@@ -1318,6 +1616,7 @@ def main() -> int:
     }
     if mode == "dfx":
         result["dfx_gate"] = dfx_gate
+        result["dfx_raw_evidence"] = dfx_raw_evidence
     output = run / "artifact_validation.json"
     seal_record = (
         _seal_authority_record(

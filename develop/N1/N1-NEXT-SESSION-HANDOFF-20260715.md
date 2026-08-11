@@ -1,9 +1,13 @@
 # N=1 whole-net 0162 最终交接（2026-07-16）
 
+> **历史归档，不是当前 handoff。** 本文所有“最终/当前/stable”只相对
+> 2026-07 案例成立；当前接力面见
+> [`../../planning/handoff.md`](../../planning/handoff.md)。
+>
 > 这是本轮 stall 修复的最终事实记录。旧 prompt、旧冻结状态、4/5 残余
 > stall 和中间层数结论已删除。
 
-> 0162 clean 环境的唯一 stable 版本记录：
+> 0162 clean 环境当时的 stable 版本记录：
 > [`N1-STABLE-ENV-0162-20260717.md`](N1-STABLE-ENV-0162-20260717.md)。
 
 ## 1. Release 结论

@@ -139,6 +139,33 @@ total_tasks(stage)
 
 `BATCH` 等静态维通常是 storage capacity，不应自动变成永久 logical workload。
 
+同时检查 producer 的**提交粒度**，不能只看主计算 stage。典型反模式是：
+
+```text
+static-capacity loop
+  -> row 内 outlined/core-group scope
+  -> lowering 后变成 N 次逐 row invocation
+```
+
+如果每行工作彼此独立，应优先改为 `spmd(active_rows)`，并让 consumer 显式依赖
+producer TaskId。用 DFX 同时核对 `logical_blocks` 与 `invocation_count`：理想形态通常是
+“N 个 logical blocks、1 次 invocation”，而不是“N 个 blocks、N 次串行 invocation”。
+若 producer 很短但 consumer 仍有明显 dispatch gap，再评估 producer-side
+`allow_early_resolve`。只把它当作调度 hint：它不会自动把 grid-wide dependency
+变成 per-row dependency，且必须用 lowering contract、publication audit 和多 batch
+真实设备结果证明 consumer 不会观察到未完成 producer。
+
+滑动窗口还要区分**有效 token 数**与**覆盖的物理 block 数**：
+
+```text
+covered_blocks
+  = ceil(((window_start % block_size) + valid_tokens) / block_size)
+```
+
+当 window 大小恰好是 block 的整数倍时，unaligned 起点仍可能多覆盖一个 block。
+必须分别 mask 首尾，并按覆盖上界配置 scratch；不要把 `window/block_size` 直接当成
+所有位置下的物理 block 上界。
+
 ### 4. 建立两层测量面
 
 优先同时保留：
@@ -253,6 +280,8 @@ subject to:
 - 以 median 和置信区间判断，不挑单次最低值；
 - AIC 与 AIV 分开计算 wave；
 - 同时覆盖短/长 context、batch1/batch16、均匀/异构 context；
+- 多 batch 长上下文测试必须声明是“每 request 都为该 context”还是“总 context 固定”；
+  后者不能替代前者，因为 total tasks、wave、scratch 和 KV footprint 完全不同；
 - 若差异落入噪声，不增加 workload-specific 分支。
 
 ### 8. 评审层次归约
@@ -353,9 +382,10 @@ producer
 6. canonical real-device smoke
 7. multi-step precision
 8. repeated stability
-9. active-batch / heterogeneous-context / MTP
-10. immutable-object audit
-11. DFX + performance comparison
+9. fresh-process replacement equivalence
+10. active-batch / per-request-long-context / heterogeneous-context / MTP
+11. immutable-object audit
+12. DFX + performance comparison
 ```
 
 精度至少分开报告：
@@ -378,6 +408,7 @@ token gate 通过但 TP spread 非零，不能发布性能结论；性能变快�
 | task 较长但单 wave 尾部明显 | grain 太大/负载不均 | 减小 grain或按实际 workload 重排 |
 | Full 长 context 慢、SWA 正常 | context 轴未并行或归约尾长 | Full 专用 context split/层次归约 |
 | SWA 只有数微秒 | 过度拆分风险 | 保持 row-oriented 高密度 task |
+| logical blocks 随 batch 增长，但 invocation 也逐 row 增长 | producer 提交粒度错误 | 改为 workload-sized SPMD，并补显式 TaskId chain |
 | standalone cast 明显 | GM round-trip 候选 | 尝试 producer epilogue，审计 mixed resource |
 | kernel 数减少但 wall 不动 | 非关键路径或融合开销抵消 | 回退，不以图更短作为收益 |
 | all-reduce span 跨 rank 差异巨大 | 可能是 spin wait/到达抖动 | 全 rank 对比并单独做 collective probe |

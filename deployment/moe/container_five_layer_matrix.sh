@@ -7,6 +7,11 @@ set -Eeuo pipefail
 : "${MATRIX_IMAGE_REF:?missing MATRIX_IMAGE_REF}"
 : "${RUN_NONCE:?missing RUN_NONCE}"
 : "${SOURCE_KIND:?missing SOURCE_KIND}"
+MATRIX_DEVICES=${MATRIX_DEVICES:-8,9,10,11,12,13,14,15}
+if [[ ! "$MATRIX_DEVICES" =~ ^[0-9]+(,[0-9]+){7}$ ]]; then
+  echo "MATRIX_DEVICES must contain exactly eight comma-separated IDs" >&2
+  exit 35
+fi
 valid_dfx_profile() {
   [[ "$1" =~ ^[[:alnum:]][[:alnum:]_.-]*$ ]]
 }
@@ -52,10 +57,19 @@ PYPTO_IPC_LAUNCH_EPOCH=$(
 unset ASCEND_RT_VISIBLE_DEVICES ASCEND_VISIBLE_DEVICES
 
 test ! -e /runtime-override
-test "$PYPTO_IMAGE_PYPTO_COMMIT" = \
-  8e92b46808f9f7c09b6431ad4691503f09c12ee5
-test "$PYPTO_STEP3P5_ATTN_TASK_PROFILE" = a2a3
-test "$PYPTO_REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN" = 1
+CAPABILITY_ARGS=(
+  --output /out/capability_report.json
+  --image-ref "$MATRIX_IMAGE_REF"
+  --expected-pypto 8e92b46808f9f7c09b6431ad4691503f09c12ee5
+  --expected-pypto-lib 491267c45875e9b1e0071eed224e2e73526799e2
+  --expected-attn-profile a2a3
+)
+if [ "$MATRIX_MODE" = dfx ]; then
+  CAPABILITY_ARGS+=(--require-l2-swimlane-reuse)
+fi
+/usr/local/python3.11.14/bin/python3 \
+  /campaign-scripts/image_capability_probe.py \
+  "${CAPABILITY_ARGS[@]}"
 
 cd /workspace/pypto-lib
 /usr/local/python3.11.14/bin/python3 \
@@ -64,7 +78,7 @@ cd /workspace/pypto-lib
   > /out/source_verify.log
 
 ARGS=(
-  --device 0,1,2,3,4,5,6,7
+  --device "$MATRIX_DEVICES"
   --ckpt /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp
   --out /out/runtime
   --source-kind "$SOURCE_KIND"
@@ -92,6 +106,7 @@ fi
   "${ARGS[@]}"
 
 test -s /out/runtime/matrix_report.json
+test -s /out/capability_report.json
 test -s "/out/runtime/bs${MATRIX_BATCH}/hidden_l3.pt"
 test -s "/out/runtime/bs${MATRIX_BATCH}/hidden_l4.pt"
 test -s "/out/runtime/bs${MATRIX_BATCH}/report.json"

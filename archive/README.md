@@ -8,7 +8,7 @@
 |------|------|------|
 | [`milestones-2026-Q2.md`](milestones-2026-Q2.md) | 2026-Q2 各 session | **每日 session 流水 SSOT** + pin snapshot 历史 + 已解 blocker。 |
 | [`prototype-phase-01-19-summary.md`](prototype-phase-01-19-summary.md) | Phase 01-19（2026-05 至 2026-06-22） | pypto kernel 原型开发的压缩历史。 |
-| [`completed-phases/`](completed-phases/) | Phase 20 / 21 / 22（×3）/ 23 / 24 / 25 | 已完成并归档的 phase docs。 |
+| [`completed-phases/`](completed-phases/) | Phase 20 / 21 / 22（×3）/ 23 / 24 / 25 / 27 | 已完成并归档的 phase docs。 |
 | [`deliveries/`](deliveries/) | Step3p5 W8A8 交付快照 ×2 | 2026-06-26 prefill + e2e 精度交付报告与 tar 包。 |
 
 ## 子目录索引
@@ -16,7 +16,7 @@
 - **`completed-phases/`**：`20-vllm-backend-monkey-patch.md`、`21-precision-validation.md`、
   `22-device-shared-inprocess.md`(+`-p1-env-0234.md`)、`22-perf-baseline.md`、
   `23-zero-copy-kv-ipc-validation.md`、`24-live-layer-replacement.md`、
-  `25-whole-model-orchestration.md`。
+  `25-whole-model-orchestration.md`、`27-single-program-whole-net-fusion.md`。
 - **`deliveries/`**：`step3p5-w8a8-e2e-delivery-20260626.md`、
   `step3p5-w8a8-prefill-delivery-20260626.md`。
 

@@ -48,10 +48,14 @@ PYPTO_IPC_LAUNCH_EPOCH=$(
 unset ASCEND_RT_VISIBLE_DEVICES ASCEND_VISIBLE_DEVICES
 
 test ! -e /runtime-override
-test "$PYPTO_IMAGE_PYPTO_COMMIT" = \
-  8e92b46808f9f7c09b6431ad4691503f09c12ee5
-test "$PYPTO_STEP3P5_ATTN_TASK_PROFILE" = a2a3
-test "$PYPTO_REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN" = 1
+/usr/local/python3.11.14/bin/python3 \
+  /campaign-scripts/image_capability_probe.py \
+  --output /out/capability_report.json \
+  --image-ref "$ROUTE_IMAGE_REF" \
+  --expected-pypto 8e92b46808f9f7c09b6431ad4691503f09c12ee5 \
+  --expected-pypto-lib 491267c45875e9b1e0071eed224e2e73526799e2 \
+  --expected-attn-profile a2a3 \
+  --require-l2-swimlane-reuse
 test -d "/golden/bs$ROUTE_BATCH"
 
 cd /workspace/pypto-lib
@@ -86,4 +90,5 @@ cd /workspace/pypto-lib
   "${ROUTE_VALIDATION_PROFILE_ARGS[@]}"
 
 test -s /out/runtime/route_artifact_validation.json
+test -s /out/capability_report.json
 echo FIVE_LAYER_ROUTE_SIDECAR=PASS

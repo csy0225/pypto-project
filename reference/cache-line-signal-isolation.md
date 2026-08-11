@@ -351,4 +351,4 @@ worker-run dmesg 窗口与 smoke worker-run 窗口均没有新增 `507018`、
 smoke 支持；但现有记录不是 matched 单变量因果证明，也不是跨机器充分条件或
 bit-level hardware proof。不能据此单独声称已经证明某个 signal bit、某个
 TPUT 或某个 stuck kernel 是唯一根因。完整测试入口见
-[`../N1-CANONICAL-TEST.md`](canonical-test.md)。
+[`canonical-test.md`](canonical-test.md)。

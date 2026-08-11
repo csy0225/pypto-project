@@ -13,7 +13,14 @@ description: >
 
 > 目标:**用户拿到 `hub.i.basemind.com/stepcast/vllm-pypto:<tag>` 镜像 → 在 NPU 机上
 > 3 步确认可用**:① 冒烟(镜像+native 库加载)② 整网 decode 精度(canonical)。
-> 完整构建/部署文档:[`deployment/docker/README.md`](../../deployment/docker/README.md)。
+> 完整构建/部署文档:[`deployment/docker/README.md`](../../../deployment/docker/README.md)。
+>
+> **状态边界（2026-08-08）**：完整 production matrix 的默认验证对象仍是
+> Wave5 release-qualified digest。当前源码是 pypto `8e92b468` /
+> pypto-lib `491267c4`，尚无 immutable image；`20260806` 的
+> `c9af5790@sha256:3eb694e…` 只作为历史 Attention/ITL/DFX partial gate。
+> 先按 [`deployment/version-matrix.md`](../../../deployment/version-matrix.md)
+> 选择目标并固定 manifest；历史 R1/R2 不得恢复。
 
 镜像自包含(pypto 栈 + runtime .so + ptoas + vLLM Track-B 补丁 + CANN beta.1),**不需要**
 宿主装 pypto;宿主只需满足 driver/firmware/CANN 硬前提 + 有 containerd/nerdctl。
@@ -53,8 +60,8 @@ npu-smi info | grep -E "^\| [0-9]"                          # 看 8-15 HBM 占�
 ls -d /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp  # W8A8 ckpt
 ```
 
-- ❌ driver/firmware 低 → 先按 [`deployment/machine-recovery.md`](../../deployment/machine-recovery.md) 升级(成对升,重启),别继续。
-- ❌ CANN 是 GA → 换 beta.1(见 [`deployment/phase16-three-pillars.md`](../../deployment/phase16-three-pillars.md))。
+- ❌ driver/firmware 低 → 先按 [`deployment/machine-recovery.md`](../../../deployment/machine-recovery.md) 升级(成对升,重启),别继续。
+- ❌ CANN 是 GA → 换 beta.1(见 [`deployment/phase16-three-pillars.md`](../../../deployment/phase16-three-pillars.md))。
 - ❌ 8-15 卡有残留占用 → `npu-smi info -t usages` 确认 <10%;有残留进程先 `pkill`(**禁 `-9`**、**禁 `npu-smi reset`**)。
 
 ---
@@ -62,9 +69,9 @@ ls -d /data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp  # W8A8 ck
 ## Step 1 · 拉镜像
 
 ```bash
-IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push
+IMG=hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260803-attn-final-wave5
 # 发布 manifest digest:
-# sha256:99b2b9718cfa6bf0bb87b221f7d565bf23afd2b89a30ba150e523c44a536ed81
+# sha256:4acc77cdce05c40fff7fdbcedb5612fa49c2edc847a534c218389ddc08667b32
 sudo $NC pull "$IMG"        # base blob 已在 content store, 只下增量
 sudo $NC images | grep vllm-pypto
 ```
@@ -117,9 +124,8 @@ sudo $NC run --rm --net host --ipc host --privileged --security-opt apparmor=unc
       --skip-mtp"
 ```
 
-当前 GitHub 代码 release（`pypto-lib stepfun/develop@cfbdcce8`）只保留一个 Main；
-默认可拉取的 registry 镜像 `stepfun-develop-20260729-allreduce-push`
-（digest `sha256:7924925f…`）的源码 pin 与之一致。
+Wave5 镜像内 pypto-lib pin 为 `7099476b`，只保留一个 Main。当前 GitHub
+`stepfun/develop` 已前进到 `491267c4`，不能把 branch tip 当作 Wave5 镜像内容。
 
 ```text
 models.step3p5.decode_fwd:whole_decode_step3p5
@@ -161,21 +167,6 @@ fail-fast，禁止重新引入第二个 Main 产品入口。
   vanilla precision PASS，也不得把该 raw 差异归因于删除兼容入口。
 
 
-### 0728 C/D/G candidate（0162 本地，未发布）
-
-```text
-image: hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260729-allreduce-push
-image ID: sha256:06261920cced91dafc585cd5e63622a88f798ad5ef6aeeba6480433049d1544f
-product HEAD: pypto-lib b404a3c9
-CI patch: three dirty test/runner files corresponding to committed 563fe62a
-status: 0162 local only; registry pull unavailable
-```
-
-candidate 证据：Main 8-step token exact、hidden finite、TP spread `0`；N=256
-teacher-forced hidden finite `256/256`、TP spread `0`、token exact `241/256`。
-只有确认该镜像存在于本地之后，才能用宿主侧挂载的 candidate；在 candidate 重新
-build 并 push 之前，**不要**替换上面已发布镜像的 audit hash。
-
 ### Step 3.1 · 发布镜像内 canonical-only 审计（必做）
 
 发布结论必须来自目标镜像内，不得用裸机 editable checkout 代替：
@@ -185,7 +176,9 @@ sudo $NC run --rm --net host --security-opt apparmor=unconfined \
   -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro \
   "$IMG" bash -lc 'set -e
     test "$(git -C /workspace/pypto-lib rev-parse HEAD)" = \
-      53eb7212c29c9bd015ee060cd9924a13ea781ae0
+      7099476b7c4f13112b159e237e7a64344803caf0
+    test "$(git -C /workspace/pypto rev-parse HEAD)" = \
+      defa97c526fec7e8f032dbbfcc39c820add02bf7
     test ! -e \
       /workspace/pypto-lib/models/step3p5/decode_layer_single_chip_hidden.py
     test ! -e /workspace/pypto-lib/models/step3p5_opt
@@ -198,20 +191,9 @@ sudo $NC run --rm --net host --security-opt apparmor=unconfined \
     echo CANONICAL_ONLY_SYMBOL_AUDIT=PASS'
 ```
 
-2026-07-26 已留存的镜像内权威证据：
-
-```text
-0162:/tmp/canonical_only_image_verify_20260726/smoke.log
-0162:/tmp/canonical_only_image_verify_20260726/all_unit.log
-0162:/tmp/canonical_only_image_verify_20260726/contracts.log
-0162:/tmp/canonical_only_image_verify_20260726/audit.log
-0162:/tmp/canonical_only_image_verify_20260726/n256_compare.log
-0162:/tmp/canonical_only_n256_20260726.launcher.log
-```
-
-结果：smoke PASS；unit `136 passed, 4 skipped`；canonical-only contract
-`15 passed`；credential/symbol/ldd audit PASS；N=256 raw `240/256`；
-清理前后 token/hidden `256/256` exact。
+Wave5 的权威验证结果和输出路径只从
+[`benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md`](../../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md)
+读取；不要把 2026-07-26 的旧 audit 路径当作当前镜像证据。
 
 > 失败时读留存的 exporter 日志:`/data/chensiyu/ci_out/../..` 或加
 > `-v <宿主>:/tmp/n1_ci_artifacts` 后看 `logs/main_hidden_8step.log`。
@@ -334,8 +316,8 @@ step0/step1 `token_exact=true` + step2 `output=6127`(= skill 金标准 `1207→6
 | 容器 `rc=1` + `cann-8.5.1 No such file` | 旧镜像 8.5.1 残留 | 换新 tag(ENTRYPOINT/profile/ENV 已改 beta.1) |
 | ptoas/pypto 命令找不到 | 没走登录 shell | 命令用 `bash -lc '...'`(source `/etc/profile.d/pypto-env.sh`) |
 | runner step2 FAIL | `DEFAULT_ORACLE_TOKENS` stale(19384) | 非精度问题,见 Step 3 判读 |
-| `stage left a live child process group` | shared-memory 子进程清理竞争 / 仅剩 zombie 的进程组 | 检查 Main report 与宿主进程；优先使用修正后的 runner，不能只看该错误判精度失败 |
-| MTP report missing / `mtp3_hidden.pt` missing | MTP oracle 在镜像之外 | Main/C/D/G 镜像验证用 `--skip-mtp`，并把 MTP 记为 skipped |
+| `stage left a live child process group` | shared-memory child cleanup race / zombie-only group | 检查 Main report 与宿主进程；优先使用修正后的 runner，不能只看该错误判精度失败 |
+| MTP report missing / `mtp3_hidden.pt` missing | MTP oracle is outside the image | Use `--skip-mtp` for Main/C/D/G image verification and report MTP as skipped |
 
 ## 踩坑速查(容器内场景)
 

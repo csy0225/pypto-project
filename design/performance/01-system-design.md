@@ -1,17 +1,23 @@
 # 01 — System Design (HLD)：step3p5 decode 性能优化
 
-> **2026-08-03 current-source override（优先于下方历史正文）**：Attention/Vec
-> 与 TP all-reduce stability 收口源码为
-> `pypto-lib stepfun/develop@7099476b7c4f13112b159e237e7a64344803caf0`，
-> 动态 SPMD codegen 修复为 `pypto stepfun/develop@defa97c526fec7e8f032dbbfcc39c820add02bf7`。
-> 当前实现采用 workload-derived logical tasks + runtime wave mapping，Full SV 合并
-> segment-local recurrence，Full/SWA out-proj cast 默认融合。Wave5 immutable
-> audit/smoke/Main+MTP compile、Main N=128×3、Main batch16、MTP batch1/batch16×2、
-> 64K/batch16 ITL/DFX 已通过；Main N=128 三轮均 `123/128` 且 TP spread=0，
-> 当前为 **0162 release-qualified**。下方较早的主线表和收益表是
+> **2026-08-08 current-source override（优先于下方历史正文）**：Attention/Vec
+> 收口源码为
+> `pypto-lib stepfun/develop@491267c45875e9b1e0071eed224e2e73526799e2`，
+> 配套 PyPTO（动态 SPMD + immutable swimlane）为
+> `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。
+> 当前实现采用 workload-derived logical tasks + runtime wave mapping，并新增
+> workload-sized RoPE producer、显式双 TaskId 依赖和 A2A3 blocks-per-task
+> `22/16/22` profile；
+> Full SV 合并 segment-local recurrence，Full/SWA out-proj cast 默认融合。
+> 历史 `c9af5790` image manifest
+> `sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479`
+> 已通过 0162 BS1×64K ITL/DFX gate（整网 p50 `39.612 ms`，两层 p50
+> `3.6323 ms`、exact、DFX 8/8 rank）；当前 `491267c4` 尚无 immutable image。
+> 完整 production matrix 的回退基线仍是
+> Wave5；历史 R1/R2 已 supersede。下方较早的主线表和收益表是
 > 设计历史；I1/I2 当前状态以 [`task-tracking.md`](task-tracking.md) 和
-> [`04-attention-optimization.md`](04-attention-optimization.md) §12 为准；
-> attention 最终 task/tile 合并设计见同文 §13。
+> [`04-attention-optimization.md`](04-attention-optimization.md) §14 为准；
+> attention 当前 task/tile 设计见同文 §13。
 
 > **2026-07-26 交付收益覆盖**：本专项当前已实际落地并完成 device
 > regression 的优化为 **B1、B2、C2**，另有 A1 可观测性基线。本文 §5

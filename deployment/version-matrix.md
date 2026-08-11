@@ -5,7 +5,53 @@
 
 ## 已验证组合
 
-### 最新 Wave5 canonical release（2026-08-03）
+### 历史 latest-source canonical image（partial gate，2026-08-06）
+
+> **Attention/ITL/DFX gate：PASS ON 0162。**
+> 尚未重跑完整 Main/MTP production matrix，因此不自动继承 Wave5 的全量
+> release-qualified 标签。
+
+| 槽位 | Pin | 备注 |
+|------|-----|------|
+| Driver | `25.5.2` | 0162 device verified |
+| Firmware | `7.8.0.7.220` | 与 driver 成对 |
+| CANN | `9.0.0-beta.1` | image config/runtime audit PASS |
+| pypto | `8e92b46808f9f7c09b6431ad4691503f09c12ee5` | prepared-worker immutable swimlane dep-gen reuse |
+| pypto-lib / vllm-pypto | `c9af5790d5fe450e14fd43c88099b87539089d17` | 历史 image pin；不包含当前 `491267c4` |
+| pto-isa | `ecb6c303f797749f811a494742c3c08156aacabb` | immutable pin |
+| PTOAS | `fc8c6caee561914b4fb991dfc8427bb63194269e` | immutable pin |
+| simpler | `e2efebcbd190302609c0775d2984f409f5f42c76` | pypto runtime gitlink |
+| ptoas-bin | `v0.50` | binary release |
+| vLLM overlay | `csy/pypto-tail-mtp-integration@1b3e538c35999e62b6d24e0651b3a85b7d16c826` | immutable checkout |
+| **historical latest-source partial image** | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260806-attn-taskmajor-canonical@sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479` | config `sha256:a6095ba550aa8207e66a10ad2e8923d120af957c9e014349d26915d7ba33d216` |
+
+验证：credential、pin、clean tree、CANN absence、prepared-swimlane 接口和 A2A3
+QK/softmax/online blocks-per-task=`22/16/22` profile audit PASS；digest-only、
+无源码/runtime overlay。
+BS1×每请求64K 整网 50 次 min/mean/p50/p99/max =
+`39.057/39.594/39.612/40.680/40.680 ms`，hidden finite、TP spread=0。
+同 digest 两层 Attention p50 `3.6323 ms`、reference exact、DFX 8/8 rank。
+
+构建 spec：
+[`docker/builds/stepfun-develop-20260806-attn-taskmajor-canonical.env`](docker/builds/stepfun-develop-20260806-attn-taskmajor-canonical.env)。
+完整记录：
+[`../benchmark/2026-08-06-attention-taskmajor-canonical.md`](../benchmark/2026-08-06-attention-taskmajor-canonical.md)。
+
+### 当前 pending latest-source MoE spec（未构建）
+
+| 槽位 | Pin | 备注 |
+|------|-----|------|
+| pypto | `8e92b46808f9f7c09b6431ad4691503f09c12ee5` | prepared-worker immutable swimlane dep-gen reuse |
+| pypto-lib | `491267c45875e9b1e0071eed224e2e73526799e2` | active-route scheduling + MoE route/precision harness |
+| Attention profile | `a2a3` | required |
+| L2 swimlane capability | required | required for DFX |
+| Build jobs | default | `BUILD_JOBS` intentionally omitted from spec |
+| Image | — | no manifest/config digest until 0162 build and gates pass |
+
+构建 spec：
+[`docker/builds/stepfun-develop-20260808-moe-opt-latest-source.env`](docker/builds/stepfun-develop-20260808-moe-opt-latest-source.env)。
+
+### 最后一个完整 release-qualified 回退基线：Wave5（2026-08-03）
 
 > **发布状态：RELEASE-QUALIFIED ON 0162。** 其它机器/架构未由本轮独立证明。
 
@@ -32,6 +78,19 @@ makespan `38.367 ms`、TP AR compute `2.437 ms`；batch16/context1 p50
 构建 spec：
 [`docker/builds/stepfun-develop-20260803-attn-final-wave5.env`](docker/builds/stepfun-develop-20260803-attn-final-wave5.env)。
 Wave3/Wave4 为历史中间版本；Wave4 的 TP-spread blocker 已由 Wave5 关闭。
+
+### 历史 2026-08-05 R1/R2（已 supersede）
+
+| 项目 | R1 | R2 |
+|---|---|---|
+| pypto | `defa97c526fec7e8f032dbbfcc39c820add02bf7` | `8e92b46808f9f7c09b6431ad4691503f09c12ee5` |
+| pypto-lib | `91c7f46ee949045e2fce807276412b48d8121763` | 同 R1 |
+| image | manifest `sha256:fb613c2d5a74592f248c6d923e3ada6582edbe40349ada530017e622ca735b23` | 从未发布 |
+| 最终状态 | REVOKED：prepared-swimlane 接口缺失 | NEVER PUBLISHED / SUPERSEDED |
+
+R1 不得用于交付；R2 不得恢复。二者只作为失败过程记录；当前源码和 pending
+构建对象以本页 2026-08-08 spec 为准，最后一个完整 release 仍是 Wave5。详见
+[`../benchmark/2026-08-05-attention-canonical-r1-r2.md`](../benchmark/2026-08-05-attention-canonical-r1-r2.md)。
 
 ### 历史 clean canonical candidate（2026-08-02）
 
@@ -78,7 +137,7 @@ Wave3/Wave4 为历史中间版本；Wave4 的 TP-spread blocker 已由 Wave5 关
 - [`docker/builds/stepfun-develop-20260802-attn-final-canonical.env`](docker/builds/stepfun-develop-20260802-attn-final-canonical.env)：历史 clean candidate，raw precision gate 阻塞；
 - [`docker/builds/stepfun-develop-20260802-attn-final-wave3.env`](docker/builds/stepfun-develop-20260802-attn-final-wave3.env)：历史三波 lifetime 中间版本；
 - [`docker/builds/stepfun-develop-20260802-attn-final-wave4.env`](docker/builds/stepfun-develop-20260802-attn-final-wave4.env)：历史 Wave4 immutable candidate；
-- [`docker/builds/stepfun-develop-20260803-attn-final-wave5.env`](docker/builds/stepfun-develop-20260803-attn-final-wave5.env)：当前 0162 release-qualified Wave5。
+- [`docker/builds/stepfun-develop-20260803-attn-final-wave5.env`](docker/builds/stepfun-develop-20260803-attn-final-wave5.env)：完整 production matrix 的 Wave5 回退基线。
 
 ### 历史已发布组合（2026-07-29）
 
@@ -173,10 +232,10 @@ simpler 是 pypto 的 git submodule，在 `pypto/runtime/`。`pypto` 仓的
 pin 决定编哪个 simpler commit。更新 simpler 时必须
 `git submodule update` 并 commit pypto 侧的 submodule pin。
 
-当前 Wave5 release 的 simpler pin 是
+当前 latest-source canonical image 与 Wave5 回退基线的 simpler pin 都是
 `e2efebcbd190302609c0775d2984f409f5f42c76`，并由 pypto
-`defa97c526fec7e8f032dbbfcc39c820add02bf7` 的 `runtime` gitlink 固定；Wave5 已在
-0162 通过 TP-spread 稳定性 release gate。2026-07-29 历史发布组合使用的是 simpler
+各自 pin 的 `runtime` gitlink 固定；Wave5 已在 0162 通过 TP-spread 稳定性
+release gate。2026-07-29 历史发布组合使用的是 simpler
 `8459d60f04b64b74322e965e0dd038ab26165124`，由 pypto `6933b1aa` 固定。
 **Dockerfile 里的显式 checkout 不算**——`pip install -e pypto` 期间的
 `git submodule update` 会把它切回 gitlink，所以换 simpler 必须同时 bump pypto。
