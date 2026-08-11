@@ -7,6 +7,37 @@
 
 ---
 
+> **✅ 2026-08-11 Attention mix + SWA RMSNorm multicore 已完成 0162 本地集成**：
+> GitHub `csy0225/pypto-lib:stepfun/develop` 与 0162 本地
+> `/mnt/persist/chensiyu/workspace/develop/pypto-lib` 均已 fast-forward 到
+> `f9065261`（`21d928b9` Attention mix + `f9065261` RMSNorm multicore），本地
+> clean、与远端对齐。固定镜像 manifest `sha256:076af8a…` 内仍是
+> `cb96747e`；全部新结果均为该 immutable 镜像上的只读 `/candidate`
+> **source overlay**，不是新镜像验证。
+>
+> RMSNorm 按 storage capacity rows / 2 rows per task 产生 8 个 logical tasks
+>（非 active-token-derived），设备每 rank 8 blocks/8 distinct cores；strict
+> block max `4.46 us`、logical span max
+> `4.90 us`，L3/L4 byte-exact。Attention 的 Full QK→softmax→SV→segment
+> recurrence 已进入 `full_attn_mix`，SWA 每 active row 一个 `swa_attn_mix`，旧
+> split family=0。combined unit `357 passed, 7 skipped`、whole compile、
+> focused byte-exact/Q-publication/8-rank DFX 全 PASS。最终 BS1/ctx64K A/B/A：
+> `32.222 / 31.790 / 32.330 ms`，candidate 相对 baseline center
+> `-0.486 ms / -1.506%`，三臂 hidden byte-exact、token `14371`。
+> 完整证据见
+> [`../../benchmark/2026-08-11-step3p5-attention-mix-rmsnorm.md`](../../benchmark/2026-08-11-step3p5-attention-mix-rmsnorm.md)。
+>
+> **前五层 DFX limited delivery**：L0–L4、8-rank capture/precision/mixed
+> inventory/RMS `<5 us` 均 PASS；LOW-WAIT rank2=`2.124 ms`，L3 RMSNorm
+> 8 tasks/8 distinct cores，全 rank最坏 slice/span=`4.28/4.30 us`。但
+> rank0/1/3/6 各有 5 个零本地 routed-token 的 early-dispatch task 无 AICore
+> swim record，故 canonical structural analyzer=`FAIL_CLOSED`；不得宣称
+> structural PASS 或 release-qualified。candidate container `rc=1` 来自该
+> postprocess analyzer fail-closed。delivery seal SHA256 =
+> `088cf05ffbff717fd6da9fcf443122da88c4c9373c41276e4f5ae8dbfa51eb94`；
+> delivery report JSON SHA256 =
+> `7bc5811da7cf543d3ddf812ee90e8297c3238ce0e7b24160899c19584fc29688`。
+
 > **⚠ 2026-08-11 correctness 约束（device 已证，影响后续所有 AR 优化）**：pypto
 > `MakeNotifyCodegenPTO` 生成的 notify 前导把 `dcci(ENTIRE_DATA_CACHE)`
 > （**invalidate-only，无 writeback**）排在任何 drain 之前，credit 因此可能跑到 payload
@@ -72,7 +103,7 @@
 > **还要再大 0.18 ms**（K9 ≈ `+1.90`、K8-selective ≈ `+2.07 ms`）。此后所有 A/B/A 可沿用
 > 三臂顺序，不需要随机化。
 
-> **⚠ 2026-08-08 current-source override**：attention/Vec 产品实现权威 pin 为
+> **⚠ 2026-08-08 historical source override**：attention/Vec 当时的产品实现权威 pin 为
 > `pypto-lib stepfun/develop@491267c45875e9b1e0071eed224e2e73526799e2` 与
 > `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。Wave5
 > 以 self-target TPUT 发布 source partial，并保持既有三波 lifetime；immutable
@@ -85,8 +116,8 @@
 > `sha256:3eb694e…` 仅是 `c9af5790` pre-fix evidence；历史 R1/R2 已
 > supersede。下方历史 override 不覆盖 I1/I2。
 >
-> **⚠ 2026-08-07 L0–L4 focused MoE override**：Track J 的产品实现已随
-> `7928a275` 进入上述 `491267c4`；范围只包含
+> **⚠ 2026-08-07 L0–L4 focused MoE historical override**：Track J 的产品实现已随
+> `7928a275` 进入当时的 `491267c4`；范围只包含
 > `L0 Full+dense / L1–L2 SWA+dense / L3 SWA+MoE / L4 Full+MoE`，L4 必须消费
 > 真实 L3 输出。最终方案为 routed gate/up stage split，普通 expert 使用
 > `row=16, K=512, N=64, down N=256`；L43/L44 specialization 保持原配置。
@@ -196,11 +227,14 @@ producer → 数学变换/quant/route-map → transport/window
 |----|--------|--------|------|-------|------|------|----------|
 | I1 | workload-derived attention、Full 层次归约、out-proj cast、dense Vec 收尾 | P0 | ✅ | codex | A1, C4, H1 | `pypto-lib stepfun/develop@7099476b`（attention/Vec 内容自 `76d96bdb` 起保持）：logical task 按 active workload 推导；Full SV 合并 segment recurrence，只保留 reduce/finalize；Full/SWA out-proj cast 默认融合；dense RMS direct BF16 reread、dense down-proj cast fusion 保留；AR+residual、residual+RMS stats、RMS+projection、gate/up+SiLU 等无稳定收益方案不合入。active-batch=16/异构 context、source/compile/device/DFX 已完成。当前 task/tile 设计见 [`04-attention-optimization.md`](04-attention-optimization.md) §13 | 2026-08-03 |
 | I2 | TP all-reduce immutable release stability gate | P0 | ✅ | codex | I1 | Wave3/4 先闭合 final-read lifetime 并对齐 harness AST；Wave5 `7099476b` 再以 self-target synchronous TPUT 发布 source partial，并同步 Main/MTP/harness/返回值 lineage。manifest `sha256:4acc77cd…`：audit/smoke/Main+MTP compile、Main N=128 预定义三轮均 `123/128` 且 spread=0、Main batch16、MTP batch1/batch16×2、64K/batch16 ITL/DFX 全 PASS；64K p50 `49.796 ms`。machine scope=`0162 release-qualified`。见 [`../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md`](../../benchmark/2026-08-03-step3p5-wave5-allreduce-stability.md) | 2026-08-03 |
+| I3 | `swa_moe_chip_orch_swa_rmsnorm_zc` storage-capacity-row-derived 多核化 | P0 | ✅ | codex | I1 | `rows_per_task=2`，`BATCH=16` 时 8 logical tasks（非 active-token-derived）；每 rank 8 blocks 映射 8 distinct cores。block max `4.46 us`、logical span max `4.90 us`，strict `<5 us` 双门 PASS；L3/L4 byte-exact、finite、TP spread=0。只接受 grain=2，其余 fail-closed。commit `f9065261` 已 push；验证为 K8 immutable image 上 source overlay，不是新镜像。 | 2026-08-11 |
+| I4 | Full/SWA Attention mixed InCore task 集成 | P0 | ✅ | codex | I1, I3 | Full 的 QK→typed mask/softmax→SV→segment recurrence 合入 `full_attn_mix`，跨 segment reduce/finalize 保留；SWA 每 active row 一个 `swa_attn_mix`，旧 split family=0。focused exact/Q-publication/focused mixed-kernel 8-rank DFX PASS；BS1/ctx64K A/B/A candidate p50 `31.790 ms`，相对 baseline center `-1.506%`，三臂 hidden exact。commits `21d928b9..f9065261` 已 push；尚无新镜像。见 [`04-attention-optimization.md`](04-attention-optimization.md) §15。 | 2026-08-11 |
+| I5 | 最终 commit 前五层 DFX swimlane limited delivery | P0 | ✅ | codex | I3, I4 | L0–L4、BS1、ctx64K、8-rank capture；L3/L4 exact、LOW-WAIT rank2 `2.124 ms`；mixed inventory 与 RMS 8-core `<5 us` PASS。candidate container `rc=1`：canonical analyzer 因 4 ranks 各缺 5 个零本地 routed-token early-dispatch AICore record 而 `FAIL_CLOSED`；只作 limited delivery，不是 structural/release seal。all-ranks bundle SHA `d6f689c7…`，report JSON `7bc5811d…`，delivery seal `088cf05f…`。 | 2026-08-11 |
 
 ### Track J — MoE compute 优化
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| J1 | L0–L4 routed gate/up stage split + task-grain tuning | P0 | 🟦 | codex | A1, C1–C3, D1–D2, G1, I2 | 产品实现 `7928a275` 已进入 `stepfun/develop@491267c4`；当前 tip 还包含 active-route scheduling 和 route/precision release harness。普通 expert 为 `row16/K512/N64/down-N256`，保留 scatter→wait 真依赖与 L43/L44 specialization。旧 `c9af5790` 镜像 `sha256:cab8966…` 的三轮 normal A/B 已 seal：BS `1/2/4/7/8/16` 每请求独立 64K，L3/L4 hidden hash exact，p50 分别改善 `9.16/1.83/3.52/6.07/0.53/11.61%`；matched-source 8/8 run sealed PASS。旧 source-overlay N=128=`127/128`、spread=0。阻塞：`491267c4` immutable image，以及其上的六档 64K golden/A/B、N=128、formal DFX/reanalysis/all-rank swimlane。设计见 [`05-moe-optimization.md`](05-moe-optimization.md) | 2026-08-08 |
+| J1 | L0–L4 routed gate/up stage split + task-grain tuning | P0 | 🟦 | codex | A1, C1–C3, D1–D2, G1, I2 | 产品实现 `7928a275`、active-route scheduling 和 route/precision release harness 均为当前 `stepfun/develop@f9065261` 的祖先。普通 expert 为 `row16/K512/N64/down-N256`，保留 scatter→wait 真依赖与 L43/L44 specialization。旧 `c9af5790` 镜像 `sha256:cab8966…` 的三轮 normal A/B 已 seal：BS `1/2/4/7/8/16` 每请求独立 64K，L3/L4 hidden hash exact，p50 分别改善 `9.16/1.83/3.52/6.07/0.53/11.61%`；matched-source 8/8 run sealed PASS。旧 source-overlay N=128=`127/128`、spread=0。阻塞：`f9065261` immutable image及其六档 64K golden/A/B、N=128、formal DFX/reanalysis；本轮 all-rank swimlane 为 structural `FAIL_CLOSED` limited delivery，未闭合 release seal。设计见 [`05-moe-optimization.md`](05-moe-optimization.md) | 2026-08-11 |
 | J2 | gate fan-out 与 norm/quant 解耦（deferred `inv_rms`） | P0 | ✅ | claude | J1 | 已发布 `stepfun/develop@d13b2ca6`（单 commit FF，只改 `decode_fwd.py` +63/-35，sha `d392311c… -> 28080c53…`）。`gate_expert_fanout` 只写 raw FP32 logits，`inv_rms/sigmoid/bias` 尾巴搬进本来就等 `inv_rms` 的 `gate_topk`；算子顺序与数值语义不变，codegen 侧 `params_t70` 不再 `add_input(moe_inv_rms)`，task 数与 `block_num=9` 不变。0162 三臂 A/B/A：bs=1/64k/nb512 p50 `36.494 -> 33.849 ms`（**+7.25%**，地板 0.634）、bs=8/64k/nb4096 p50 `97.528 -> 91.722 ms`（**+5.95%**，地板 2.637）；bs=16 物理不可行（16 GiB 单次 rtMalloc → `207001`）。**两档三臂 hidden payload 各自 byte-exact**（bs=1 = N256 golden `567b206b…`、bs=8 `1fcd4fcc…`）→ 按项目口径 sha256 即准出。机理：MoE-only 段 15→14 hop、`norm_quant` 离开关键路径、链头 `81.8 -> 56.5 us`。数据见 [`../../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md`](../../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md) | 2026-08-10 |
 
 ### Track K — TP all-reduce 二次优化（campaign 内部代号 P2；注意与本表「优先级」列的 P0/P2 无关）
@@ -278,23 +312,24 @@ path1 现在**仅靠 K6a 一项就越门**（bs=1），故先走 path1；path2 �
 
 | 状态 | 数量 |
 |------|------|
-| ⬜ TODO | 11 |
+| ⬜ TODO | 13 |
 | 🟦 IN PROGRESS | 3 |
-| ✅ DONE | 18 |
-| ❌ NO-GO（实测否决） | 2 |
+| ✅ DONE | 21 |
+| ❌ NO-GO（实测否决） | 3 |
 | ⛔ BLOCKED | 0 |
-| **合计** | **34** |
+| **合计** | **40** |
 
-**base 校正后关键路径**：A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2/J2/K1/K6a/K6b/**K8** 已 ✅；
+**base 校正后关键路径**：A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2/I3/I4/I5/J2/K1/K6a/K6b/**K8** 已 ✅；
 其中 **K8 是本轮唯一「整网 A/B/A + 精度门」双过并已发布 immutable image 的优化**
 （ITL `33.84 → 32.08 ms` 源码级 / `32.14 ms` 镜像级，byte-exact + N=128 `123/128`）。
-historical pull C2 仅作回归基线；C5 与 **K9** 是两个实测否决的负结果（K9 整网
+historical pull C2 仅作回归基线；C5、K2a 与 **K9** 是三个实测否决的负结果（K9 整网
 `+1.72 ms/step`，符号与 bench 相反）。当前 performance 看板进行中的是
 **B3（KV resident/in-place 的连续多轮 row-diff/liveness 证据）**、**J1（formal DFX /
 publication / swimlane 收尾）**、**K2b（publisher release fence hoist，需上游 pypto 补丁）**；下一优先是
 **K10（去掉剩下那一次阻塞 host control round，上界 `0.45–0.53 ms/step`，K8 的直接后继）**
 与 **K5-C（recursive halving/doubling，唯一在 bs=16 也有效的候选）**。
-Attention/Vec 与 TP all-reduce stability 已在 0162 release-qualified；J1 产品实现
+历史 I1 Attention/Vec 与 TP all-reduce stability 已在 0162 release-qualified；
+I3/I4 的 `f9065261` 当前仅为 source-overlay GO。J1 产品实现
 和六档 64K normal gate 已完成，但 formal DFX/publication/swimlane 尚未完成，且只在
 0162 的 L0–L4 focused graph validated，不能升级为 whole-net release 结论。
 其它机器和整网集成仍需独立 gate。
@@ -316,7 +351,9 @@ Attention/Vec 与 TP all-reduce stability 已在 0162 release-qualified；J1 产
 
 | 日期 | ID | 变更 | 备注 |
 |------|----|----|------|
-| 2026-08-11 | **★★ K8 immutable image 已发布并在 0162 通过双精度门 + ITL；五层 swimlane 已采到（cross-rank 契约未过）** | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260811-k8-selective`，manifest `sha256:076af8a167405d5d0831e234cd16521c77d8bfdd173eff063d820802057c47f3`、config `sha256:a9d111880883cea0b02e425fdfeaccc2b14bb1d1174c0b73488d8ee6d8004d39`，spec `deployment/docker/builds/stepfun-develop-20260811-k8-selective.env`。**第一个包含当前 tip** `cb96747e`/`1c048a74` 的 immutable image。构建在 devbox（0162 无 buildkitd、github/proxy 均不通，结构上不能构建），**验证全部在 0162、digest-only、无 overlay**。<br>**落地件==被测件**：`distributed_runner.py` sha `fe50c11f…39622e`、`decode_fwd.py` sha `eb1f89bf…04fb5`，与落地行记录一致。<br>**精度两条独立证据都过**：① byte-exact `hidden_sha256` `567b206b…f03e` == 生产 baseline、token `14371`；② **N=128 预定义冻结 oracle 三轮 `123/128 = 96.09375%`、miss `[2,8,13,22,82]`、`tp_spread_max=0.0`，三轮一致且与 Wave5 逐位相同** ⇒ K8 未改 token 轨迹。oracle `0162:.../attn-opt/out/fresh_vanilla_oracle_20260731/oracle_ids.json` sha `c9b2c721…dd947`（与 Wave3 快照同 sha），离线无 live server，checkpoint 身份一致。<br>**性能（clean 非插桩）**：bs=1 ctx=65536 blocks=512 warmup=10 iters=100，p50 **`32.14 ms`**（min 31.766 / mean 32.467 / p99 37.644）。对 pre-K8 `33.84` = **−1.70 ms / −5.02%**；与 source-overlay 候选臂 `32.08` 差 `+0.06 ms` ≪ 地板 `0.634 ms` ⇒ **镜像复现 K8 收益**。<br>**K8 runtime 生效**：109/109 步 `k8_prefix_applied=true`、`k8_control_bytes=47616`（单段）、`reset_body_us` p50 `523.1 µs`（A/B/A 实测 518）。<br>**五层 BS1 swimlane**：LOW-WAIT=`rank2`，makespan `2.204 ms`、static CPM `1.825 ms`(82.8%)、observed 103 task（compute `1.788` 81.2% + stall `0.415` 18.8% 全 data-wait）、tiling exact；`tp_all_reduce` 占 **15.3%**（8 次）。⚠ 其余七 rank makespan `288~610 ms`、`tp_all_reduce` 占 99.4%+ 是**自旋吸收 skew 不是算力**（跨 rank 差 275×）。⚠ campaign `rc=1`：分析器 fail-closed 契约在 rank0/1/3/6 拒收（各 5 个 `early_dispatch=true` task 无 swimlane 记录）⇒ 记为**可用观测，非 sealed publication**。<br>**构建期修掉三个同族凭据坑**（凭据覆盖没生效→静默退化匿名 GitHub→proxy 401）：① submodule 覆盖 key 必须用**名字** `simpler` 而非路径 `runtime`；② pypto CMake 在无 secret 层 init `3rdparty/{libbacktrace,msgpack-c}`；③ simpler 另有**第二份** pto-isa（`runtime/build/pto-isa` 按 `pto_isa.pin=83d01313`，`PTO_ISA_ROOT` 对它无效），按上游支持的 warm-cache 预置。①③ 应落 sub-repo `dev-workflow-gotchas.md`。<br>⚠ **未跑**：Main batch16、MTP batch1/16、六档 64K golden/A/B、formal DFX；phase 2b 按用户要求跳过（启动 68 s 干净停容器，NPU 8-15 无残留）⇒ **不是完整 production release-qualified**，完整矩阵回退基线仍 Wave5。数据见 [`../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md`](../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md) |
+| 2026-08-11 | I5 | 最终 `f9065261` 前五层 8-rank DFX limited delivery 完成 | L0–L4、BS1、ctx64K source-overlay capture；L3/L4 baseline-candidate exact/finite/spread=0；LOW-WAIT rank2 `2.124 ms`。L3 RMSNorm 8 tasks/8 distinct cores，全 rank slice/span max `4.28/4.30 us`；L0/L4 Full 各 24 mixed blocks，L1/L2/L3 SWA 各 1，forbidden split=0。candidate container `rc=1`；canonical analyzer 对 rank0/1/3/6 各缺 5 个零本地 routed-token early-dispatch record 返回 `FAIL_CLOSED`，所以 status=`LIMITED_NOT_RELEASE_QUALIFIED`。all-ranks bundle SHA `d6f689c7…`，LOW-WAIT bundle `e0bb2cc2…`，seal `088cf05f…`。 |
+| 2026-08-11 | I3 / I4 | SWA RMSNorm 多核与 Attention mixed kernel 已推送到 `stepfun/develop` | GitHub 与 0162 local develop 均为 `f9065261`、本地 clean。I3：8 logical tasks/8 distinct cores，block max `4.46 us`、logical span max `4.90 us`，strict `<5 us` 与 L3/L4 exact PASS。I4：`full_attn_mix`/`swa_attn_mix` 上线，旧 split family=0；unit `357 passed, 7 skipped`，whole compile、12 个 edge exact、12 个 Q-publication、focused mixed-kernel 8-rank DFX 全 PASS。BS1/ctx64K A/B/A=`32.222/31.790/32.330 ms`，delta `-1.506%`，precision PASS。全部为 manifest `sha256:076af8a…` 上 source overlay，不是新镜像；证据见 [`../../benchmark/2026-08-11-step3p5-attention-mix-rmsnorm.md`](../../benchmark/2026-08-11-step3p5-attention-mix-rmsnorm.md)。 |
+| 2026-08-11 | **★★ K8 immutable image 已发布并在 0162 通过双精度门 + ITL；五层 swimlane 已采到（cross-rank 契约未过）** | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260811-k8-selective`，manifest `sha256:076af8a167405d5d0831e234cd16521c77d8bfdd173eff063d820802057c47f3`、config `sha256:a9d111880883cea0b02e425fdfeaccc2b14bb1d1174c0b73488d8ee6d8004d39`，spec `deployment/docker/builds/stepfun-develop-20260811-k8-selective.env`。**第一个包含 K8 发布时 tip** `cb96747e`/`1c048a74` 的 immutable image。构建在 devbox（0162 无 buildkitd、github/proxy 均不通，结构上不能构建），**验证全部在 0162、digest-only、无 overlay**。<br>**落地件==被测件**：`distributed_runner.py` sha `fe50c11f…39622e`、`decode_fwd.py` sha `eb1f89bf…04fb5`，与落地行记录一致。<br>**精度两条独立证据都过**：① byte-exact `hidden_sha256` `567b206b…f03e` == 生产 baseline、token `14371`；② **N=128 预定义冻结 oracle 三轮 `123/128 = 96.09375%`、miss `[2,8,13,22,82]`、`tp_spread_max=0.0`，三轮一致且与 Wave5 逐位相同** ⇒ K8 未改 token 轨迹。oracle `0162:.../attn-opt/out/fresh_vanilla_oracle_20260731/oracle_ids.json` sha `c9b2c721…dd947`（与 Wave3 快照同 sha），离线无 live server，checkpoint 身份一致。<br>**性能（clean 非插桩）**：bs=1 ctx=65536 blocks=512 warmup=10 iters=100，p50 **`32.14 ms`**（min 31.766 / mean 32.467 / p99 37.644）。对 pre-K8 `33.84` = **−1.70 ms / −5.02%**；与 source-overlay 候选臂 `32.08` 差 `+0.06 ms` ≪ 地板 `0.634 ms` ⇒ **镜像复现 K8 收益**。<br>**K8 runtime 生效**：109/109 步 `k8_prefix_applied=true`、`k8_control_bytes=47616`（单段）、`reset_body_us` p50 `523.1 µs`（A/B/A 实测 518）。<br>**五层 BS1 swimlane**：LOW-WAIT=`rank2`，makespan `2.204 ms`、static CPM `1.825 ms`(82.8%)、observed 103 task（compute `1.788` 81.2% + stall `0.415` 18.8% 全 data-wait）、tiling exact；`tp_all_reduce` 占 **15.3%**（8 次）。⚠ 其余七 rank makespan `288~610 ms`、`tp_all_reduce` 占 99.4%+ 是**自旋吸收 skew 不是算力**（跨 rank 差 275×）。⚠ campaign `rc=1`：分析器 fail-closed 契约在 rank0/1/3/6 拒收（各 5 个 `early_dispatch=true` task 无 swimlane 记录）⇒ 记为**可用观测，非 sealed publication**。<br>**构建期修掉三个同族凭据坑**（凭据覆盖没生效→静默退化匿名 GitHub→proxy 401）：① submodule 覆盖 key 必须用**名字** `simpler` 而非路径 `runtime`；② pypto CMake 在无 secret 层 init `3rdparty/{libbacktrace,msgpack-c}`；③ simpler 另有**第二份** pto-isa（`runtime/build/pto-isa` 按 `pto_isa.pin=83d01313`，`PTO_ISA_ROOT` 对它无效），按上游支持的 warm-cache 预置。①③ 应落 sub-repo `dev-workflow-gotchas.md`。<br>⚠ **未跑**：Main batch16、MTP batch1/16、六档 64K golden/A/B、formal DFX；phase 2b 按用户要求跳过（启动 68 s 干净停容器，NPU 8-15 无残留）⇒ **不是完整 production release-qualified**，完整矩阵回退基线仍 Wave5。数据见 [`../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md`](../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md) |
 | 2026-08-11 | **★★ K8 已落地：pypto `1c048a74` + pypto-lib `cb96747e`，两份文件逐字节等同被测件** | 用户授权「直改 pypto fork」+「精度正确则合入 `stepfun/develop`」后落地。<br>**pypto** `8e92b468 → 1c048a74`（2 commit，只改 `python/pypto/runtime/distributed_runner.py`，+174/−22）：codex 的 reset instrumentation（`PYPTO_PERSISTENT_RESET_TRACE`、`reset_body_us`、`memset_all_us`）+ K8 v3 选择性清零。<br>**pypto-lib** `27a43f6a → cb96747e`（1 commit，只改 `models/step3p5/decode_fwd.py`，+11/−7）：7 个 control buffer 提到 16 个 alloc 的最前面，构成唯一连续前缀 `[0, 47616)`。<br>**落地件 = 被测件（逐字节校验通过）**：`decode_fwd.py` sha `eb1f89bf7add419f2382836c1eab9a1c4b1f63f738923d47e771e4159f104fb5`、runtime sha `fe50c11fb76ec77789636de05e7376711c731d2b00db5033f0564c07a739622e`（见 v3 确认臂行的权威 sha）。<br>**落地后重跑的门**：AST dead-name 门、3 例 layout 门（whole-decode 走 47,616 B 前缀 / five-layer 指纹不匹配 → 回退全清 / 名字变体 → 回退全清）、`ALLOC_ORDER_OK 16 allocs, first 7 are control`、无卡 codegen 门 `VERDICT=PASS`。<br>**过程坑**：pypto-lib push 被 `--force-with-lease` 正确挡下（远端已前进到 codex 的 `27a43f6a`）→ 把 fork tip bundle 回 0162、在 `base-tree` rebase、重验 `decode_fwd.py` sha 未变、再 bundle 回来推。安全 tag `k8-prerebase-20260811` → `64898e13`。<br>**遗留**：落地版的 `trace_domains.append({...})` 仍无条件构建（只有写文件受 env 门），为保「落地==被测」没有顺手加门，已问 codex 是否另起一 commit 补。 |
 | 2026-08-11 | **★★ K8 v3 确认臂 PASS：`−1.7455 ms/step`（`−5.16%`，89.5× floor），落地件已是被测件** | campaign `0162:.../k8-selective-20260811/v3-20260811-144622`，三臂 rc=0，`K8_V3_RESULT.json` sha256 `7bb0226326cfe77f9af2d2789673f81da99ab12b651a5c7495ba8e876561a045`。<br>`A1_parent 33.842 / A2_parent 33.803` ⇒ floor **`0.0195`**（本轮最小）；`B_reorder_prefix_v3 32.077` ⇒ **`−1.7455 ms`（`−5.16%`，89.5× floor）**，bias-corrected `−1.565 ms`。`reset_body 2260.3 / 2246.1 / 518.3 µs` ⇒ `−1734.9 µs`；`memset_all 2239.7 / 2222.1 / 476.4 µs`。<br>**两个独立 bracket 一致**：v1（`prefix-20260811-135232`）`−1.7505 ms`、v3 `−1.7455 ms`，**差 `0.005 ms` = 0.26× floor** ⇒ 硬化没有代价，效应可复现。<br>**两道门都 PASS**：`PRECISION_GATE=PASS`（三臂 sha 全 `567b206b…`、`token=14371`、`all_finite`、`matches_production_baseline_sha`）；`PREFIX_APPLIED_GATE=PASS`（B 的 trace `k8_prefix_applied=true` + `k8_control_bytes=47616`，两个 A 臂为 `None`）—— 后者专门用来挡「静默回退到全窗清零会长得像没收益」。<br>**⇒ 落地件锁定（就是被测的这两份，不许重写）**：模型侧 `src_k8reorder/models/step3p5/decode_fwd.py` sha `eb1f89bf7add419f2382836c1eab9a1c4b1f63f738923d47e771e4159f104fb5`；runtime 侧 `runtime/distributed_runner_prefix_v3.py` sha `fe50c11fb76ec77789636de05e7376711c731d2b00db5033f0564c07a739622e`。驱动 `bin/run_k8_v3_aba.sh` sha `c36bb537…`，离线门 `bin/claude_check_prefix_v3_layout.py` sha `9f81ee67…`。**已按用户授权推产品仓（见本表首行落地记录）。** |
 | 2026-08-11 | **⚠ 方法论：天花板探针失败 —— 语义无效的臂不能用来界定性能上界** | 我想量出「reset 路径的全部成本」以判断「reset 异步化」值不值得开，做法是保留整个 reset 路径与埋点、**只跳过那一次 `memset_all`**（`distributed_runner_noreset.py` sha `487bc687…`，diff 恰好 4 行）。**这个探针作废。**<br>campaign `0162:.../k8-selective-20260811/ceiling-20260811-142404`。`A1_parent 33.776`（rc=0、sha `567b206b…`）；`B_noreset_ceiling` **`itl_p50 = 36.537 ms`**、`min 35.713`、`reset_body 19.96 µs`、`memset_all 0.15 µs` —— **比 baseline 慢 `+2.76 ms`**，尽管它把 2250 µs 的 reset 全省了。精度如预期 FAIL：`sha bd6eb03abb05…`、`token 81596`（期望 14371）、`finite=true`。<br>**⇒ 不许把 `+2.76 ms` 解释成 reset 路径的任何量。** 跳过清零后 control counter 带着上一步的陈旧值，wait 被提前满足 / rank 次序错乱，跑的是**另一个程序**；它的耗时不等于「正确程序减去被删的工作」。这与 K9 的发现同源：这些 window 的同步结构在给 rank 定速，破坏它会引入下游等待。<br>**方法论规则（新增）**：**ceiling probe 必须保持语义有效**，否则它既不是上界也不是下界。要界定 reset 的剩余机会，唯一有效的工具是**已测到的剩余 reset wall（K8 后 `530 µs`）+ 字节约 1:1 传到 ITL 的定性规律** ⇒ 预算 **`0.45–0.53 ms/step`**（与 codex 独立给出的 `~0.53 ms` 收敛）。**不要**再引用「no-reset 能省 X」这类数字。<br>**副产品（唯一可用的信息）**：control counter 确实是承载正确性的，且陈旧 counter 造成的是**变慢 + 变错**，不是只变错。<br>另记一个 harness 约束：arm runner 的容器脚本末尾硬断言 `token_exact`，所以**任何精度必然失败的臂都会 rc=1 并让 `set -e` 中止整个 campaign**（本次 C/A2 未跑）。以后要跑 known-bad 臂，必须先给 runner 加一个显式的 `allow_precision_fail` 开关，而不是靠读 rc=1 之前落盘的数据。 |

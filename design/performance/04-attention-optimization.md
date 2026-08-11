@@ -1,18 +1,18 @@
 # 04 · Attention 优化专项（step3p5 full / SWA flash decode）
 
-> **最终实现覆盖说明（更新至 2026-08-08）**：本文已合并原
+> **最终实现覆盖说明（更新至 2026-08-11）**：本文已合并原
 > `attention/attention-tiling-and-partitioning.md` 的最终 task/tile 设计。§0–§9
 > 保留专项探索过程，包含早期 fixed-24 lane、四阶段 split、standalone Pass-A/B/C
 > 与 cast 默认关闭等历史状态；**这些内容不得再作为当前实现说明。** 当前权威状态以
-> [§12](#12-wave5-source-publication-稳定性收口2026-08-03) 和
-> [§13](#13-当前最终实现task-切分与-tile-profile合并文档) 为准：
+> [§15](#15-attention-mixed-kernel-与-swa-rmsnorm-多核集成2026-08-11) 为准；
+> §12–§14 是其历史基线：
 > logical task 数按 active workload 推导，runtime 再映射到物理 AIC/AIV；
 > 5–10 us 仅是 task-grain 搜索起点；Full 的 SV 与 segment-local recurrence 已融合，
 > 只保留必要的 `full_online_softmax_reduce/finalize`；Full/SWA out-proj cast 默认都融合。
 > 本轮新增 workload-sized RoPE producer、显式双 TaskId 依赖、SWA trailing-window
 > 首尾 mask、Full out-proj publication 修复与 A2A3 softmax grain=16。该代码已合入
 > 当时的 `pypto-lib stepfun/develop@c9af5790`；该提交现已成为当前
-> `stepfun/develop@491267c4` 的祖先。0162 的 focused device 证据来自合入前、
+> `stepfun/develop@f9065261` 的祖先。0162 的 focused device 证据来自合入前、
 > attention delta 相同的
 > `perf/attn-rope-taskmajor-lifetime-20260805@1ea76e0f`。该候选已完成
 > 每请求 64K 的 bs1/2/4/8/16/7 linear+reverse matrix、独立 fresh-process
@@ -24,16 +24,14 @@
 > `attention_swa.py`）的重写路线，独立于 README 主表里的 Track A–H。收敛后其中的子项会以
 > `PERF-*` ID 回填 [`task-tracking.md`](task-tracking.md)。
 >
-> **当前源码基线**：pypto-lib
-> `stepfun/develop@491267c45875e9b1e0071eed224e2e73526799e2`
-> （包含当时的 Attention merge `c9af5790`、MoE `7928a275`、SWA mask 修复和
-> active-route scheduling），pypto
-> `stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`；canonical Main =
+> **当前源码基线**：GitHub pypto-lib `stepfun/develop` 与 0162 本地同名分支
+> 均为 `f906526190dc2eca0d479f8e9fa9187ec6d31be9`，本地工作树 clean。pypto =
+> `stepfun/develop@1c048a744d5f63a8bce1ddb45dac8d1b7f458bb0`；canonical Main =
 > `models/step3p5/decode_fwd.py:whole_decode_step3p5`。正文中的旧 file:line 只对应当时快照，
-> 不能覆盖当前源码。`c9af5790` 的历史 immutable BS1×64K ITL/DFX gate 已完成；
-> manifest 为 `sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479`。
-> 当前 `491267c4` 对应的 immutable image 尚未构建，因此该 manifest 只作
-> pre-fix evidence。
+> 不能覆盖当前源码。最新固定镜像 manifest 为
+> `sha256:076af8a167405d5d0831e234cd16521c77d8bfdd173eff063d820802057c47f3`，
+> 其中 pypto-lib 仍是 `cb96747e`；`f9065261` 的结果全部是该镜像上的
+> **source overlay**，不是包含新代码的 immutable image。
 >
 > **审计口径**（沿用 [`README.md` 顶层审计方法](README.md)）：任何“step3p5 独有 / 必须保留”
 > 判断都要沿 `producer → 数学变换 → transport → consumer → rounding/reduction → lifetime`
@@ -72,7 +70,7 @@ canonical CI PASS（token-exact，L1 数值等价）；ITL 1024 `50.73→51.31`�
 
 
 
-**本专项不承诺 latency 数字**。理由见 [§5.6](#56-64k-下-latency-收益暂无实测--主要理由是显存不是延迟)：
+**本专项不承诺 latency 数字**。理由见 [§5.6](#56-64k-下-latency-收益暂无实测主要理由是显存不是延迟)：
 64k DFX 显示 attention 的 span 占比被插桩放大、不可当延迟占比。当前能站住的硬理由是
 **显存 footprint**——64k 下每个 FULL attention invocation 的静态 scratch shape 约 161 MiB，
 低 bs 时 90%+ 的 batch 分区不被访问（见 §2.1）。
@@ -170,7 +168,7 @@ L1-L2 swa / L43-L44 specialized（`NUM_MOE_LAYERS_TOTAL=42`）是循环外的独
   一半算在陈旧数据上（`:684`）。
 - Stage4 只读前 `Q_HEAD_BATCH_FULL=8` 行（`:696`/`:709`）。
 
-**数值无害**（Stage4 丢弃后 8 行）。**但 A.2 device 证伪（2026-07-29，见 [§5.2](#52-a2-sv-slice-16-8-device-证伪cube-boxed-tile-行必须是-16-的倍数)）：这不是可省的浪费。**
+**数值无害**（Stage4 丢弃后 8 行）。**但 A.2 device 证伪（2026-07-29，见 [§5.2](#52-a2-sv-slice-168-device-证伪cube-boxed-tile-行必须是-16-的倍数)）：这不是可省的浪费。**
 cube 的 boxed tile 行必须是 `innerRows=16` 的倍数——把 SV matmul M 从 16 砍到 8 被 ptoas 直接
 拒绝（`'pto.alloc_tile' op expects result boxed tile rows to be a multiple of innerRows (16),
 but got 8`）；且 16 行是 cube fractal 的最小处理单位，M=8 与 M=16 cube 成本相同——**"白算一倍"
@@ -486,7 +484,7 @@ lane 映射      = lane + iteration × 24
    待补（需 oracle standup），过后 FF 入 `stepfun/develop`。**
 2. ~~**Stage3 slice `Q_HEAD_PAD_FULL(16)`→`Q_HEAD_BATCH_FULL(8)`**~~ ❌ **NOT VIABLE（device 证伪
    2026-07-29）**：cube boxed tile 行必须是 `innerRows=16` 的倍数，M=8 被 ptoas 拒
-   （3 个 `full_sv_matmul` 全 fail，见 [§5.2](#52-a2-sv-slice-16-8-device-证伪cube-boxed-tile-行必须是-16-的倍数)）；且 16 是 cube fractal 最小单位，
+   （3 个 `full_sv_matmul` 全 fail，见 [§5.2](#52-a2-sv-slice-168-device-证伪cube-boxed-tile-行必须是-16-的倍数)）；且 16 是 cube fractal 最小单位，
    trim 也省不了 cube FLOPs。SWA M=12 同样非 16 倍数。**A.2 撤回。**
 3. **scratch 第一维 `BATCH` → runtime active capacity**——bs=1 省 93.8%。分两半：
    - **A.3a（只算 active）✅ 已是现状（2026-07-29 源码核实）**：FULL/SWA 各 4 个 flash stage
@@ -495,7 +493,7 @@ lane 映射      = lane + iteration × 24
      core 跳过全部 QK/softmax/SV/online-softmax 计算。**无需改代码，关闭。**
    - **A.3b（分配按 active）❌ 不可行（standalone；2026-07-29 源码核实）**：`create_tensor`
      首维须静态（GM 分配）；改 runtime `active_tokens` 只能走 `pl.dynamic`，而 step3p5 全仓
-     刻意把 model-bound 维静态化（`config.py:47-51`）正是为了绕开 [§5.3](#53-scratch-首维-batch-runtime--撞-pldynamic-首维的已知坑) 引的 §3（跨函数
+     刻意把 model-bound 维静态化（`config.py:47-51`）正是为了绕开 [§5.3](#53-scratch-首维-batchruntime会撞-pldynamic-首维的已知坑) 引的 §3（跨函数
      slice 丢 stride）/ §4（幻 int32 参数）/ host_orch NameError（`attention_swa.py:171`）。且
      `BATCH=16` 是产品 capacity 合同，不能静态缩小。→ scratch 显存只能靠结构性 **B**（消
      raw_scores+exp）/ **D**（消全部 scratch）拿，**A.3b 并入 B/D，不单独立项**。
@@ -666,7 +664,7 @@ bound**；方案 E 保持“未知项”，要落地必须先写最小 probe 验
 ### 5.8 目前没有 attention 专属 ST，"过 ST" 的 gate 要先立起来
 
 `tests/step3p5/unit/` 已有两个 active-bound AST/source contract，但没有 attention/full 专属 device 数值 ST。当前已有的 attention 数值门仍是 whole-net
-canonical N=128/256 逐 token（[`ci/LIVE_PRECISION_AB.md`](../../../workspace/pypto-lib/tests/step3p5/ci/)）。
+canonical N=128/256 逐 token（`pypto-lib/tests/step3p5/ci/LIVE_PRECISION_AB.md`）。
 → 每个方案落地前，要么复用 whole-net 回归（慢、覆盖但难定位），要么按单卡 ST/UT 铁律
 （`apply_perrank_patch`，TP=8 per-rank slice）新写一个 full/SWA attention kernel ST 做快速
 per-kernel 数值 + liveness 定位。**建议先补 ST**，否则 A–E 每步都只能靠整网回归判对错。
@@ -718,7 +716,7 @@ per-kernel 数值 + liveness 定位。**建议先补 ST**，否则 A–E 每步�
 - B 消掉 raw_scores/exp 两块 GM（~96 MB/FULL 层）+ 2 次 GM 往返，是 D 前的中间态；
 - D 是终局（scratch→KB 级），风险最高，放最后。
 
-**每步的 gate（沿用铁律 7 + [`pypto-perf-regression` skill](../../../workspace/pypto-lib/.claude/skills/)）**：
+**每步的 gate（沿用铁律 7 + [`pypto-perf-regression` skill](../../.claude/skills/pypto-perf-regression/SKILL.md)）**：
 1. liveness：`RUN_CLEAN` + `_probe_barrier_scale.py`（stall/deadlock 独立判定）；
 2. 精度：多步 decode 逐 token vs vanilla W8A8，seed=6127 / N=128 ≥95% ALIGNED，且 hidden
    finite + TP spread=0；
@@ -1405,9 +1403,9 @@ pypto stepfun/develop
 defa97c526fec7e8f032dbbfcc39c820add02bf7
 ```
 
-当前 Git 权威源码是 pypto-lib `stepfun/develop@491267c4` 与 pypto
+在该历史验证阶段，Git 权威源码是 pypto-lib `stepfun/develop@491267c4` 与 pypto
 `stepfun/develop@8e92b468`；上面的 pin 只用于解释本节既有 focused artifacts，
-不能作为当前 checkout。
+不能作为当前 checkout。当前 tip 以本文顶部和 §15 为准。
 
 focused 源码验证为 `254 passed, 3 skipped`；`py_compile`、`git diff --check`、
 skill quick validation 和 differential Ruff（忽略仓库既有 DSL
@@ -1595,8 +1593,8 @@ whole_net_bs16_each_ctx65536_current_1ea76e0f_a2a3_20260806/
 bs1 有有效 ITL，bs16 是容量失败，bs2/4/8/7 尚未在 `c9af5790` 上完成整网复验。
 
 `c9af5790` 镜像已完成其源码层级的 immutable BS1×64K ITL/DFX partial gate；
-当前 Git 权威源码是 `491267c4`，尚无对应 immutable image。旧镜像既不能自动
-继承 Wave5 的完整 production release-qualified 标签，也不能代表当前 tip。
+在该历史阶段，Git 权威源码是 `491267c4`，且尚无对应 immutable image。旧镜像既
+不能自动继承 Wave5 的完整 production release-qualified 标签，也不能代表当前 tip。
 历史 R1/R2 已 supersede，完整记录见
 [`../../benchmark/2026-08-05-attention-canonical-r1-r2.md`](../../benchmark/2026-08-05-attention-canonical-r1-r2.md)。
 
@@ -1631,3 +1629,143 @@ rank2/d0/l2_swimlane_records.json
 
 完整审计与 artifact 见
 [`../../benchmark/2026-08-06-attention-taskmajor-canonical.md`](../../benchmark/2026-08-06-attention-taskmajor-canonical.md)。
+
+## 15. Attention mixed kernel 与 SWA RMSNorm 多核集成（2026-08-11）
+
+本节覆盖 §0–§14 对当前实现形态的描述。设备验证的 image/source baseline 为
+`cb96747e`；GitHub 与 0162 本地 `stepfun/develop` 均已 fast-forward 到
+`f9065261`，本地 clean：
+
+```text
+cb96747e
+  -> 21d928b9  perf(step3p5): fuse decode attention mixed kernels
+  -> f9065261  Update: parallelize step3p5 SWA RMSNorm
+```
+
+### 15.1 Full mixed task
+
+每个 `full_attn_mix` logical task 独占一段连续 KV blocks，并在同一 mixed
+InCore task/function group 中执行：
+
+```text
+QK matmul (AIC)
+  -> typed mask + softmax (AIV)
+  -> SV matmul (AIC)
+  -> segment-local online recurrence (AIV)
+```
+
+这里的“一个 mix kernel”是一个 mixed task group；backend 仍会 lower 为配对的
+AIC/AIV physical callable，不能误写成单一物理 binary。A2A3 profile 每 task
+处理 22 个 KV blocks，ctx64K 的 512 blocks 因而产生 24 个
+`full_attn_mix` tasks。跨 segment 的 O/M/L partial 存在并发写边界，继续由 3 个
+`full_online_softmax_reduce` 和 1 个 finalize task 收口。
+
+### 15.2 SWA mixed task
+
+每个 active row 产生一个 `swa_attn_mix` logical task，在 task 内遍历可见 SWA
+window，完成 QK、双边 window mask、softmax、SV、online recurrence 和最终
+`attn_out` publication。
+
+以下旧 split family 已从最终设备图消失：
+
+```text
+full_qk_matmul / full_softmax / full_sv_matmul
+swa_qk_matmul / swa_softmax / swa_sv_matmul / swa_online_softmax
+```
+
+### 15.3 SWA RMSNorm 多核 task grain
+
+`swa_moe_chip_orch_swa_rmsnorm_zc` 使用
+`SWA_RMSNORM_ROWS_PER_TASK=2`。当前 storage capacity `BATCH=16` 时产生 8 个
+storage-capacity-row-derived logical tasks（非 active-token-derived）；runtime
+将其映射到物理 AIV 核，设备证据为每 rank 8 blocks / 8 distinct cores。代码不硬编码
+core id。
+
+每个 task 一次加载 `[2,4096]`，reshape 为 `[32,256]` 后做 TROWSUM；两个源行
+pack 到 aligned lanes，再以 15 次顺序 TADD 保持 16 个 256-element partial 的
+历史 left-fold 顺序。环境入口 fail-closed，只接受已校准的 grain=2；其他 grain
+没有 UB、顺序和设备时延证明。
+
+严格设备门：
+
+| 指标 | mean | p50 | max |
+|---|---:|---:|---:|
+| block duration | 3.76375 us | 3.80 us | **4.46 us** |
+| logical-stage span | 4.555 us | 4.61 us | **4.90 us** |
+
+两个 strict `<5 us` 条件均 PASS，L3/L4 hidden byte-exact、finite、TP spread=0。
+目标 PTO SHA256 为：
+
+```text
+312ec9208383863c385473cd0ae028497a2f5d639879ea4065f166746deaa9fe
+```
+
+### 15.4 Combined correctness、DFX 与整网 A/B/A
+
+```text
+unit                       357 passed, 7 skipped
+whole compile, blocks=512  PASS
+edge replacement           12/12 byte-exact
+heterogeneous mapping      [1,2816,2817] exact
+Q-publication              Full/SWA × 6 contexts = 12/12 PASS
+focused mixed-kernel DFX   mixed lanes present on all 8 ranks
+forbidden split kernels    0
+```
+
+最终 commit 另跑 L0–L4、BS1、ctx64K、8-rank DFX。capture、precision、mixed
+inventory 和 RMS `<5 us` 均 PASS：LOW-WAIT rank2 makespan `2.124 ms`；L3
+RMSNorm 为 8 tasks / 8 distinct cores，全 rank最坏 slice/span 为
+`4.28/4.30 us`。五层 task inventory 为 L0/L4 Full 各 24 mixed blocks、
+L1/L2/L3 SWA 各 1 mixed block，Full reduce/finalize 合计 `6/2`，旧 split
+family=0。
+
+该 capture 是 **limited delivery**：rank0/1/3/6 各有 5 个零本地 routed-token
+的 early-dispatch task 没有 AICore swim record，canonical structural analyzer
+按合同返回 `FAIL_CLOSED`。因此不得把它升级为 structural PASS、cross-rank release
+seal 或 production qualification。candidate container `rc=1` 来自该 postprocess
+analyzer fail-closed，不是 runtime precision failure。可交付包：
+
+```text
+/mnt/persist/chensiyu/workspace/perf-2026q3/
+five-layer-dfx-combined-f906526-20260811-final-v4/delivery/
+
+ALL_RANKS_swimlane_bundle.tar.gz
+  sha256 d6f689c73b7ecb19b7febbf019a99baea4f96d59a778b37bfecacadbdc00def5
+LOW_WAIT_rank2_bundle.tar.gz
+  sha256 e0bb2cc2beaa196b52547a04019d69720c0cb410b57b1c64524a476d09cd6d9a
+DFX_DELIVERY_REPORT.json
+  sha256 7bc5811da7cf543d3ddf812ee90e8297c3238ce0e7b24160899c19584fc29688
+DFX_DELIVERY_SEAL.json
+  sha256 088cf05ffbff717fd6da9fcf443122da88c4c9373c41276e4f5ae8dbfa51eb94
+```
+
+BS1、ctx64K、warmup/measured=`10/100` 的 source-overlay A/B/A：
+
+| arm | p50 |
+|---|---:|
+| A1 baseline `cb96747e` | 32.222 ms |
+| B candidate `f9065261` | **31.790 ms** |
+| A2 baseline `cb96747e` | 32.330 ms |
+
+baseline center 为 `32.276 ms`，candidate delta
+`-0.486 ms / -1.506%`，verdict=`IMPROVEMENT_BEYOND_BRACKET`。三臂 hidden
+SHA256 均为
+`567b206bb03d89f84020e1dddd61098a8f79f32f81b8f4fcf56443113e27f03e`，
+tail token 均为 `14371`，`PRECISION_GATE=PASS`。
+
+### 15.5 验证与发布边界
+
+所有上述结果都在 manifest
+`sha256:076af8a167405d5d0831e234cd16521c77d8bfdd173eff063d820802057c47f3`
+上以只读 `/candidate` source overlay 获得；镜像内 pypto-lib 仍是
+`cb96747e`，runtime 未 overlay。结论仅为：
+
+```text
+source integration on 0162   GO
+remote push                  DONE
+new immutable image          NOT BUILT
+production release gate      NOT CLAIMED
+```
+
+完整 artifact、hash 与限制见
+[`../../benchmark/2026-08-11-step3p5-attention-mix-rmsnorm.md`](../../benchmark/2026-08-11-step3p5-attention-mix-rmsnorm.md)。
