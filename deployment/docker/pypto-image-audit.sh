@@ -39,7 +39,8 @@ for repo in \
   /workspace/pypto-lib \
   /workspace/pto-isa \
   /workspace/PTOAS \
-  /workspace/pypto/runtime; do
+  /workspace/pypto/runtime \
+  /workspace/pypto/runtime/build/pto-isa; do
   if git -C "$repo" config --get-regexp \
     '^(remote\..*\.url|submodule\..*\.url)$' 2>/dev/null \
     | grep -Eqs 'oauth2:|github_pat_|ghp_'; then

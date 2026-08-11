@@ -568,10 +568,54 @@ PENDING:
 
 ### Candidate merged swimlane
 
+**2026-08-11 已采集（K8 immutable image 上，BS1 前五层）—— 可用观测，非 sealed
+publication。**
+
 ```text
-PENDING:
-  rank{0..7}/d0/merged_swimlane_*.json
+0162:/mnt/persist/chensiyu/workspace/k8-image-release-20260811/swim-20260811-192117/
+  runtime/build_output/FiveLayerMoe_20260811_112405/dfx_outputs/
+    rank{0..7}/d0/{merged_swimlane_*.json, critical_path_report.md,
+                   CPM_observed.json, CPM_static.json, deps.json,
+                   l2_swimlane_records.json, name_map.json}
 ```
+
+镜像 manifest `sha256:076af8a167405d5d0831e234cd16521c77d8bfdd173eff063d820802057c47f3`；
+工作点 cards 0-7、`active_batch=1`、`context_len=65536`、`num_blocks=512`、
+`warmup=3`、`iters=20`。**插桩 run，绝对时间只能算占比，不可当干净延迟、不可乘
+层数比反推整网。**
+
+LOW-WAIT rank = `rank2`（makespan `2.204 ms`）。其余七个 rank makespan
+`288/399/436/445/591/606/610 ms`，其中 `tp_all_reduce` 占 99.4%+ ——
+那是自旋吸收 rank skew，**不是算力**，跨 rank 差 275×。**只有 rank2 可用。**
+
+```text
+rank2/d0: tasks 150 | HB edges 229
+  makespan               2.204 ms
+  static CPM path        1.825 ms (82.8%) over 87 tasks
+  observed critical path 103 tasks
+    compute 1.788 ms (81.2%) + stall 0.415 ms (18.8%, 全 data-wait)
+  tiling check exact (110182 ticks)
+  tp_all_reduce 0.336 ms = 15.3% makespan (8 on path)
+```
+
+rank2 五件 sha256：
+
+```text
+merged_swimlane_20260811_112527.json e7c3ee771754f82f2cab9acba1a20c0b232efee0ea82db4bb8d5e0c6269e85ad
+critical_path_report.md              0cb08fa97fce923c033c9ed993dbaa26649f5c75b9627619970b31f959b0056e
+CPM_observed.json                    352b6eefb076720e2a3f48d2402a786b06f26048269be380a58aa37aa54a2d02
+CPM_static.json                      ef5a43a74619a644cb0ed25c0b7037ef09f0c25ecbac9e8e095d61cd5a7861eb
+deps.json                            f1254388db7e8ba633b2f460bdf9f7b354afb0bb51e5b35600af098cc79b4720
+```
+
+**为什么还不是 final**：本轮 campaign `container.rc=1` ——
+`analyze_five_layer_moe_dfx.py:1052` 的 fail-closed 结构契约在 **rank0/1/3/6**
+拒收，每个 rank 各有 5 个 `early_dispatch=true` 的 task 出现在 `deps.json` 却在
+swimlane 记录里缺失（rank0 为 `8589934741/743/744/745/747`，`block_num` 8/23/23/23/23）。
+rank2 自身 150 task 无缺失、tiling check 精确，故上面的占比可用；但要把本节转正为
+final，须先解决 `early_dispatch` task 的 swimlane 记录缺失。
+
+完整记录：[`../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md`](../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md) §5。
 
 ### Provenance
 

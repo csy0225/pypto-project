@@ -6,16 +6,46 @@ containerd/nerdctl)。**
 
 ---
 
-## 0. 当前镜像状态（2026-08-08）
+## 0. 当前镜像状态（2026-08-11）
 
-当前源码 tip 为 pypto
-`8e92b46808f9f7c09b6431ad4691503f09c12ee5`、pypto-lib
-`491267c45875e9b1e0071eed224e2e73526799e2`；**尚无包含该组合的 immutable
-image**。下一次构建对象由
-[`builds/stepfun-develop-20260808-moe-opt-latest-source.env`](builds/stepfun-develop-20260808-moe-opt-latest-source.env)
-冻结，构建和 0162 gate 完成前不得填写 manifest/config digest。
+当前源码 tip 为 pypto `1c048a744d5f63a8bce1ddb45dac8d1b7f458bb0`、pypto-lib
+`cb96747eb21f5f4932d6a24eddaa69c85d095ef6`（= `8e92b468` / `491267c4` 之后叠了 K8
+选择性清零）。**这个组合已构建成 immutable image 并在 0162 通过精度 + ITL gate**：
 
-最近一次已构建的 latest-source partial-gate image（历史 pre-fix evidence）：
+```text
+tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260811-k8-selective
+manifest: sha256:076af8a167405d5d0831e234cd16521c77d8bfdd173eff063d820802057c47f3
+config:   sha256:a9d111880883cea0b02e425fdfeaccc2b14bb1d1174c0b73488d8ee6d8004d39
+spec:     builds/stepfun-develop-20260811-k8-selective.env
+```
+
+镜像 pins：
+
+```text
+pypto      1c048a744d5f63a8bce1ddb45dac8d1b7f458bb0
+pypto-lib  cb96747eb21f5f4932d6a24eddaa69c85d095ef6
+pto-isa    ecb6c303f797749f811a494742c3c08156aacabb
+PTOAS      fc8c6caee561914b4fb991dfc8427bb63194269e
+simpler    e2efebcbd190302609c0775d2984f409f5f42c76
+ptoas-bin  v0.50
+vLLM       1b3e538c35999e62b6d24e0651b3a85b7d16c826
+```
+
+0162 digest-only、无源码/runtime overlay 的验证：
+
+- audit + smoke 四门全 PASS（`IMAGE_IMMUTABLE_AUDIT` /
+  `CANONICAL_ONLY_SYMBOL_AUDIT` / `K8_LANDING_PRESENT` / `[smoke]`）；
+- byte-exact `hidden_sha256` `567b206b…f03e` == 生产 baseline、token `14371`；
+- N=128 预定义冻结 oracle **三轮** `123/128 = 96.09375%`、`tp_spread_max=0.0`；
+- clean ITL bs=1 ctx=65536 blocks=512 iters=100 p50 **`32.14 ms`**
+  （pre-K8 `33.84` → **−5.02%**）。
+
+⚠ **本镜像未重跑** Main batch16、MTP batch1/16、六档（BS 1/2/4/7/8/16）64K
+golden/A/B、formal matched-source DFX ⇒ **不是完整 production release-qualified**；
+完整矩阵的回退基线仍是 Wave5（`sha256:4acc77cd…`）。数据见
+[`../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md`](../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md)。
+
+### 更早的 latest-source partial-gate image（历史 pre-fix evidence）
 
 ```text
 tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260806-attn-taskmajor-canonical

@@ -1,5 +1,42 @@
 # Milestones —— 2026 Q2
 
+## 2026-08-11 —— K8 immutable image 发布 + 0162 双精度门/ITL/五层 swimlane ✅
+
+**镜像**：`hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260811-k8-selective`，
+manifest `sha256:076af8a167405d5d0831e234cd16521c77d8bfdd173eff063d820802057c47f3`、
+config `sha256:a9d111880883cea0b02e425fdfeaccc2b14bb1d1174c0b73488d8ee6d8004d39`。
+**第一个包含当前 tip** `pypto-lib cb96747e` / `pypto 1c048a74` 的 immutable image。
+构建在 devbox，**全部验证在 0162、digest-only、无 overlay**。
+
+- **audit + smoke**：`IMAGE_IMMUTABLE_AUDIT` / `CANONICAL_ONLY_SYMBOL_AUDIT` /
+  `K8_LANDING_PRESENT` / `[smoke]` 四门全 PASS；落地件==被测件
+  （`distributed_runner.py` sha `fe50c11f…39622e`、`decode_fwd.py` sha `eb1f89bf…04fb5`）。
+- **精度两条独立证据都过**：byte-exact `hidden_sha256` `567b206b…f03e` == 生产
+  baseline + token `14371`；**N=128 预定义冻结 oracle 三轮 `123/128 = 96.09375%`、
+  miss `[2,8,13,22,82]`、`tp_spread_max=0.0`，三轮一致且与 Wave5 逐位相同**
+  ⇒ K8 未改 token 轨迹。oracle sha `c9b2c721…dd947`（与 Wave3 快照同一份），
+  离线无 live server。
+- **性能**：clean ITL bs=1 ctx=65536 p50 **`32.14 ms`**（pre-K8 `33.84` →
+  **−1.70 ms / −5.02%**）；与 source-overlay 候选臂 `32.08` 差 `0.06 ms` ≪ 地板
+  `0.634 ms` ⇒ 镜像复现 K8 收益。`reset_body_us` p50 `523.1 µs`，109/109 步
+  `k8_prefix_applied=true`、`k8_control_bytes=47616`。
+- **BS1 前五层 swimlane（新增，原为 PENDING）**：LOW-WAIT `rank2` makespan
+  `2.204 ms`、static CPM `1.825 ms`(82.8%)、observed 103 task
+  （compute 81.2% + stall 18.8% 全 data-wait）、`tp_all_reduce` 占 **15.3%**。
+  ⚠ 其余七 rank makespan `288~610 ms` 全被 `tp_all_reduce` 自旋吸收 skew 占据
+  （跨 rank 差 275×）；campaign `rc=1`（rank0/1/3/6 各 5 个 `early_dispatch` task
+  无 swimlane 记录）⇒ **可用观测，非 sealed publication**。
+- **构建期修掉三个同族凭据坑**：① submodule 凭据覆盖必须 key 在**名字**
+  `simpler`（路径是 `runtime`，keying on path 静默无效）；② pypto CMake 在无
+  secret 的编译层 init `3rdparty/{libbacktrace,msgpack-c}`；③ simpler 另有
+  **第二份** pto-isa（`runtime/build/pto-isa` 按 `pto_isa.pin=83d01313`，
+  `PTO_ISA_ROOT` 对它无效）。三条都已进 Dockerfile 并注释「为什么」。
+- ⚠ **未跑**：Main batch16、MTP batch1/16、六档 64K golden/A/B、formal DFX；
+  phase 2b 按用户要求跳过 ⇒ **不是完整 production release-qualified**，完整矩阵
+  回退基线仍 Wave5。
+
+数据：[`../benchmark/2026-08-11-k8-selective-window-zeroing-image.md`](../benchmark/2026-08-11-k8-selective-window-zeroing-image.md)。
+
 ## 2026-08-11 —— K5-C 否决 + 定位 pypto notify fence correctness 缺陷（device 已证，消融矩阵闭合）⚠
 
 **主结论 1（负结果，有长期价值）**：K5-C（C32′ ring reduce-scatter / ring all-gather）

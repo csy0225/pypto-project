@@ -59,14 +59,56 @@ models.step3p5.decode_fwd:whole_decode_step3p5
 
 ## 2. 镜像与验证状态
 
-### 最终统一发布镜像（待构建）
+### K8 immutable image（2026-08-11 构建 + 0162 验证）
 
-截至 2026-08-11，**没有 immutable image 包含**当前 tip
-pypto-lib=`cb96747e` / pypto=`1c048a74`（= `491267c4` / `8e92b468` 之后又叠了 K8）。
-下一次按 `deployment/docker/builds/` 的 pending spec 构建并执行 0162 标准回归；
-不把 pending spec 或历史 digest 标成发布镜像。
+```text
+tag:
+hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260811-k8-selective
+manifest: sha256:076af8a167405d5d0831e234cd16521c77d8bfdd173eff063d820802057c47f3
+config:   sha256:a9d111880883cea0b02e425fdfeaccc2b14bb1d1174c0b73488d8ee6d8004d39
+spec:     deployment/docker/builds/stepfun-develop-20260811-k8-selective.env
+```
 
-因此，下方 digest 都是旧源码层级的 **pre-fix evidence**，不能标成当前源码
+这是**第一个包含当前 tip** pypto-lib=`cb96747e` / pypto=`1c048a74` 的 immutable
+image。构建在 devbox（0162 无 buildkitd、github/proxy 均不通，结构上不能构建），
+**全部验证在 0162、digest-only、无源码/runtime overlay**。
+
+镜像内 audit + smoke 全 PASS：`IMAGE_IMMUTABLE_AUDIT` / `CANONICAL_ONLY_SYMBOL_AUDIT`
+/ `K8_LANDING_PRESENT` / `[smoke] PASS`；五仓 pin clean、credential scrub PASS、
+attention profile=`a2a3`、`l2_swimlane_reuse_dep_gen` required=1 且 constructed、
+ptoas `0.50`。**落地件 == 被测件**：`distributed_runner.py` sha256
+`fe50c11fb76ec77789636de05e7376711c731d2b00db5033f0564c07a739622e` 与 K8 落地件
+权威 sha 一致，`decode_fwd.py` = `eb1f89bf7add419f2382836c1eab9a1c4b1f63f738923d47e771e4159f104fb5`。
+
+**两条独立精度证据都过（cards 0-7 / 8-15，digest-only）**：
+
+- **byte-exact**：ctx=65536 bs=1 的 `hidden_sha256` =
+  `567b206bb03d89f84020e1dddd61098a8f79f32f81b8f4fcf56443113e27f03e`
+  == 生产 baseline（`matches_production_baseline_sha=true`），tail token `14371`
+  exact、`hidden_finite=true`、shape `[8,16,4096]`；
+- **N=128 逐 token（预定义冻结 oracle，三轮）**：`123/128 = 96.09375%`、
+  miss `[2,8,13,22,82]`、`tp_spread_max=0.0`、`finite=true`，三轮完全一致，
+  且**与 Wave5 那轮逐位相同** —— K8 没有改动 token 轨迹。oracle 是冻结的
+  vanilla vLLM W8A8 greedy 采集（seed 6127、sha256 `c9b2c721…dd947`，与
+  Wave3/Wave5 同一份），全程离线、无 live server。
+
+**性能（clean、非插桩）**：ctx=65536 / bs=1 / blocks=512 / warmup=10 / iters=100，
+p50 **`32.14 ms`**（min `31.766` / mean `32.467` / p99 `37.644`）。对 pre-K8
+`33.84 ms` = **−1.70 ms / −5.02%**；与 K8 source-overlay A/B/A 候选臂 `32.08 ms`
+差 `+0.06 ms`，远小于 bs=1 检测地板 `0.634 ms` ⇒ 镜像**复现**了 K8 收益。
+
+**K8 runtime 生效证据**：109/109 步 `k8_prefix_applied=true`、
+`k8_control_bytes=47616`（`range_count=1` 单段连续）、`k8_full_window_bytes=32063232`；
+`reset_body_us` p50 **`523.1 µs`**（K8 A/B/A 实测 518 µs）。
+
+完整记录：[`benchmark/2026-08-11-k8-selective-window-zeroing-image.md`](benchmark/2026-08-11-k8-selective-window-zeroing-image.md)。
+
+⚠ **本镜像尚未重跑的项**（不得由 §1 的 K8 结论或本节数据代替）：Main batch16、
+MTP batch1/batch16、六档（BS 1/2/4/7/8/16）每请求独立 64K golden/A/B、formal
+matched-source DFX。因此它**还不能标成完整 production release-qualified**；
+完整矩阵的回退基线仍是 Wave5。
+
+下方其余 digest 都是旧源码层级的 **pre-fix evidence**，不能标成当前源码
 的最终发布镜像，也不能把其 golden、性能或 DFX 自动升级为当前 tip 的准出结论。
 
 ### 最近一次 Attention canonical image（pre-fix evidence）

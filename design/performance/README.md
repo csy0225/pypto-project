@@ -1,5 +1,21 @@
 # Performance 性能优化专项
 
+> **2026-08-11 K8 immutable image 已发布（优先于下方所有内容）**：
+> `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260811-k8-selective`，
+> manifest `sha256:076af8a167405d5d0831e234cd16521c77d8bfdd173eff063d820802057c47f3`。
+> 这是**第一个包含当前 tip** `pypto-lib cb96747e` / `pypto 1c048a74` 的镜像。
+> 0162 digest-only 验证：镜像内 audit+smoke 四门全 PASS；精度两条独立证据都过
+> —— byte-exact `hidden_sha256` `567b206b…` == 生产 baseline + token `14371`，
+> **N=128 预定义冻结 oracle 三轮 `123/128 = 96.09375%`、`tp_spread_max=0.0`、
+> 与 Wave5 逐位相同**；clean ITL bs=1 ctx=64k p50 **`32.14 ms`**
+> （pre-K8 `33.84` → **−5.02%**，与 source-overlay 候选臂 `32.08` 差 `0.06 ms`
+> ≪ 地板 `0.634 ms`）。BS1 前五层 swimlane 已采到（LOW-WAIT `rank2` makespan
+> `2.204 ms`、`tp_all_reduce` 占 `15.3%`），但 cross-rank fail-closed 契约未过
+> ⇒ 记为可用观测、非 sealed publication。⚠ Main batch16 / MTP / 六档 64K /
+> formal DFX **未跑** ⇒ **不是完整 production release-qualified**，完整矩阵回退
+> 基线仍 Wave5。详见
+> [`../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md`](../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md)。
+>
 > **2026-08-11 current-source override（优先于下方所有历史快照）**：当前源码为
 > `pypto-lib stepfun/develop@cb96747e`，配套 pypto 为
 > `stepfun/develop@1c048a74`。这两个 tip 分别是下面 2026-08-08 快照里

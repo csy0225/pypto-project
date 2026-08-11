@@ -45,6 +45,12 @@ RUN rm -rf /usr/local/Ascend/cann-8.5.1 && \
 # and unauthenticated github.com clones get a 401 through the build proxy.
 # `-c url.<token>@github.com/.insteadOf` keeps the token to this one command, so
 # nothing credential-bearing survives into the committed layer.
+# simpler owns a SECOND, independent pto-isa checkout: `build_runtimes.py` calls
+# `ensure_pto_isa_root()`, which requires runtime/build/pto-isa to be a clean tree
+# at runtime/pto_isa.pin (NOT the same commit as PTO_ISA_COMMIT, and PTO_ISA_ROOT
+# does not override it). Upstream reuses a pre-seeded pristine checkout with no
+# network hop, so seed it here at the pin instead of letting the compile layer
+# attempt an unauthenticated clone.
 WORKDIR ${WS}
 RUN --mount=type=secret,id=gh_token \
     export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
@@ -58,6 +64,11 @@ RUN --mount=type=secret,id=gh_token \
       ( cd runtime && git fetch -q origin ${SIMPLER_COMMIT} && git checkout ${SIMPLER_COMMIT} ) && \
       git -c "url.https://${GH}@github.com/.insteadOf=https://github.com/" \
         submodule update --init 3rdparty/libbacktrace 3rdparty/msgpack-c && \
+    ( pin="$(cat ${WS}/pypto/runtime/pto_isa.pin)" && \
+      git -c http.version=HTTP/1.1 clone -q \
+        "https://${GH}@github.com/csy0225/pto-isa.git" \
+        "${WS}/pypto/runtime/build/pto-isa" && \
+      git -C "${WS}/pypto/runtime/build/pto-isa" checkout -q "${pin}" ) && \
     cd ${WS}/pypto-lib && git fetch -q "https://${GH}@github.com/csy0225/pypto-lib.git" ${PYPTO_LIB_COMMIT} && git checkout ${PYPTO_LIB_COMMIT} && \
     cd ${WS}/pto-isa && git fetch -q "https://${GH}@github.com/csy0225/pto-isa.git" ${PTO_ISA_COMMIT} && git checkout ${PTO_ISA_COMMIT} && \
     cd ${WS}/PTOAS && git fetch -q "https://${GH}@github.com/csy0225/PTOAS.git" ${PTOAS_COMMIT} && git checkout ${PTOAS_COMMIT} && \
@@ -68,8 +79,14 @@ RUN --mount=type=secret,id=gh_token \
     git -C ${WS}/pypto-lib remote set-url origin "https://github.com/csy0225/pypto-lib.git" && \
     git -C ${WS}/pto-isa remote set-url origin "https://github.com/csy0225/pto-isa.git" && \
     git -C ${WS}/PTOAS remote set-url origin "https://github.com/csy0225/PTOAS.git" && \
+    git -C ${WS}/pypto/runtime/build/pto-isa remote set-url origin \
+      "https://github.com/hw-native-sys/pto-isa.git" && \
     test "$(git -C ${WS}/pypto-lib rev-parse HEAD)" = "${PYPTO_LIB_COMMIT}" && \
-    test "$(git -C ${WS}/pypto/runtime rev-parse HEAD)" = "${SIMPLER_COMMIT}"
+    test "$(git -C ${WS}/pypto/runtime rev-parse HEAD)" = "${SIMPLER_COMMIT}" && \
+    test "$(git -C ${WS}/pypto/runtime/build/pto-isa rev-parse HEAD)" = \
+         "$(cat ${WS}/pypto/runtime/pto_isa.pin)" && \
+    test -d ${WS}/pypto/runtime/build/pto-isa/include && \
+    test -z "$(git -C ${WS}/pypto/runtime/build/pto-isa status --porcelain)"
 
 # ptoas-bin is the v0.50 payload verified with the 0724 environment.
 COPY ptoas-bin.tgz /tmp/ptoas-bin.tgz

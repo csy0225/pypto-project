@@ -5,6 +5,33 @@
 
 ## 已验证组合
 
+### K8 immutable image（精度 + ITL gate PASS，2026-08-11）
+
+> **audit/smoke + 双精度门 + clean ITL：PASS ON 0162（digest-only，无 overlay）。**
+> ⚠ 未重跑 Main batch16 / MTP / 六档 64K / formal DFX，因此**不**继承 Wave5 的
+> 全量 release-qualified 标签；完整矩阵回退基线仍是 Wave5。
+
+```text
+tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260811-k8-selective
+manifest: sha256:076af8a167405d5d0831e234cd16521c77d8bfdd173eff063d820802057c47f3
+config:   sha256:a9d111880883cea0b02e425fdfeaccc2b14bb1d1174c0b73488d8ee6d8004d39
+```
+
+| 槽位 | Pin | 备注 |
+|------|-----|------|
+| Driver | `25.5.2` | 0162 device verified |
+| Firmware | `7.8.0.7.220` | 与 driver 成对 |
+| CANN | `9.0.0-beta.1` | image config/runtime audit PASS |
+| pypto | `1c048a744d5f63a8bce1ddb45dac8d1b7f458bb0` | = `8e92b468` + reset 仪表 + K8 选择性清零 |
+| pypto-lib / vllm-pypto | `cb96747eb21f5f4932d6a24eddaa69c85d095ef6` | = `27a43f6a` + K8 control-prefix 重排 |
+| pto-isa | `ecb6c303f797749f811a494742c3c08156aacabb` | immutable pin |
+| PTOAS | `fc8c6caee561914b4fb991dfc8427bb63194269e` | immutable pin |
+| simpler | `e2efebcbd190302609c0775d2984f409f5f42c76` | pypto runtime gitlink |
+| ptoas-bin | `v0.50` | binary release |
+| vLLM overlay | `csy/pypto-tail-mtp-integration@1b3e538c35999e62b6d24e0651b3a85b7d16c826` | immutable checkout |
+
+数据：[`../benchmark/2026-08-11-k8-selective-window-zeroing-image.md`](../benchmark/2026-08-11-k8-selective-window-zeroing-image.md)。
+
 ### 历史 latest-source canonical image（partial gate，2026-08-06）
 
 > **Attention/ITL/DFX gate：PASS ON 0162。**
