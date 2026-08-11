@@ -40,6 +40,11 @@ RUN rm -rf /usr/local/Ascend/cann-8.5.1 && \
 # The pypto submodule is NAMED "simpler" while its path is "runtime", so the
 # credential override must key on the name -- keying on the path silently does
 # nothing and the build then falls back to an unauthenticated upstream clone.
+# The two 3rdparty submodules are seeded here as well: pypto's CMake would
+# otherwise init them during the compile layer, where no credential is mounted,
+# and unauthenticated github.com clones get a 401 through the build proxy.
+# `-c url.<token>@github.com/.insteadOf` keeps the token to this one command, so
+# nothing credential-bearing survives into the committed layer.
 WORKDIR ${WS}
 RUN --mount=type=secret,id=gh_token \
     export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
@@ -51,6 +56,8 @@ RUN --mount=type=secret,id=gh_token \
       git config submodule.simpler.url "https://${GH}@github.com/csy0225/simpler.git" && \
       git submodule update --init runtime && \
       ( cd runtime && git fetch -q origin ${SIMPLER_COMMIT} && git checkout ${SIMPLER_COMMIT} ) && \
+      git -c "url.https://${GH}@github.com/.insteadOf=https://github.com/" \
+        submodule update --init 3rdparty/libbacktrace 3rdparty/msgpack-c && \
     cd ${WS}/pypto-lib && git fetch -q "https://${GH}@github.com/csy0225/pypto-lib.git" ${PYPTO_LIB_COMMIT} && git checkout ${PYPTO_LIB_COMMIT} && \
     cd ${WS}/pto-isa && git fetch -q "https://${GH}@github.com/csy0225/pto-isa.git" ${PTO_ISA_COMMIT} && git checkout ${PTO_ISA_COMMIT} && \
     cd ${WS}/PTOAS && git fetch -q "https://${GH}@github.com/csy0225/PTOAS.git" ${PTOAS_COMMIT} && git checkout ${PTOAS_COMMIT} && \
