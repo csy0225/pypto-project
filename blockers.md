@@ -99,10 +99,16 @@ MTE3 屏障（codex 自撤：最多是间距/背压，不是正确性屏障）�
 **当前状态**：缺陷已定位，最小修复（一条 `pipe_barrier(PIPE_ALL)`）已在 device 上验证，
 代价已量化，消融矩阵已闭合；尚未提上游、尚未进产品代码。
 
-**硬约束（现在就生效）**：**任何把「payload store 与它自己的 credit」拉近的改动 —— 删波次、
-合并波次、按 peer 融合 store+notify、单 peer 交换 —— 都会进入探针的近确定性失败区间，
-必须先落 fence**。删 Wave3（约 `5.6 µs/call`）与合并 Wave1+Wave2（约 `5.6 µs/call`）都属此类；
-扣掉 Wave2 fence 的 `0.405 µs/call` 后净收益约 `10.8 µs/call`，**单独仍不过 14 µs 门**。
+**硬约束（现在就生效）**：**任何把「payload store 与它自己的 credit」拉近的改动 —— 合并波次、
+按 peer 融合 store+notify、单 peer 交换 —— 都会进入探针的近确定性失败区间，必须先落 fence**。
+合并 Wave1+Wave2（bench 约 `5.6 µs/call`）属此类。
+
+**注意两处已修正的表述**：① **删 Wave3 不属此类**（Wave2 notify 位置不变，不把 payload 与 credit
+拉近），故它本不依赖 fence；② 但**删 Wave3 已在生产整网上被否决** —— byte-exact 却 ITL
+`+1.72 ms/step`（`+5.08%`，73× floor），bench 的 `−5.92 µs/call` 符号相反，原因是
+`critical_tail` 对「删同步点」结构性失明（详见 `design/performance/task-tracking.md`
+2026-08-11 K9 行）。⇒ **合并 Wave1+Wave2 同属「删同步点」，即使落了 fence 也必须先过整网
+ITL 才能计入收益**，不能再按 bench 的 `5.6 µs/call` 记账。
 
 ---
 
