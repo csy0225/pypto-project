@@ -37,6 +37,9 @@ RUN rm -rf /usr/local/Ascend/cann-8.5.1 && \
 # Clone the complete stack and checkout immutable pins. pypto-lib and
 # vllm-pypto intentionally point at the same current replacement commit.
 # Scrub every credential-bearing clone URL before this layer is committed.
+# The pypto submodule is NAMED "simpler" while its path is "runtime", so the
+# credential override must key on the name -- keying on the path silently does
+# nothing and the build then falls back to an unauthenticated upstream clone.
 WORKDIR ${WS}
 RUN --mount=type=secret,id=gh_token \
     export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
@@ -45,14 +48,14 @@ RUN --mount=type=secret,id=gh_token \
       git -c http.version=HTTP/1.1 clone "https://${GH}@github.com/csy0225/${r}.git" "${WS}/${r}"; \
     done && \
     cd ${WS}/pypto && git checkout ${PYPTO_COMMIT} && \
-      git config submodule.runtime.url "https://${GH}@github.com/csy0225/simpler.git" && \
+      git config submodule.simpler.url "https://${GH}@github.com/csy0225/simpler.git" && \
       git submodule update --init runtime && \
       ( cd runtime && git fetch -q origin ${SIMPLER_COMMIT} && git checkout ${SIMPLER_COMMIT} ) && \
     cd ${WS}/pypto-lib && git fetch -q "https://${GH}@github.com/csy0225/pypto-lib.git" ${PYPTO_LIB_COMMIT} && git checkout ${PYPTO_LIB_COMMIT} && \
     cd ${WS}/pto-isa && git fetch -q "https://${GH}@github.com/csy0225/pto-isa.git" ${PTO_ISA_COMMIT} && git checkout ${PTO_ISA_COMMIT} && \
     cd ${WS}/PTOAS && git fetch -q "https://${GH}@github.com/csy0225/PTOAS.git" ${PTOAS_COMMIT} && git checkout ${PTOAS_COMMIT} && \
     ln -sfn ${WS}/pypto-lib ${WS}/vllm-pypto && \
-    git -C ${WS}/pypto config --local submodule.runtime.url "https://github.com/csy0225/simpler.git" && \
+    git -C ${WS}/pypto config --local submodule.simpler.url "https://github.com/csy0225/simpler.git" && \
     git -C ${WS}/pypto remote set-url origin "https://github.com/csy0225/pypto.git" && \
     git -C ${WS}/pypto/runtime remote set-url origin "https://github.com/csy0225/simpler.git" && \
     git -C ${WS}/pypto-lib remote set-url origin "https://github.com/csy0225/pypto-lib.git" && \
