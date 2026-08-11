@@ -14,6 +14,96 @@ gap-5、scheduler-timeout、attention 乱码、G5b import_ipc、swa_moe const-fo
 
 ---
 
+## 🔴 ACTIVE — UPSTREAM-NOTIFY-FENCE：notify 的 cache-invalidate 排在 payload drain 之前
+
+**症状**：`pld.tile.remote_store(...)` 紧接 `pld.system.notify(...)` 时，接收方读到的
+payload 部分或全部丢失（受损区域恰好为 `0`，偶有残留碎片），且哪些 rank 受损随时序变化。
+
+**根因**（device 已证，非推测）：pypto `src/backend/common/pto_ops_distributed.cpp` 的
+`MakeNotifyCodegenPTO` 生成的前导顺序是
+
+```c
+TSTORE(peer_window, tile);                 // payload
+dcci((__gm__ void*)0, ENTIRE_DATA_CACHE);  // invalidate-only，无 writeback
+pipe_barrier(PIPE_MTE3); dsb(DSB_DDR); pipe_barrier(PIPE_MTE2);
+pto::comm::TNOTIFY(peer_signal, ...);      // credit
+```
+
+`dcci` 抢在 payload `TSTORE` 还没从流水排空时就执行，把在途的 store 丢掉；现成的
+`pipe_barrier(PIPE_MTE3)` 排在 invalidate **之后**，对此毫无作用。根因是不对称：
+`MakeRemoteStoreCodegenPTO` 只发 `pto.tstore`、不发任何屏障，而 `MakePutCodegenPTO`
+给 tput 夹了两个 `pipe_barrier(PIPE_ALL)`（注释写成 "WORKAROUND for PTOAS#872"）。
+
+**最小修复 = 一条 `pipe_barrier(PIPE_ALL)`**，插在 `cacheinvalid` 之前。消融（同一插入点，
+每臂相对 baseline 的 kernel diff 恰好一行，32 KiB / ring_up / warmup=0 / epochs=64）：
+
+| `dcci` 之前插入 | exact |
+|---|---|
+| （无） | **False** |
+| `pipe_barrier(PIPE_MTE3)` | **False** ← **纯 reorder 不够** |
+| `dsb(DSB_DDR)` | **False** |
+| `pipe_barrier(PIPE_MTE3) + dsb(DSB_DDR)` | **False** ← 组合也不行（codex 指出的 gap，已闭合） |
+| `pipe_barrier(PIPE_ALL)` | **True**（64/64） |
+| `PIPE_ALL + dsb` | **True**（64/64） |
+| 同样两条放 `TNOTIFY` 之后（安慰剂） | **False** |
+| payload 与 notify 之间插一次本地 GM store（纯 MTE3 流量、无屏障） | **False** |
+
+⇒ 必须是 `PIPE_ALL` 这种**全流水等待**；MTE3 级屏障、DDR 屏障、两者组合、纯 MTE3 流量
+都不行。**消融矩阵已闭合**：`PIPE_ALL` 是必需的，不能用更便宜的屏障替代，所以下面那个
+`0.405 µs/call` 的 Wave2 代价也不能再压低。
+**注意**：不能声称已排除「credit 超车未完成的 store」这一解释 —— `dsb` 不等待 MTE3
+store 完成、`PIPE_ALL` 才等，所以「dsb 无效 / PIPE_ALL 有效」同时兼容「invalidate 破坏」
+与「credit 超车」；两者修复相同，故不影响结论。
+
+**修复在生产形状上的实测代价**（后处理注入生成后的 parent kernel，不动 codex 生成器）：
+全部 3 个 notify site = **+1.250 µs/call**（half-range 0.150，`aba-20260811-100050`）；
+只 Wave2 一个 site = **+0.405 µs/call**（half-range 0.005，`aba-20260811-100328`）。
+约 `0.417 µs/site`、`0.060 µs/PIPE_ALL` —— 比 K2a 的 pipe-specific barrier（`0.0033 µs`）
+贵约 18 倍，**不能按 K2a 外推成「免费」**。
+
+**证据**：ring 探针（每 rank 仅 1 次 payload store + 1 次 notify，row offset 0，列槽）。
+`aba-20260811-013946`：`ring_up` / `ring_down` 无 fix 都 `exact=False`，
+补 `pipe_barrier(PIPE_ALL) + dsb(DSB_DDR)` 后都 `exact=True`（**方向被排除**），
+kernel diff 恰好只有这两行。payload 扫描（无 fix）`16/32/64/128 KiB` **全部** `exact=False`；
+`16 KiB + fix` `64/64` epoch exact（`aba-20260811-015235`、`-014938`）。
+权威报告 `0162:/mnt/persist/chensiyu/workspace/p2-k5-rhrd-20260810/CLAUDE-NOTIFY-FENCE-DEFECT.md`
+sha256 `a34817832550b9c68c907a58774403802d79c1926e8aa085b658ff0aafc9f21b`。
+codex 独立复核报告 `0162:同目录/CODEX-NOTIFY-FENCE-INDEPENDENT-REVIEW-20260811.md`
+sha256 `37fae3aba51a555189c9da05633d88d0ab7810e28d72df9681f9fcfa11d472ac`。
+
+**解除条件**：① 上游 pypto 在 `MakeNotifyCodegenPTO` 的 `pto.cmo.cacheinvalid` **之前**补
+`pto.barrier <PIPE_ALL>` —— 即**把 put 路径已有的那条屏障对齐到 notify 路径**，不引入新概念；
+② 或在产品 AR 里显式插入等效屏障并过 A/B/A + 精度门。
+
+**安慰剂对照（已排除「两条指令只是扰动时序」）**：`--fence-late` 把**完全相同的两条指令**
+放到 `TNOTIFY` **之后**（指令数/开销一致，但不再夹在 store 与 invalidate 之间）。
+`aba-20260811-015951`（32 KiB）：baseline `exact=False`、placebo `exact=False`、
+真 fix `exact=True`（`64/64`）；两个变体的 kernel diff 都恰好是同样那两行，只差插入位置
+5 行 ⇒ **原因是顺序，不是时序**。
+
+**生产暴露面（两 agent 对账后的口径，不要写成「生产正在损坏」也不要写成「生产是安全的」）**：
+读 `A1_parent`（production 形状三波 AR）生成码确认 Wave2/Wave3 的 notify 前导与被证伪的形状
+**逐字节相同**，且 Wave2 前面正是 `remote_store`。我曾据「探针失败近乎确定性」反推
+「生产必被某个结构性因素保护」——**该推论已撤回**：它默认了失败率与结构无关，而这一点未验证。
+codex 独立复核给出更保守的结论，我接受：**生产 Wave2 没有可证明的安全机制，只是当前调度
+没有触发它；是否正在损坏未知。** 已否证三个候选保护机制：① 纯 MTE3 流量（`--drain-store`
+仍 `exact=False`）；② MTE3 级屏障（消融已证不够，含 MTE3+DSB 组合）；③ store-loop 自带的
+MTE3 屏障（codex 自撤：最多是间距/背压，不是正确性屏障）。**Wave3 slack 假设已被结构性
+否证**：Wave3 位于 consumer read **之后**，不可能解释 Wave2 的安全。
+
+**两 agent 一致的工程建议**：不要继续争论生产是否暴露，直接以 `0.405 µs/call`（Wave2 单点）
+把这个不可证明的安全条件消掉；它同时也是删波次 / 合并波次类优化的前置条件。
+
+**当前状态**：缺陷已定位，最小修复（一条 `pipe_barrier(PIPE_ALL)`）已在 device 上验证，
+代价已量化，消融矩阵已闭合；尚未提上游、尚未进产品代码。
+
+**硬约束（现在就生效）**：**任何把「payload store 与它自己的 credit」拉近的改动 —— 删波次、
+合并波次、按 peer 融合 store+notify、单 peer 交换 —— 都会进入探针的近确定性失败区间，
+必须先落 fence**。删 Wave3（约 `5.6 µs/call`）与合并 Wave1+Wave2（约 `5.6 µs/call`）都属此类；
+扣掉 Wave2 fence 的 `0.405 µs/call` 后净收益约 `10.8 µs/call`，**单独仍不过 14 µs 门**。
+
+---
+
 ## 🟡 ACTIVE — DEPLOY-REPRO：镜像内 git 工作树 dirty，pin 集不足以复现验证环境（部分已解）
 
 **症状**：按 `deployment/docker/build.sh` + 记录 pin 全新构建的镜像，整网 CI 在

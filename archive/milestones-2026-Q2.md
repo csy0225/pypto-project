@@ -1,5 +1,57 @@
 # Milestones —— 2026 Q2
 
+## 2026-08-11 —— K5-C 否决 + 定位 pypto notify fence correctness 缺陷（device 已证，消融矩阵闭合）⚠
+
+**主结论 1（负结果，有长期价值）**：K5-C（C32′ ring reduce-scatter / ring all-gather）
+device 实测只省 `0.54 µs/call`，远低于 14 µs 门 ⇒ **统一定律
+`0.80 µs×交易 + 0.94 µs/row×行` 不含依赖深度项**，对深串行链外推严重高估
+（C32′ depth 6 串行往返 vs parent depth 3 且 7-peer 扇出并行）。
+**后续 AR 方案必须减交易数而不增深度。**
+
+**主结论 2（correctness 缺陷）**：pypto `MakeNotifyCodegenPTO` 生成的 notify 前导把
+`dcci(ENTIRE_DATA_CACHE)`（**invalidate-only，无 writeback**）排在任何 drain 之前，
+credit 可能跑到 payload 前面。裸 `remote_store` 紧接自己的 `notify` 时 **epoch 0 就坏**。
+
+- **方向被排除**：ring 探针 `ring_up`/`ring_down` 无 fix 都 `exact=False`，有 fix 都
+  `exact=True`（`aba-20260811-013946`）。
+- **payload 扫描**：`16/32/64/128 KiB` 无 fix **全部** `exact=False`；`16 KiB + fix`
+  `64/64` epoch exact（`-015235`、`-014938`）。
+- **是顺序不是时序**：安慰剂把完全相同两条指令放 `TNOTIFY` **之后** → 仍 `exact=False`
+  （`-015951`）。
+- **消融矩阵已闭合**（同一插入点，每臂 kernel diff 恰好为插入行）：`PIPE_MTE3` 单独
+  False、`dsb(DSB_DDR)` 单独 False、**`PIPE_MTE3`+`dsb` 组合 False**、纯 MTE3 流量
+  （`--drain-store`）False；只有 `pipe_barrier(PIPE_ALL)` True `64/64`
+  ⇒ **最小修复 = 一条 pre-CMO `pipe_barrier(PIPE_ALL)`，代价压不下去**。
+- **代价已量化**（后处理注入 parent kernel）：全 3 个 notify site `+1.250 µs/call`
+  （half-range 0.150，`-100050`）；只 Wave2 一个 site `+0.405 µs/call`
+  （half-range 0.005，`-100328`）≈ `0.060 µs/PIPE_ALL`，**比 K2a 的 pipe-specific
+  barrier（0.0033 µs）贵约 18 倍，不能外推成免费**。
+- **上游诉求（一句话）**：`MakeNotifyCodegenPTO` 在 `pto.cmo.cacheinvalid` 之前补
+  `pto.barrier <PIPE_ALL>` —— **把 put 路径已有的那条屏障对齐到 notify 路径**，
+  不引入新概念（`MakePutCodegenPTO` 给 tput 夹的两条 `PIPE_ALL` 注释写成
+  "WORKAROUND for PTOAS#872"，实际承载正确性；`MakeRemoteStoreCodegenPTO` 什么都不发 ——
+  这个不对称就是缺陷来源）。
+
+**两 agent 对账（反向复核）**：codex 独立复核报告
+sha256 `37fae3aba51a555189c9da05633d88d0ab7810e28d72df9681f9fcfa11d472ac`。
+一致 = pre-CMO `PIPE_ALL` 最小、`dsb` 冗余、上游诉求表述。两处撤回 =
+codex 自撤「store-loop 的 MTE3 屏障保证前六个 store 安全」；我撤回 Wave3 slack 假设
+（**结构性否证：Wave3 在 consumer read 之后**）。分歧按更保守方向收口：
+**生产 Wave2 没有可证明的安全机制，只是当前调度没触发；是否正在损坏未知**
+（我原先「近确定性失败 ⇒ 必有结构性保护」的反推默认失败率与结构无关，前提未验证，已撤回）。
+
+**硬约束（现在生效）**：任何把「payload store 与它自己的 credit」拉近的改动 ——
+删 Wave3（~5.6 µs/call）、合并 Wave1+Wave2（~5.6 µs/call）、按 peer 融合 store+notify、
+单 peer 交换 —— 都必须**先落 fence**；扣掉 Wave2 fence 的 0.405 µs 后净收益约
+`10.8 µs/call`，**单独仍不过 14 µs 门**。
+
+**产品状态**：本轮 **0 个优化进生产**。权威报告
+`0162:/mnt/persist/chensiyu/workspace/p2-k5-rhrd-20260810/CLAUDE-NOTIFY-FENCE-DEFECT.md`
+sha256 `a34817832550b9c68c907a58774403802d79c1926e8aa085b658ff0aafc9f21b`。
+详见 [`../blockers.md`](../blockers.md) `UPSTREAM-NOTIFY-FENCE` 段与
+[`../design/performance/task-tracking.md`](../design/performance/task-tracking.md)
+2026-08-11 更新行。
+
 ## 2026-08-10 —— P1a gate 解耦：swimlane critical path 定向优化，bs1/bs8 各约 6%，byte-exact，已发布 `stepfun/develop@d13b2ca6` ✅
 
 **方法**：只看 swimlane critical path（5 层 FiveLayerMoe 代表整网），改动全部收在

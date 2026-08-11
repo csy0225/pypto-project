@@ -317,6 +317,7 @@
 
 | # | Blocker | 严重度 | gate 什么 | 详情 |
 |--:|---------|--------|-----------|------|
+| UPSTREAM-NOTIFY-FENCE | pypto `MakeNotifyCodegenPTO` 把 `dcci`(invalidate-only) 排在 payload drain 之前；最小修复 = 一条 pre-CMO `pipe_barrier(PIPE_ALL)`（device 已证，消融矩阵闭合），Wave2 单点代价 `0.405 µs/call` | 🔴 Active / correctness | 一切「把 payload store 与它自己的 credit 拉近」的 AR 优化（删波次 / 合并波次 / 按 peer 融合） | [`blockers.md`](blockers.md) |
 | N1-S-0234 | 0234 同步 pypto-lib 后 whole-net stall（完整对象未确认） | 🔴 Active / 未独立复核 | 取得 SSH 后核对三仓/runtime/环境重跑 canonical | [`blockers.md`](blockers.md) |
 | N1-L | Phase 28 live：per-layer KV + 3-way HBM + live token-exact A/B | 🔴 Active | live single-handoff | [`planning/phases/28-n1-live-integration.md`](planning/phases/28-n1-live-integration.md) |
 | 1 | Phase 20 production backend 未接入 | 🟡 功能 | 真实 vLLM 请求走 PyPTO runner | [`design/vllm-pypto/`](design/vllm-pypto/) |
