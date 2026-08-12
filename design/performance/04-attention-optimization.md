@@ -1,10 +1,12 @@
 # 04 · Attention 优化专项（step3p5 full / SWA flash decode）
 
-> **最终实现覆盖说明（更新至 2026-08-11）**：本文已合并原
+> **最终实现覆盖说明（更新至 2026-08-12）**：本文已合并原
 > `attention/attention-tiling-and-partitioning.md` 的最终 task/tile 设计。§0–§9
 > 保留专项探索过程，包含早期 fixed-24 lane、四阶段 split、standalone Pass-A/B/C
 > 与 cast 默认关闭等历史状态；**这些内容不得再作为当前实现说明。** 当前权威状态以
-> [§15](#15-attention-mixed-kernel-与-swa-rmsnorm-多核集成2026-08-11) 为准；
+> [§15](#15-attention-mixed-kernel-与-swa-rmsnorm-多核集成2026-08-11)、
+> §16 和 §17 为准：§16 记录 packed QKV 的实现/精度 PASS 但整体性能 NO-GO，
+> §17 记录其后的 RMS→QKV critical prestage GO；
 > §12–§14 是其历史基线：
 > logical task 数按 active workload 推导，runtime 再映射到物理 AIC/AIV；
 > 5–10 us 仅是 task-grain 搜索起点；Full 的 SV 与 segment-local recurrence 已融合，
@@ -12,7 +14,7 @@
 > 本轮新增 workload-sized RoPE producer、显式双 TaskId 依赖、SWA trailing-window
 > 首尾 mask、Full out-proj publication 修复与 A2A3 softmax grain=16。该代码已合入
 > 当时的 `pypto-lib stepfun/develop@c9af5790`；该提交现已成为当前
-> `stepfun/develop@f9065261` 的祖先。0162 的 focused device 证据来自合入前、
+> `stepfun/develop@e5e26f9f` 的祖先。0162 的 focused device 证据来自合入前、
 > attention delta 相同的
 > `perf/attn-rope-taskmajor-lifetime-20260805@1ea76e0f`。该候选已完成
 > 每请求 64K 的 bs1/2/4/8/16/7 linear+reverse matrix、独立 fresh-process
@@ -24,13 +26,14 @@
 > `attention_swa.py`）的重写路线，独立于 README 主表里的 Track A–H。收敛后其中的子项会以
 > `PERF-*` ID 回填 [`task-tracking.md`](task-tracking.md)。
 >
-> **当前源码基线**：GitHub pypto-lib `stepfun/develop` 与 0162 本地同名分支
-> 均为 `f906526190dc2eca0d479f8e9fa9187ec6d31be9`，本地工作树 clean。pypto =
+> **当前源码基线**：GitHub pypto-lib `stepfun/develop` 与 0162 指定 checkout
+> 均为 `e5e26f9f5bf9184f97a4684ae7e865f1a8b0d228`，本地工作树 clean。pypto =
 > `stepfun/develop@1c048a744d5f63a8bce1ddb45dac8d1b7f458bb0`；canonical Main =
 > `models/step3p5/decode_fwd.py:whole_decode_step3p5`。正文中的旧 file:line 只对应当时快照，
 > 不能覆盖当前源码。最新固定镜像 manifest 为
 > `sha256:076af8a167405d5d0831e234cd16521c77d8bfdd173eff063d820802057c47f3`，
-> 其中 pypto-lib 仍是 `cb96747e`；`f9065261` 的结果全部是该镜像上的
+> 其中 pypto-lib 仍是 `cb96747e`；`f9065261`、`fa58b5cf` 和 `e5e26f9f`
+> 的结果全部是该镜像上的
 > **source overlay**，不是包含新代码的 immutable image。
 >
 > **审计口径**（沿用 [`README.md` 顶层审计方法](README.md)）：任何“step3p5 独有 / 必须保留”
@@ -1769,3 +1772,367 @@ production release gate      NOT CLAIMED
 
 完整 artifact、hash 与限制见
 [`../../benchmark/2026-08-11-step3p5-attention-mix-rmsnorm.md`](../../benchmark/2026-08-11-step3p5-attention-mix-rmsnorm.md)。
+
+## 16. QKV packed projection 与 split/QKNorm/RoPE fused front-end（2026-08-11）
+
+本节只覆盖 §15 mixed Attention core **之前**的 QKV projection、split、QKNorm、
+RoPE 与 Q/KV publication；§15 的 Full/SWA attention mixed task 和 SWA RMSNorm
+结论仍有效。
+
+> **2026-08-12 post-merge 更新（当前准出结论）：** 最终 clean commit 的整网
+> 精度 PASS，但 BS1/ctx64K ITL 回退 `+1.348 ms / +4.233%`；fresh 五层 DFX
+> strict `<46 us` 为 39/40，rank7/L0=`54.54 us`。因此本节实现/正确性结论
+> 仍成立，但性能集成当前 NO-GO。§16.5 的 40/40 是 2026-08-11 历史 capture，
+> 已被 §16.7 的 fresh final-commit 验证 supersede。
+
+### 16.1 Parent/base、final commit 与验证边界
+
+最终源码关系：
+
+```text
+parent/base
+f906526190dc2eca0d479f8e9fa9187ec6d31be9
+
+final commit
+fa58b5cffe41b30d3f8d94482230867ee34b9e84
+
+branch
+perf/qkv-prerope-mix-20260811
+```
+
+设备门先冻结了 parent 上的 source 内容；同一字节内容随后落为
+`fa58b5cf` 并 push 到 `stepfun/develop`。在 I6 landing 时，0162 local
+`stepfun/develop`、candidate worktree HEAD 与 `origin/stepfun/develop` 均为
+`fa58b5cf`，两个 worktree clean，且 `fa58b5cf^ = f9065261`。当前 tip 已由
+§17 前进到 `e5e26f9f`。两个 I6 核心源码 SHA256：
+
+```text
+attention_full.py
+6db7fa5f5a5d9268719bfddd35c1262406001acfe5654e295c09c74a9ad4454d
+
+attention_swa.py
+7895ebf575e45aaf61673af36a6ee950b031bf8d2c556c46daa66ef0361bc62b
+```
+
+这些 SHA 与 device frozen source 及 `fa58b5cf` 中对应文件完全一致。历史 run
+contract 仍记录 `source_head=f9065261`，因为 capture 发生在创建 final commit
+之前；这不表示当前分支仍停留在 parent。
+
+设备验证固定使用 §15 相同 substrate：
+
+```text
+manifest sha256:076af8a167405d5d0831e234cd16521c77d8bfdd173eff063d820802057c47f3
+config   sha256:a9d111880883cea0b02e425fdfeaccc2b14bb1d1174c0b73488d8ee6d8004d39
+```
+
+候选 `pypto-lib` 只读挂载到 `/candidate`，runtime 未 overlay。镜像内
+`pypto-lib` 仍为 `cb96747e`；因此下面是 source-overlay device evidence，不是新镜像
+或 immutable candidate evidence。
+
+### 16.2 Full：10-slice packed QKV projection
+
+Full 把原 Q/K/V projection orchestration 合并为一个 `full_qkv_proj` family：
+
+```text
+8 Q slices + 1 K slice + 1 V slice = 10 slices
+```
+
+每个 slice 仍是 128 output columns，保留 weight ABI 和 K 维累加顺序，只把结果写入
+同一 `[Q | K | V]` FP32 packed tensor。
+
+后续 `full_qkv_split_qknorm_rope` 每个 active row 一个 logical vector task，在同一
+task 内完成：
+
+```text
+packed split
+  -> 8 Q heads aligned QKNorm
+  -> aligned K QKNorm
+  -> partial RoPE
+  -> padded Q publication + K/V cache write
+```
+
+K 临时复制为 8 个等价 row，避免 `[1,1]` reduction 的 AIV alignment 限制；Q/K
+仍应用不同 gamma。Full 只旋转前 64 lanes，非 rotary tail 保留历史 BF16
+pass-through 语义。
+
+### 16.3 SWA：14-slice projection 与 `[16,128]` fused epilogue
+
+SWA packed family 为：
+
+```text
+12 Q slices + 1 K slice + 1 V slice = 14 slices
+```
+
+projection 被调度到独立 head-gate expand 之前，使 QKV AIC slices 先进入执行；
+数据流仍保证后续 `o_proj` 在 gate expansion 可用后消费。
+
+SWA fused task 把：
+
+```text
+12 Q rows + 1 K row + 3 zero rows
+```
+
+拼成 aligned `[16,128]` tile，一次执行 `row_sum` / `rsqrt`，再分别应用 Q/K gamma。
+Q RoPE 对 `[16,64]` low/high halves 批量执行；rows `12:16` 随后由 padding zero
+publication 覆盖。相比逐 head RoPE，这一版把 focused SWA fused slice 收敛到
+`2.82--3.44 us`。
+
+最终 whole compile memory report：
+
+| group | memory |
+|---|---|
+| Full fused split/QKNorm/RoPE | Vec `13.5 KiB / 184.0 KiB` |
+| SWA fused split/QKNorm/RoPE | Vec `33.6 KiB / 184.0 KiB` |
+
+### 16.4 Unit、compile 与 focused gate
+
+```text
+unit                       362 passed, 7 skipped
+whole compile              rc=0, 75.457 s
+edge contexts              12/12 exact
+alternating/inactive       PASS
+KV-slot / SWA direct oracle PASS
+Q-publication              Full/SWA × 6 contexts = 12/12 PASS
+heterogeneous contexts     [1,2816,2817] exact
+```
+
+focused 三个 arm 均 rc=0，且 run 前/后 source manifest byte-identical。focused
+结果证明 publication、active/inactive ownership 与 edge correctness；最终
+`<46 us` 结论必须使用下一节的五层 40 点，而不是用两层 focused span 替代。
+
+### 16.5 历史五层、8-rank strict `<46 us` capture（2026-08-11）
+
+authority：
+
+```text
+start  = earliest layer-local `*_qkv_proj` Worker View ts
+finish = latest layer-local `*_qkv_split_qknorm_rope` Worker View (ts + dur)
+span   = finish - start
+gate   = max(8 ranks × 5 layers) < 46.000 us
+```
+
+工作点为 L0--L4、BS1、每请求 ctx64K、512 blocks、8 ranks。hidden L3/L4
+byte-exact、finite、TP spread=`0`。本节只记录历史 capture；当前 verdict 见
+§16.7。
+
+| layer | kind | min us | max us | pass |
+|---|---|---:|---:|---:|
+| L0 | Full dense | 42.40 | **43.60** | 8/8 |
+| L1 | SWA dense | 39.10 | 41.60 | 8/8 |
+| L2 | SWA dense | 38.80 | 41.14 | 8/8 |
+| L3 | SWA MoE | 39.30 | 41.16 | 8/8 |
+| L4 | Full MoE | 38.96 | 41.62 | 8/8 |
+
+```text
+strict points = 40/40 PASS
+global max    = 43.60 us at rank7/L0_full_dense
+margin        = 2.40 us
+```
+
+inventory 对每个 rank 都满足：
+
+```text
+L0/L4 Full  = 10 projection slices + 1 fused slice
+L1/L2/L3 SWA = 14 projection slices + 1 fused slice
+projection -> fused -> attn_mix dependency/lineage present
+legacy full/swa_rope_q and full/swa_rope_kv_cache family = 0
+```
+
+此前未批量执行 SWA Q RoPE 的 P1 为 `39/40`，global max
+`46.64 us @ rank4/L1_swa_dense`，严格门失败；不能把它记录为“基本达标”。
+
+### 16.6 Canonical analyzer 与发布边界
+
+five-layer runtime、precision、deps 与 8-rank swimlane 均已生成，但 canonical
+structural analyzer 因 rank0/1/3/6 各有 5 个零本地 routed-token early-dispatch
+task 只出现在 deps、没有 raw AICore swim slice 而 fail-closed：
+
+```text
+candidate container rc       1
+canonical structural verdict FAIL_CLOSED
+custom QKV/pre-RoPE analyzer rc 0
+```
+
+custom analyzer 的 rc=0 只覆盖本文的 packed/fused inventory、dependency、
+legacy absence 和 40 点 strict span，不能覆盖 canonical rc=1。I6 landing-time
+源码集成状态为：
+
+```text
+source integration         fa58b5cf / PUSHED / CLEAN
+```
+
+2026-08-11 capture 当时的发布边界为：
+
+```text
+new immutable image        NOT BUILT
+canonical structural gate  FAIL_CLOSED
+whole-network ITL          当时尚未测
+production release         NOT CLAIMED
+```
+
+完整 40 点、artifact 路径与报告 hash 见
+[`../../benchmark/2026-08-11-step3p5-qkv-prerope-fusion.md`](../../benchmark/2026-08-11-step3p5-qkv-prerope-fusion.md)。
+
+### 16.7 2026-08-12 final-commit post-merge 验证
+
+#### 整网精度与 ITL
+
+最终 clean commit `fa58b5cf` 与 parent `f9065261` 做 BS1、ctx65536、
+512 blocks、warmup/measured=`10/100` 的 A/B/A：
+
+| arm | p50 |
+|---|---:|
+| A1 baseline | `31.787 ms` |
+| B candidate | `33.194 ms` |
+| A2 baseline | `31.905 ms` |
+
+```text
+baseline center          31.846 ms
+baseline half-range       0.059 ms
+candidate delta          +1.348 ms / +4.233%
+delta / floor             22.85x
+performance verdict      REGRESSION_BEYOND_BRACKET
+```
+
+三臂 hidden SHA256 全等
+`567b206bb03d89f84020e1dddd61098a8f79f32f81b8f4fcf56443113e27f03e`，
+finite、tail token `14371` exact，因此 `PRECISION_GATE=PASS`。
+
+#### Fresh 五层 DFX
+
+同一 final commit fresh 生成 8 份 merged swimlane。严格 Worker View 结果：
+
+| layer | kind | min us | max us | pass |
+|---|---|---:|---:|---:|
+| L0 | Full dense | 41.46 | **54.54** | 7/8 |
+| L1 | SWA dense | 38.90 | 43.14 | 8/8 |
+| L2 | SWA dense | 38.66 | 40.02 | 8/8 |
+| L3 | SWA MoE | 39.16 | 41.72 | 8/8 |
+| L4 | Full MoE | 39.38 | 41.50 | 8/8 |
+
+```text
+strict points = 39/40 FAIL
+global max    = 54.54 us at rank7/L0_full_dense
+over gate     = 8.54 us
+```
+
+rank7/L0 的 QKV slice 与 fused kernel compute duration 均与其它 rank 一致；
+异常来自约 `12 us` AICPU scheduler dispatch stall，使 projection family span
+扩大到 `44.68 us`。deps/lineage、packed/fused inventory 与 legacy absence 均
+PASS，但权威端到端 stage span 必须包含该 launch skew，不能把它当作测量误差剔除。
+
+fresh DFX 外层 runner `rc=0`；candidate container `rc=1` 仍包含 canonical
+zero-route missing-swim record 限制。独立 analyzer 本轮也返回 `rc=1`，原因是
+39/40 timing failure；其 structural 子门为 PASS。
+
+#### I6 边界
+
+```text
+source integration         fa58b5cf / PUSHED / CLEAN
+implementation/precision   PASS
+whole-network performance  FAIL
+fresh five-layer timing    FAIL
+canonical structural gate  FAIL_CLOSED
+new immutable image        NOT BUILT
+production release         NO-GO
+```
+
+权威证据：
+
+```text
+whole A/B/A:
+/mnt/persist/chensiyu/workspace/perf-2026q3/
+  attn-mix-device-gate-20260811/out/aba-bs1-ctx64k-20260812-102231/
+ABA_RESULT.json sha256
+  065f67c889a5eb108c49770261ccadf4d8f2970882b657efafb205ee35d6510b
+
+fresh five-layer:
+/mnt/persist/chensiyu/workspace/perf-2026q3/
+  qkv-prerope-postmerge-validation-20260811-r1/five_layer/analysis_final/
+attention_gate_report.json sha256
+  0b5cbe2064663d179a509739e8c6ccd89777c839fcaca1023c4d1403c3a025a1
+attention_gate_report.md sha256
+  f00149e36403e264018abd55fee4531672535a4b517dd43e5a052a78715c582e
+```
+
+## 17. SWA RMSNorm → QKV critical prestage（2026-08-12）
+
+本节修复 §15 的 RMSNorm 本体达标后、首个 QKV consumer 仍额外等待约 `5 us`
+的问题。它是 §16 之上的独立调度补丁；不会把 §16.7 的
+`f9065261 → fa58b5cf` 整体性能 NO-GO 改写为 GO。
+
+### 17.1 问题与 `allow_early_resolve` 语义
+
+`fa58b5cf` 的 L3 raw L2 swimlane 中，latest RMS raw-kernel end → earliest
+`swa_qkv_proj` raw-kernel start 的 8-rank residual 为：
+
+```text
+min / p50 / mean / max = 4.60 / 5.00 / 5.01 / 5.48 us
+```
+
+对应 Worker start − Worker end 的 p50 为 `+4.77 us`，说明 consumer setup
+当时确实在 RMS Worker 完成后才开始。
+
+`allow_early_resolve` 是 producer 属性。给 QKV producer 开 flag，只会优化
+`QKV → split/QKNorm/RoPE`；该 flag 在 `fa58b5cf` 本来就存在，不能反向优化
+`RMS → QKV`。因此最终同时保留：
+
+```text
+RMS producer early-resolve  -> prestage QKV
+QKV producer early-resolve  -> prestage pre-RoPE consumer
+```
+
+consumer 仍由 producer completion 和原 TensorMap dependency gate 约束；这里没有
+把未完成的 RMS 输出暴露给 QKV。
+
+### 17.2 关键路径优先级
+
+只给 RMS 开 early resolve 时，8-block head-gate logits 与 14-slice packed QKV
+都会进入 speculative fanout，head-gate 可能占用调度资源并推迟 completion poll。
+最终 `e5e26f9f` 复用已存在的 `swa_attn_out_zero` TaskId，给 head-gate 增加一条
+未标记 early 的显式依赖，使其保持 normal dispatch；QKV 则在 RMS 执行期间优先
+预驻留。数学数据流、归约顺序、layout 和输出均不变。
+
+提交链：
+
+```text
+fa58b5cf
+  -> 18d1b519  RMS producer allow_early_resolve
+  -> e5e26f9f  isolate non-critical head-gate; prioritize QKV prestage
+```
+
+### 17.3 五层 DFX 与整网门
+
+fresh 五层、8-rank、BS1、ctx64K、512 blocks：
+
+| 指标 | baseline `fa58b5cf` | candidate `e5e26f9f` |
+|---|---:|---:|
+| QKV Worker start − RMS Worker end p50 | `+4.77 us` | **`-1.78 us`** |
+| QKV raw-kernel residual min | `4.60 us` | `2.08 us` |
+| QKV raw-kernel residual p50 | `5.00 us` | **`2.64 us`** |
+| QKV raw-kernel residual max | `5.48 us` | **`3.16 us`** |
+| RMS raw-kernel span min/p50/max | — | `3.92 / 4.10 / 4.50 us` |
+| RMS Worker span min/p50/max | — | `4.16 / 4.35 / 4.78 us` |
+
+QKV Worker setup 已提前 `1.50–2.06 us` 与 RMS 重叠；raw-kernel residual p50
+改善 `2.36 us`（约 `47.2%`）。L3/L4 byte-exact、finite、TP spread=`0`，
+目标 unit=`22 passed`。
+
+整网同口径 A/B/A：
+
+```text
+A1 baseline p50      30.992 ms
+B candidate p50      30.997 ms
+A2 baseline p50      31.136 ms
+baseline center      31.064 ms
+candidate delta      -0.067 ms / -0.216%
+performance verdict WITHIN_BASELINE_BRACKET
+precision gate       PASS
+```
+
+`e5e26f9f` 已 fast-forward push 到 `csy0225/pypto-lib:stepfun/develop`。验证仍是
+固定 K8 镜像上的 source overlay；canonical analyzer 的既有 zero-route
+missing-swim 限制仍在，未构建新 immutable image，也不声明 production release。
+
+完整 artifact、hash、边界与五层 swimlane delivery 见
+[`../../benchmark/2026-08-12-step3p5-rms-qkv-dispatch-gap.md`](../../benchmark/2026-08-12-step3p5-rms-qkv-dispatch-gap.md)。

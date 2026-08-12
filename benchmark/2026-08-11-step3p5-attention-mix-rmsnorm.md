@@ -7,6 +7,11 @@
 > **镜像不包含本文的新 Attention/RMSNorm 代码。** 新代码已在 0162 本地
 > `stepfun/develop` 做 fast-forward 集成并 push 到远端，但尚未制作新的
 > immutable candidate image。
+>
+> **当前 tip 提示（2026-08-12）：** 本文记录 I3/I4 landing-time 的
+> `f9065261`；远端和 0162 指定 checkout 已经后续 I6/I7 前进到 `e5e26f9f`。
+> RMS→QKV 调度 follow-up 见
+> [`2026-08-12-step3p5-rms-qkv-dispatch-gap.md`](2026-08-12-step3p5-rms-qkv-dispatch-gap.md)。
 
 ## 1. 结论
 
@@ -15,7 +20,7 @@
 | 项目 | 结果 |
 |---|---|
 | A/B baseline `cb96747e` 与固定镜像源码 pin 对齐 | PASS |
-| GitHub 与 0162 `stepfun/develop` fast-forward 到 combined candidate | PASS，均为 `f9065261`；本地 clean |
+| I3/I4 landing-time GitHub 与 0162 `stepfun/develop` | PASS，当时均为 `f9065261`；本地 clean |
 | combined unit | `357 passed, 7 skipped` |
 | combined whole compile（`num_blocks=512`） | PASS |
 | `swa_moe_chip_orch_swa_rmsnorm_zc` 多核 strict `<5 us` | PASS |
@@ -27,7 +32,7 @@
 | remote push | **已执行** |
 | 新镜像发布 | **未执行** |
 
-当前准确状态：
+I3/I4 landing-time 准确状态：
 
 ```text
 implementation             PASS
@@ -68,8 +73,8 @@ sha256:a9d111880883cea0b02e425fdfeaccc2b14bb1d1174c0b73488d8ee6d8004d39
 
 镜像配置使用 `ATTN_TASK_PROFILE=a2a3`，并要求 prepared L2 swimlane reuse。
 0162 的 `develop/{pypto,pto-isa,PTOAS}` 与上述镜像 pin 对齐。
-`develop/pypto-lib` 的 A/B baseline `cb96747e` 与镜像一致；GitHub 与 0162
-本地 `stepfun/develop` 均已 fast-forward 到 `f9065261`，本地 worktree clean。
+`develop/pypto-lib` 的 A/B baseline `cb96747e` 与镜像一致；该轮 GitHub 与 0162
+本地 `stepfun/develop` 当时均 fast-forward 到 `f9065261`，本地 worktree clean。
 
 ### 2.2 本地候选
 
@@ -100,8 +105,8 @@ cb96747e
 
 `21d928b9` 与 `ffb08667`、`f9065261` 与 `0a0835e0` 的 stable patch-id
 分别相同。combined worktree clean，且 base-ancestor contract 为 true。
-三个 perf branch 均没有 upstream tracking；GitHub 与 0162 本地
-`stepfun/develop` 均已完成 fast-forward 集成到 `f9065261`。
+三个 perf branch 均没有 upstream tracking；该轮 GitHub 与 0162 本地
+`stepfun/develop` 当时均完成 fast-forward 集成到 `f9065261`。
 
 focused 与最终 A/B/A 使用同一份 frozen candidate manifest；manifest 文件
 SHA256 均为：
@@ -445,8 +450,8 @@ A_B_A_COMPLETED=true
 
 1. **不是新镜像验证。** 所有结果均是 pinned immutable K8 镜像上的只读 source
    overlay；镜像内仍是 `pypto-lib@cb96747e`。
-2. **源码已推送，但尚无新镜像。** GitHub 与 0162 本地
-   `stepfun/develop` 均为 `f9065261`；固定镜像内仍是 `cb96747e`。
+2. **源码已推送，但尚无新镜像。** I3/I4 landing commit 为 `f9065261`；
+   当前 `stepfun/develop` 已前进到 `e5e26f9f`，固定镜像内仍是 `cb96747e`。
 3. RMS strict timing 来自 FiveLayer harness；combined whole graph 未单独重跑
    RMS strict profile。RMS-only 与 combined whole compile 的目标 PTO 均为
    `312ec920...` 且逐字节相同。

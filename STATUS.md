@@ -19,13 +19,27 @@
 
 ## 1. 当前源码与 0162 本地集成
 
-> **2026-08-12 当前结论：源码已集成，但性能验收 NO-GO。** 0162 候选
+> **2026-08-12 当前源码 tip：`e5e26f9f`，I7 调度修复已通过并合入。**
+> GitHub `csy0225/pypto-lib:stepfun/develop` 与 0162 指定 checkout
+> `/mnt/persist/chensiyu/workspace/develop/pypto-lib` 均为
+> `e5e26f9f5bf9184f97a4684ae7e865f1a8b0d228`，worktree clean。该提交在
+> `fa58b5cf` 上给 RMS producer 开 early resolve，并把非关键 head-gate 从
+> speculative fanout 隔离，优先预置 QKV。五层 8-rank 中 QKV Worker gap p50
+> 从 `+4.77 us` 变为 `-1.78 us`（setup 已在 RMS 完成前开始）；RMS raw-kernel
+> end → QKV raw-kernel start residual p50/max 从 `5.00/5.48 us` 降到
+> `2.64/3.16 us`，RMS Worker span p50/max=`4.35/4.78 us`。L3/L4 exact。
+> 整网 BS1/ctx64K A/B/A p50=`30.992/30.997/31.136 ms`，三臂 hidden/token
+> exact，candidate=`WITHIN_BASELINE_BRACKET`。这是相对 `fa58b5cf` 的 I7 GO，
+> **不覆盖下述 I6 相对 `f9065261` 的整体 NO-GO**；仍未构建新镜像。
+
+> **2026-08-12 I6 结论：源码已集成，但 packed QKV 整体性能验收 NO-GO。** 0162 候选
 > worktree `/mnt/persist/chensiyu/workspace/develop-worktrees/qkv-prerope-mix`
 > 的分支 `perf/qkv-prerope-mix-20260811` 已基于
 > `f906526190dc2eca0d479f8e9fa9187ec6d31be9` 提交为
 > **`fa58b5cffe41b30d3f8d94482230867ee34b9e84`**，并 fast-forward push 到
-> `stepfun/develop`。GitHub 远端、0162 main checkout 与 candidate worktree
-> 三者均指向 `fa58b5cf` 且 clean。实现把 Full 的 10 个、SWA 的 14 个 Q/K/V
+> 当时的 `stepfun/develop`。该 I6 landing 时远端、0162 main checkout 与
+> candidate worktree 三者均指向 `fa58b5cf` 且 clean；当前 tip 已由 I7 前进到
+> `e5e26f9f`。实现把 Full 的 10 个、SWA 的 14 个 Q/K/V
 > projection blocks 各自改为 packed QKV projection，并接一个
 > `qkv_split_qknorm_rope` mixed kernel，设备图收敛为
 > `qkv_proj → qkv_split_qknorm_rope → attn_mix`。
@@ -44,13 +58,13 @@
 > 该结论仍是固定 K8 immutable 镜像上的 **source-overlay gate**：镜像内
 > `pypto-lib` 仍为 `cb96747e`，没有构建包含本候选的新镜像。canonical analyzer
 > 仍因零本地 routed-token early-dispatch 缺记录返回 `rc=1`；独立 Attention
-> inventory/dependency audit 通过，但 timing gate 与整网性能门均失败。当前
-> `fa58b5cf` **不得构建为 release candidate，也不得称为性能集成成功**。
+> inventory/dependency audit 通过，但 timing gate 与整网性能门均失败。
+> 当前 `e5e26f9f` 链仍**不得构建为 release candidate，也不得把 I7 的局部调度
+> GO 写成 I6 整体性能集成成功**。
 
-> **2026-08-11 最新集成状态**：GitHub 远端
-> `stepfun/develop` 已 fast-forward 到 `fa58b5cf`；0162 的
-> `/mnt/persist/chensiyu/workspace/develop/pypto-lib` 同 commit、工作树 clean、与
-> 远端对齐。固定 K8 镜像仍只包含 `cb96747e`；下述新代码是在该 immutable 镜像上通过
+> **2026-08-11 I6 landing 状态（历史）**：当时 GitHub 远端
+> `stepfun/develop` fast-forward 到 `fa58b5cf`；当前远端和 0162 指定 checkout
+> 已由 I7 前进到 `e5e26f9f`。固定 K8 镜像仍只包含 `cb96747e`；下述新代码是在该 immutable 镜像上通过
 > `/candidate` **source overlay** 编译和验证，不能写成镜像已包含新实现。
 
 ```text
@@ -58,10 +72,12 @@ image/source baseline  cb96747eb21f5f4932d6a24eddaa69c85d095ef6
   -> 21d928b9e257f14aeb4b151cdcea720083f460d0  Attention mixed kernels
   -> f906526190dc2eca0d479f8e9fa9187ec6d31be9  SWA RMSNorm multicore
   -> fa58b5cffe41b30d3f8d94482230867ee34b9e84  packed QKV + pre-RoPE epilogue
+  -> 18d1b5197acf4829b171bfa144eb06e5b0cacfdf  RMS producer prestage
+  -> e5e26f9f5bf9184f97a4684ae7e865f1a8b0d228  prioritize critical QKV prestage
 
-GitHub stepfun/develop  fa58b5cffe41b30d3f8d94482230867ee34b9e84
-0162 local develop     fa58b5cffe41b30d3f8d94482230867ee34b9e84
-0162 candidate         fa58b5cffe41b30d3f8d94482230867ee34b9e84
+GitHub stepfun/develop  e5e26f9f5bf9184f97a4684ae7e865f1a8b0d228
+0162 local develop     e5e26f9f5bf9184f97a4684ae7e865f1a8b0d228
+0162 candidate         e5e26f9f5bf9184f97a4684ae7e865f1a8b0d228
 remote push            DONE
 new immutable image    NOT BUILT
 ```
@@ -90,8 +106,8 @@ new immutable image    NOT BUILT
 
 | 仓库/组件 | 分支或 pin | 当前 commit | 状态 |
 |---|---|---|---|
-| pypto-lib（GitHub） | `csy0225/pypto-lib:stepfun/develop` | `fa58b5cf` | 远端 tip；packed QKV + pre-RoPE epilogue |
-| pypto-lib（0162 local） | `stepfun/develop` | `fa58b5cf` | main/candidate 均 clean，与远端对齐 |
+| pypto-lib（GitHub） | `csy0225/pypto-lib:stepfun/develop` | `e5e26f9f` | 远端 tip；RMS→QKV critical prestage |
+| pypto-lib（0162 local） | `stepfun/develop` | `e5e26f9f` | 指定 checkout clean，与远端对齐 |
 | pypto | `csy0225/pypto:stepfun/develop` | `1c048a74` | 远端 tip；= `8e92b468` + reset 仪表 + K8 选择性清零（`distributed_runner.py` +174/−22） |
 | simpler | immutable pin | `e2efebcbd190302609c0775d2984f409f5f42c76` | 当前 canonical image pin |
 | pto-isa | immutable pin | `ecb6c303f797749f811a494742c3c08156aacabb` | 当前 canonical image pin |
@@ -135,6 +151,40 @@ models.step3p5.decode_fwd:whole_decode_step3p5
 
 
 ## 2. 镜像与验证状态
+
+### RMSNorm → QKV critical prestage：I7 source-overlay GO
+
+`allow_early_resolve` 是 producer 属性：QKV producer 原有 flag 优化
+`QKV → split/QKNorm/RoPE`，不能反向优化 `RMS → QKV`。最终
+`fa58b5cf → 18d1b519 → e5e26f9f` 在 RMS producer 开 early resolve，并用
+已存在的 `swa_attn_out_zero` TaskId 把非关键 head-gate 保持在 normal dispatch，
+让 14-slice packed QKV 优先预驻留。
+
+```text
+QKV Worker gap p50                    +4.77 -> -1.78 us
+QKV raw-kernel residual min/p50/max    2.08 / 2.64 / 3.16 us
+baseline raw-kernel residual p50/max   5.00 / 5.48 us
+candidate RMS Worker span min/p50/max  4.16 / 4.35 / 4.78 us
+L3/L4                                  byte-exact, finite, TP spread 0
+whole A/B/A p50                        30.992 / 30.997 / 31.136 ms
+whole verdict                          WITHIN_BASELINE_BRACKET
+```
+
+五层 all-ranks swimlane bundle：
+
+```text
+/mnt/persist/chensiyu/workspace/perf-2026q3/
+  rms-proj-critical-prestage-validation-20260812-r3/delivery/
+  ALL_RANKS_swimlane_bundle.tar.gz
+sha256
+  2f58af78bc2f1d8121426aca1e531fb76ada88072263a1ed97d5dfb7936cf083
+```
+
+外层 five-layer runner 与 whole A/B/A 均 rc=0；canonical analyzer 仍因既有
+zero-local-route missing-swim record fail-closed。当前只声明 I7 相对
+`fa58b5cf` 无回退并解决单独约 `5 us` 的 Worker 调度等待，不声明新镜像或
+production release，也不覆盖 I6 NO-GO。完整记录：
+[`benchmark/2026-08-12-step3p5-rms-qkv-dispatch-gap.md`](benchmark/2026-08-12-step3p5-rms-qkv-dispatch-gap.md)。
 
 ### QKV projection + split/QKNorm/RoPE fusion：post-merge 最终验证
 
@@ -274,7 +324,7 @@ spec:     deployment/docker/builds/stepfun-develop-20260811-k8-selective.env
 ```
 
 这是**第一个包含 K8 发布基线** pypto-lib=`cb96747e` / pypto=`1c048a74` 的
-immutable image；它不包含 §1 当前 pypto-lib tip `fa58b5cf`。构建在 devbox
+immutable image；它不包含 §1 当前 pypto-lib tip `e5e26f9f`。构建在 devbox
 （0162 无 buildkitd、github/proxy 均不通，结构上不能构建），
 **全部验证在 0162、digest-only、无源码/runtime overlay**。
 
@@ -384,7 +434,8 @@ Wave5 只对 0162 完整 release-qualified；其源码 pin 是 pypto `defa97c5`�
 ### 历史 2026-08-05 R1/R2（已 supersede）
 
 - R1 已撤销；R2 从未发布，且其 pypto-lib `91c7f46e` 已被后续
-  `491267c4`、`f9065261`、最终 `fa58b5cf` supersede。不得恢复 R2 或用其状态覆盖当前源码。
+  `491267c4`、`f9065261`、`fa58b5cf` 和当前 `e5e26f9f` supersede。不得恢复
+  R2 或用其状态覆盖当前源码。
 - 历史记录：
 [`benchmark/2026-08-05-attention-canonical-r1-r2.md`](benchmark/2026-08-05-attention-canonical-r1-r2.md)。
 
@@ -424,7 +475,7 @@ Wave5 只对 0162 完整 release-qualified；其源码 pin 是 pypto `defa97c5`�
 ## 4. MoE 当前判断
 
 - 产品改动 `7928a275`、`cd19fe6b` active-route scheduling 和 `491267c4`
-  route/precision release harness 均为当前远端 `stepfun/develop@fa58b5cf` 的祖先。
+  route/precision release harness 均为当前远端 `stepfun/develop@e5e26f9f` 的祖先。
 - 当前 tip 的 `decode_fwd.py`
   SHA256=`c2054854a4a0e3f5618f27694bc33b4fd5146be6e2372b8c98dfe95e3d3602fb`。旧正式 campaign 的 candidate
   SHA256=`7884da7c…`、baseline `56b3d477` SHA256=`3553664c…` 只绑定历史
@@ -435,7 +486,7 @@ Wave5 只对 0162 完整 release-qualified；其源码 pin 是 pypto `defa97c5`�
   均通过，输出分别为 `303` 和 `303,1207`；publication seal=`PASS`：
   `.../whole-net-matched-ab-20260807T024525Z/publication_seal_report.json`
   （SHA256 `c0a03127…`）。
-- J1 保持 🟦/NO-GO：source-overlay N=128 已通过，但 `fa58b5cf` 对应的 final
+- J1 保持 🟦/NO-GO：source-overlay N=128 已通过，但当前源码 tip 对应的 final
   immutable image 精度、六档 64K golden/A/B、formal matched-source DFX 12 runs
   和 route-aware reanalysis 尚未完成；本轮 L0–L4 all-rank swimlane 仅为
   structural `FAIL_CLOSED` 的 limited delivery。
@@ -445,7 +496,8 @@ Wave5 只对 0162 完整 release-qualified；其源码 pin 是 pypto `defa97c5`�
 
 ## 5. 当前下一步
 
-1. **先修复或拆回 `fa58b5cf` 的性能回退，暂不构建 release image。** 优先隔离
+1. **先修复或拆回由 `fa58b5cf` 引入、且 I7 未消除的整体性能回退，暂不构建
+   release image。** 优先隔离
    packed projection 与 fused epilogue：分别验证恢复 SWA gate-expand 顺序、恢复
    独立 Q/KV projection 但保留 fused split/QKNorm/RoPE。
 2. 每个变体先做 candidate-only whole ITL 筛选；最终候选必须重新通过同口径 A/B/A，
@@ -484,6 +536,7 @@ process；后续作业前仍须重新检查卡占用，不能沿用旧 session �
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS(src) | simpler | ptoas-bin |
 |------|------|-------|-----------|---------|-----------|---------|-----------|
+| 2026-08-12 | **RMS→QKV critical prestage 已合入**：`fa58b5cf → 18d1b519 → e5e26f9f`。QKV Worker gap p50 `+4.77 → -1.78 us`（setup 与 RMS 重叠），raw-kernel residual p50/max `5.00/5.48 → 2.64/3.16 us`；RMS Worker span max `4.78 us`。五层 L3/L4 exact；整网 A/B/A `30.992/30.997/31.136 ms`、precision PASS、`WITHIN_BASELINE_BRACKET`。远端与 0162 指定 checkout clean@`e5e26f9f`；all-ranks bundle SHA `2f58af78…`。仅为 source-overlay I7 GO，I6 NO-GO 与无新镜像边界不变 | `1c048a74` | **`e5e26f9f`** | 未移动 | 未移动 | 未移动 | 未移动 |
 | 2026-08-12 | **`fa58b5cf` post-merge 性能验收 NO-GO**：整网 BS1/ctx64K A/B/A 精度 byte-exact PASS，但 ITL p50 `31.846 → 33.194 ms`，回退 `+1.348 ms / +4.233%`；fresh 五层 DFX strict `<46 us` 为 39/40，rank7/L0=`54.54 us`。inventory/dependency PASS；异常点为约 12 us AICPU scheduler dispatch stall，但属于端到端门。暂不构建 release image，先拆分定位 packed projection 与 fused epilogue | `1c048a74` | **`fa58b5cf`** | 未移动 | 未移动 | 未移动 | 未移动 |
 | 2026-08-11 | **packed QKV projection + pre-RoPE epilogue 源码集成**：`fa58b5cf`（parent `f9065261`）已 fast-forward push；origin、0162 main/candidate 三者同 commit 且 clean。独立五层 strict Attention 门 40/40 PASS，max `43.60 us`、margin `2.40 us`。验证仍是下行 K8 immutable 镜像上的 source overlay；未构建新镜像，canonical analyzer known `rc=1` 不构成 release qualification | `1c048a74` | **`fa58b5cf`** | 未移动 | 未移动 | 未移动 | 未移动 |
 | 2026-08-11 | **K8 发布到 `csy0225/{pypto,pypto-lib}:stepfun/develop`：WholeDecode persistent window 每请求只清 control 前缀，整网 `−1.7455 ms/step`（`−5.16%`）byte-exact**。每请求原本清整个 `32,063,232 B` retained window，其中只有 `47,616 B`（7 个 signal/arrived counter）真需归零；9 个 data buffer 每请求先写后读、无跨请求残留依赖（codex window 审计 + 实测 byte-exact 双重确认）。**落地形态不动 simpler**：carve 严格顺序无 padding ⇒ 模型把 7 个 control buffer 声明到最前面即构成唯一连续前缀 `[0, 47616)`，一次 `memset_all` 即可。pypto-lib `cb96747e`（`decode_fwd.py` 只重排声明顺序，+11/−7，alloc 数量与大小不变）；pypto `1c048a74` = 两个 commit（`35027daf` 加 `PYPTO_PERSISTENT_RESET_TRACE` 埋点 + `1c048a74` K8 前缀清零，共 +174/−22，单文件）。**两仓落地文件与被测件逐字节相同**（`decode_fwd.py` sha `eb1f89bf…`、`distributed_runner.py` sha `fe50c11f…`）。0162 dev0-7 A/B/A（ctx=65536、warmup 10/iters 100）：`A1 33.842 / A2 33.803` ⇒ floor `0.0195`；`B 32.077` ⇒ **`−1.7455 ms`、89.5× floor**；reset host wall `2253 → 518 µs`。三臂 `hidden_sha256` 全等生产 baseline `567b206b…`、`token 14371`。同效应在另一独立 bracket 复现 `−1.7505 ms`（差 0.005 ms）。作用范围 fail-closed：只在 base-name 多重集精确匹配 WholeDecode 16 buffer 时启用，其它 persistent 程序（five-layer/two-layer/multi-program）保持全窗清零；control 出现在 data 之后 / 字节数偏离 pinned / carve 不符 ⇒ raise；trace `k8_prefix_applied` 供发布门识别静默回退。反向结论：先前拆成 6 次 `memset_all` 是 pessimization（`+1.886 ms`）—— 这条路径上多一次阻塞 broadcast 很贵、字节收益只有约 1:1。campaign `0162:.../k8-selective-20260811/v3-20260811-144622`，`K8_V3_RESULT.json` sha256 `7bb02263…`。详见 [`design/performance/task-tracking.md`](design/performance/task-tracking.md) | **`1c048a74`** | **`cb96747e`** | 未移动 | 未移动 | 未移动 | 未移动 |
