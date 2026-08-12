@@ -1,181 +1,236 @@
 # 接力上下文（Handoff）
 
-> **只描述下一位 agent 现在要接的工作。最后更新：2026-08-11。**
+> **只描述下一位 agent 现在要接的工作。最后更新：2026-08-12。**
 > 当前状态以 [`../STATUS.md`](../STATUS.md) 为准；历史过程不要复制回本文件。
 
-## 1. 当前源码、镜像与发布边界
+## 1. 当前判定
 
-0162 权威 checkout：
+`fa58b5cffe41b30d3f8d94482230867ee34b9e84` 已完成源码集成，但当前性能验收
+**NO-GO**：
+
+```text
+qkv_proj → qkv_split_qknorm_rope → attn_mix
+```
+
+- 整网精度：PASS；
+- 整网 ITL：FAIL，candidate p50 `33.194 ms`，baseline center `31.846 ms`，
+  回退 `+1.348 ms / +4.233%`；
+- fresh 前五层 DFX：FAIL，strict `<46 us` 为 `39/40`；
+- worst：rank7/L0 Full=`54.54 us`；
+- inventory/dependency/legacy audit：PASS；
+- immutable image：未构建。
+
+2026-08-11 的五层 `40/40`、max `43.60 us` 是历史单次 capture，已被
+2026-08-12 final-commit fresh run 的 39/40 supersede，不能继续作为当前准出结论。
+
+## 2. 0162 源码状态
+
+所有源码与脚本均只在 0162 创建或修改；本地项目仓仅允许文档变更。
+
+```text
+candidate worktree
+  /mnt/persist/chensiyu/workspace/develop-worktrees/qkv-prerope-mix
+
+branch
+  perf/qkv-prerope-mix-20260811
+
+parent/base
+  f906526190dc2eca0d479f8e9fa9187ec6d31be9
+
+final commit
+  fa58b5cffe41b30d3f8d94482230867ee34b9e84
+
+status
+  origin/stepfun/develop, main checkout and candidate worktree aligned; clean
+```
+
+0162 路径：
 
 ```text
 /mnt/persist/chensiyu/workspace/develop/pypto-lib
-branch  stepfun/develop
-HEAD    f906526190dc2eca0d479f8e9fa9187ec6d31be9
-status  clean; aligned with origin/stepfun/develop
-push    DONE
+/mnt/persist/chensiyu/workspace/develop-worktrees/qkv-prerope-mix
 ```
 
-本轮普通 fast-forward push 后复核远端为：
-
-```text
-f906526190dc2eca0d479f8e9fa9187ec6d31be9
-```
-
-本地两提交：
-
-```text
-21d928b9e257f14aeb4b151cdcea720083f460d0
-  perf(step3p5): fuse decode attention mixed kernels
-
-f906526190dc2eca0d479f8e9fa9187ec6d31be9
-  Update: parallelize step3p5 SWA RMSNorm
-```
-
-全部设备验证固定使用下列 immutable 镜像：
+固定验证镜像：
 
 ```text
 manifest sha256:076af8a167405d5d0831e234cd16521c77d8bfdd173eff063d820802057c47f3
 config   sha256:a9d111880883cea0b02e425fdfeaccc2b14bb1d1174c0b73488d8ee6d8004d39
 ```
 
-镜像内 `pypto-lib` 仍为 `cb96747e`。候选代码通过只读 `/candidate`
-**source overlay** 编译、运行，`pypto` runtime 没有 overlay。不得写成该镜像包含
-`21d928b`/`f906526`，也不得写成新镜像已发布或 production release-qualified。
+镜像内 `pypto-lib` 仍为 `cb96747e`；候选是 read-only source overlay，runtime
+无 overlay。
 
-## 2. 本轮已完成
+## 3. 已通过的正确性门
 
-### 2.1 SWA RMSNorm 多核
+```text
+unit                    362 passed, 7 skipped
+whole compile           PASS
+focused correctness     PASS
+edge contexts           12/12 exact
+Q publication           Full/SWA 12/12
+heterogeneous contexts  [1,2816,2817] exact
+five-layer L3/L4        exact, finite, TP spread=0
+whole precision         exact, finite, token 14371
+```
 
-- `SWA_RMSNORM_ROWS_PER_TASK=2`，当前 storage capacity `BATCH=16` 产生 8 个
-  storage-capacity-row-derived logical tasks（非 active-token-derived）；
-- 每 task 处理 2 行 `[4096]`，设备上每 rank 为 8 blocks / 8 distinct cores；
-- 保持 16 个 256-element partial 的历史 left-fold 顺序；
-- 配置 fail-closed，只接受已校准的 grain=2；
-- strict block max `4.46 us`，logical-stage span max `4.90 us`，均 `<5 us`；
-- L3/L4 byte-exact、finite、TP spread=0。
+整网 A/B/A 三臂 hidden SHA256 均为：
 
-权威 metrics：
+```text
+567b206bb03d89f84020e1dddd61098a8f79f32f81b8f4fcf56443113e27f03e
+```
+
+因此可以明确回答“整网精度通过”；不能据此回答“性能集成通过”。
+
+## 4. 整网 ITL A/B/A
+
+合同：
+
+```text
+A1/A2 baseline  f906526190dc2eca0d479f8e9fa9187ec6d31be9
+B candidate     fa58b5cffe41b30d3f8d94482230867ee34b9e84
+BS              1
+context         65536
+blocks          512
+warmup/iters    10/100
+devices         8–15
+```
+
+结果：
+
+```text
+A1 p50             31.787 ms
+A2 p50             31.905 ms
+baseline center    31.846 ms
+half-range floor    0.059 ms
+B p50              33.194 ms
+delta              +1.348 ms / +4.233%
+delta/floor         22.85x
+precision           PASS
+performance         REGRESSION_BEYOND_BRACKET
+```
+
+证据：
 
 ```text
 /mnt/persist/chensiyu/workspace/perf-2026q3/
-  swa-rmsnorm-scan-20260811/rows2-pack32-final-failclosed2/target_metrics.json
-SHA256 b3d07bfc119529b037a77be7b57334a8903046e97bb4b58aadbc5c2830264180
+  attn-mix-device-gate-20260811/out/aba-bs1-ctx64k-20260812-102231/
+
+ABA_RESULT.json
+  sha256 065f67c889a5eb108c49770261ccadf4d8f2970882b657efafb205ee35d6510b
 ```
 
-### 2.2 Attention mixed kernels
+## 5. Fresh 前五层 DFX swimlane
 
-- Full：QK→typed mask/softmax→SV→segment-local recurrence 合入
-  `full_attn_mix`；跨 segment reduce/finalize 因并发写边界保留；
-- SWA：每 active row 一个 `swa_attn_mix`；
-- 旧 `full_qk_matmul/full_softmax/full_sv_matmul` 与
-  `swa_qk_matmul/swa_softmax/swa_sv_matmul/swa_online_softmax` 不再出现。
-
-Combined gate：
+运行时间为 2026-08-12 10:39:59–10:44:15（Asia/Hong_Kong），共生成 8 份
+merged swimlane。严格口径：
 
 ```text
-unit             357 passed, 7 skipped
-whole compile    PASS, num_blocks=512
-focused seal     PASS
-edge contexts    12/12 byte-exact
-Q-publication    12/12 PASS
-8-rank DFX       full_attn_mix=24, swa_attn_mix=1, split family=0
+start  = earliest layer-local *_qkv_proj Worker View ts
+finish = latest layer-local *_qkv_split_qknorm_rope Worker View ts+dur
+gate   = max(8 ranks × 5 layers) < 46.000 us
 ```
 
-最终 BS1/ctx64K A/B/A：
+结果：
+
+| Layer | Min us | Max us | Pass |
+|---|---:|---:|---:|
+| L0 Full dense | 41.46 | **54.54** | 7/8 |
+| L1 SWA dense | 38.90 | 43.14 | 8/8 |
+| L2 SWA dense | 38.66 | 40.02 | 8/8 |
+| L3 SWA MoE | 39.16 | 41.72 | 8/8 |
+| L4 Full MoE | 39.38 | 41.50 | 8/8 |
 
 ```text
-A1 baseline p50        32.222 ms
-B candidate p50        31.790 ms
-A2 baseline p50        32.330 ms
-baseline center        32.276 ms
-candidate delta        -0.486 ms / -1.506%
-verdict                IMPROVEMENT_BEYOND_BRACKET
-PRECISION_GATE         PASS
-hidden SHA, all arms   567b206bb03d89f84020e1dddd61098a8f79f32f81b8f4fcf56443113e27f03e
-tail token             14371
+total       39/40
+failed      rank7/L0 Full
+span        54.54 us
+over gate   8.54 us
 ```
 
-### 2.3 前五层 DFX swimlane
+只读诊断：
 
-最终 `f9065261` 已完成 L0–L4、BS1、ctx64K、8-rank source-overlay capture：
+- QKV 10 个 Worker slice 的单片 kernel duration 与其它 rank 一致；
+- fused task 实际 compute `6.44 us`，也与其它 rank 一致；
+- rank7 在 QKV 发射窗口出现约 `12 us` AICPU scheduler dispatch stall，导致
+  projection family span `44.68 us`；
+- deps 与 lineage 完整，前驱已完成；
+- 该 launch skew 是端到端 stage latency，不能从 strict gate 中剔除。
+
+证据：
 
 ```text
-DFX_CAPTURE                  PASS
-PRECISION_GATE               PASS
-MIXED_ATTENTION_INVENTORY    PASS
-SWA_RMSNORM_MULTICORE_LT_5US PASS
-CANONICAL_STRUCTURAL_GATE    FAIL_CLOSED
-DELIVERY_STATUS              LIMITED_NOT_RELEASE_QUALIFIED
-candidate container rc       1 (postprocess analyzer fail-closed)
+/mnt/persist/chensiyu/workspace/perf-2026q3/
+  qkv-prerope-postmerge-validation-20260811-r1/five_layer/
+
+analysis_final/attention_gate_report.json
+  sha256 0b5cbe2064663d179a509739e8c6ccd89777c839fcaca1023c4d1403c3a025a1
+
+analysis_final/attention_gate_report.md
+  sha256 f00149e36403e264018abd55fee4531672535a4b517dd43e5a052a78715c582e
 ```
 
-- L3/L4 对 baseline byte-exact、finite、TP spread=0；
-- LOW-WAIT rank2 makespan `2.124 ms`；
-- L3 RMSNorm 为 8 tasks / 8 distinct cores；全 rank最坏 slice/span
-  `4.28/4.30 us`；
-- L0/L4 Full 各 24 mixed blocks；L1/L2/L3 SWA 各 1 mixed block；
-  forbidden split Attention family=0。
+外层 runner `rc=0`；candidate container `rc=1` 仍包含 canonical zero-route
+missing-swim record 限制。独立 analyzer 本轮也返回 `rc=1`，原因是 39/40 性能门
+失败；其 structural inventory/dependency/legacy 子门为 PASS。
 
-限制必须保留：rank0/1/3/6 各有 5 个零本地 routed-token 的 early-dispatch task
-没有 AICore swim record，canonical structural analyzer 因而 fail-closed；
-`candidate_dfx/container.rc=1` 来自该 canonical postprocess，而不是 runtime
-precision failure。不能把该 delivery 写成 structural PASS、cross-rank release seal
-或 production-qualified。
+## 6. 下一步
 
-## 3. 权威证据
+不要直接构建 `fa58b5cf` release image。所有代码和脚本仍只允许在 0162 完成。
+
+优先隔离两个变体：
+
+1. 恢复 SWA `head_gate_expand` 在 QKV projection 之前；
+2. 保留 fused split/QKNorm/RoPE，但恢复独立 Q 与 KV projection task。
+
+每个变体：
+
+1. 先跑 candidate-only whole ITL 筛选；
+2. 对最终候选跑同口径 A/B/A；
+3. 重跑 unit/compile/focused exact/Q-publication；
+4. 重跑 fresh 8-rank×5-layer strict `<46 us`；
+5. 只有整网无回退且 40/40 后才考虑 immutable image。
+
+如果 packed projection 持续造成整网回退，应明确 NO-GO，只保留 fused
+split/QKNorm/RoPE。
+
+## 8. 待续：tp-all-reduce barrier-mesh → ring（0162，2026-08-12）
 
 ```text
-combined unit
-  /mnt/persist/chensiyu/workspace/perf-2026q3/
-  combined-attn-rmsnorm-unit-f906526/
-  pytest.log SHA256 09d0e695b3448e65f7ce361bdee24a4c26bc0f683d4149bc212a013d502a1f18
-
-combined whole compile
-  /mnt/persist/chensiyu/workspace/perf-2026q3/
-  compile-combined-f906526-nb512-direct-20260812/
-  compile.log SHA256 fad61e08f2640761b8182810f805903e9da583037459e202802b69cea13ec700
-
-focused correctness / Q-publication / DFX
-  /mnt/persist/chensiyu/workspace/perf-2026q3/
-  attn-mix-device-gate-20260811/out/focused-combined-20260812-001101/
-  FOCUSED_CLEAN_SEAL.json SHA256
-  ff8cd797a5eb4a7ff41731c48fe3f10fc58bb5cfb8f8743b218506f2609d721d
-
-final A/B/A
-  /mnt/persist/chensiyu/workspace/perf-2026q3/
-  attn-mix-device-gate-20260811/out/aba-bs1-ctx64k-20260812-001854/
-  ABA_RESULT.json SHA256
-  7eca25b23d3d944a841433a43f65cd5a4c829b9341984b5d58410388f08c4c80
-
-five-layer DFX limited delivery
-  /mnt/persist/chensiyu/workspace/perf-2026q3/
-  five-layer-dfx-combined-f906526-20260811-final-v4/delivery/
-  ALL_RANKS_swimlane_bundle.tar.gz SHA256
-  d6f689c73b7ecb19b7febbf019a99baea4f96d59a778b37bfecacadbdc00def5
-  LOW_WAIT_rank2_bundle.tar.gz SHA256
-  e0bb2cc2beaa196b52547a04019d69720c0cb410b57b1c64524a476d09cd6d9a
-  DFX_DELIVERY_SEAL.json SHA256
-  088cf05ffbff717fd6da9fcf443122da88c4c9373c41276e4f5ae8dbfa51eb94
-  DFX_DELIVERY_REPORT.json SHA256
-  7bc5811da7cf543d3ddf812ee90e8297c3238ce0e7b24160899c19584fc29688
+源 fa58b5c -> 分支 perf/tp-allreduce-ring-20260812 (pypto-lib a791071)
+状态：ring 8 卡 compile OK；端到端 harness 受 pre-existing 镜像 pypto 配对 gate
+     拦截（原始 barrier-mesh 同样失败），ITL 未在本镜像跑通。
 ```
 
-完整说明：
-[`../benchmark/2026-08-11-step3p5-attention-mix-rmsnorm.md`](../benchmark/2026-08-11-step3p5-attention-mix-rmsnorm.md)。
+任务：vllm-ascend 用 `hcclAllReduce`（HCCL V2 选 ring/tree，stream overlap）做 TP
+all-reduce；pypto 现行 attention o_proj/shared-expert 末尾手写 **barrier-mesh**
+（stage-in → 全局 barrier → 逐 chunk 全 mesh 读），跨卡 DMA ~4× 于 ring。对照
+`/data/chensiyu/hw_project/hccl` 已实现算子，改造为同族 ring reduce-scatter +
+all-gather（2(N-1) 步，每步独占信号 cell、非单调 Set(1)/Ge(1)，刻意避开当初
+ring→barrier 的 codegen 507018 根因）。信号窗 `tp_size` → `2*(tp_size-1)+1`。
 
-## 4. 下一步
+```text
+files:  models/step3p5/attention_full.py, attention_swa.py
+docs:   pypto-lib/docs/upstream-issues/step3p5-tp-allreduce-ring-refactor.md
+        (0162)；local design/vllm-pypto/04-tp-allreduce-ring-refactor.md
+```
 
-源码集成与远端 push 已完成。后续若继续做发布工作：
+- 8 卡 `_stage_two_layer_attn` harness 跑出 `compile OK in 1.4s`（ring 被编译器真
+  实接受）；codegen-contract / chip_orch.cpp 编排编译两项 gate 与原始 baseline 同败
+  （pre-existing，非本改造引入）。
+- 待办：配平镜像上重跑 ITL；同模式扩展 moe.py (T/N_RANKS)、mtp_hidden_fwd.py、
+  prefill_attention_*；collectives.py 的 @pl.jit.inline ring 同步改非单调 Set。
+- 复现脚本在 0162 `/mnt/persist/chensiyu/workspace/ar_bench/`（仅 0162）。
 
-1. 以 `f9065261` 制作新的 immutable image，并在 **无 source/runtime overlay**
-   口径复跑 audit、compile、focused correctness/DFX、RMS strict timing 和 A/B/A。
-2. production release qualification 仍需完整 Main/MTP、N=128 多步 oracle 和所需
-   batch/context matrix；本轮 source-overlay GO 不替代这些门。
-3. RMS grain 只支持 2；若扩展到其他 storage capacity/grain，必须重新证明 UB、
-   reduction order、核映射、精度与 strict `<5 us`。
+## 7. 机器与约束
 
-## 5. 机器收尾
+当前验证 session 已结束，cards 8–15 的容器与进程已清理；后续启动前仍须重新检查
+锁、容器、fuser 与 NPU process，不能沿用旧空闲结论。
 
-- 最终 DFX 后相关 campaign lock 均已释放；
-- `npu-smi info` 显示 NPU 0–15 均 `No running processes found`；
-- `nerdctl ps` 为空，未发现本轮遗留的 Attention/RMSNorm/DFX 测试进程。
+禁止事项：
+
+- 本地创建/修改代码或测试脚本；
+- 先在本地写脚本再复制到 0162；
+- 用历史 40/40 覆盖 fresh 39/40；
+- 用独立 analyzer 的 structural 子门覆盖 canonical fail-closed；
+- 用局部五层变快推断整网 ITL 变快。
