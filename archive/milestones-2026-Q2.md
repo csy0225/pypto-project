@@ -1,5 +1,27 @@
 # Milestones —— 2026 Q2
 
+## 2026-08-12 —— TP all-reduce single-row selector 合入，source-overlay GO ✅
+
+`pypto-lib stepfun/develop` 已普通 fast-forward 到
+`69ad31e4fd6e40b30e43c2566ce8f8ebd0b2427d`（parent `9ca01d2`，tree
+`e26d762c…`）。Main 的 rank-uniform `active_rows == 1` 走静态 8 KiB 两波
+one-shot mesh；其他 Main 行数与 MTP 保留静态三波 reduce-scatter +
+push-all-gather fallback；ownership 固定为 `HIDDEN // TP_WORLD_SIZE`，与 transfer
+chunk 解耦。`dense_mlp_body_tp` 新增 `num_tokens` 源码实参，仓外调用方升级时也须补齐。
+
+- unit `365 passed, 7 skipped`；
+- Whole 与 MTP 3/3 在 default/chunk=256 下 compile PASS；
+- 8 卡 rows `1/3/16` 功能门 PASS；
+- Whole BS1/ctx64K A/B/A=`31.065/29.912/30.999 ms`，candidate
+  `-1.120 ms / -3.609%`，precision/per-iteration PASS；
+- focused `38.325→22.667 µs/call` 仅为 regular-call kernel-duration pooled
+  mean 的机制证据，不是 strict critical-tail；
+- 固定镜像内仍为 `pypto-lib@cb96747e`，所以这是 source-overlay GO，不是包含
+  `69ad31e4` 的 immutable-image release qualification。
+
+旧 `a791071` Ring 实验是未命中 production canonical body 的 A/A；K6b
+dynamic-valid-shape 未落地。后续只做 immutable-image qualification，不恢复两条旧路线。
+
 ## 2026-08-11 —— K8 immutable image 发布 + 0162 双精度门/ITL/五层 swimlane ✅
 
 **镜像**：`hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260811-k8-selective`，
@@ -1278,6 +1300,7 @@ max|value|=0`（dummy zero weight 期望零输出）。Run time 6.69s。
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------|-----------|
+| 2026-08-12 | TP all-reduce single-row selector 合入；source-overlay Whole A/B/A GO，尚无新 immutable image | `stepfun/develop:1c048a74` | `stepfun/develop:69ad31e4` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
 | 2026-06-25 | Step3p5 BF16 0~47 detail precision PASS | `stepfun/develop:b00c8b23` | `stepfun/develop:d4c01b9` | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-06-24 | CANN 9.0.0 non-GA + DecodeLayerMoE 8卡 ST | `stepfun/develop:b00c8b23` | `stepfun/develop:cfe2093` | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
 | 2026-06-22 晚 | pypto-project 仓建立 | `develop:b00c8b23` | `develop:9c4773f` | `develop:e25732f0` | `develop:da011a3d` | `a6e06406` | `v0.45` |

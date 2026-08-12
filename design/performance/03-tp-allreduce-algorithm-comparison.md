@@ -1,14 +1,18 @@
 # TP all-reduce 算法对比 —— step3p5 维度真机实测
 
-> **⚠ 时效声明（2026-08-05）**：本文 §1–§6 写于 2026-07-27，其中的「**现状**」指的是
+> **⚠ 时效声明（2026-08-12）**：本文 §1–§6 写于 2026-07-27，其中的「**现状**」指的是
 > **C4 落地之前**的 onephase mesh。C4 已把算法换成 reduce-scatter + push all-gather
 > （2026-07-28），Wave5 又加了 self-target TPUT（2026-08-03，`stepfun/develop@7099476b`）。
-> **算法层面现在已是最优**（每卡远程字节 224 KB = 理论下界 `2(P-1)/P × N`）。
+> §7 对「算法层面已最优」的判断只适用于完整多行 payload；2026-08-12 又为单行
+> 8 KiB payload 增加了 HCCL selector 思路的 one-shot mesh 快路径。
 > 读本文请把 §1–§6 当作**算法选型的推导过程与实测依据**；
-> **当前实现、剩余瓶颈与后续候选见 [§7](#7-wave5-之后剩余瓶颈与后续候选2026-08-05-复核)**。
+> Wave5 复核见 [§7](#7-wave5-之后剩余瓶颈与后续候选2026-08-05-复核)，
+> **最新实现与最终验证结论以 [§8](#8-hccl-small-message-selector-思路迁移版2026-08-12) 为准**。
 >
-> 另有两处口径必须先看 §7.1，否则会把优先级排错：
-> ① `tp_all_reduce` 在 ctx=65536 只占 device span **1.84%**（不是早期误判的 74.1% wall）；
+> 另有两处历史口径必须先看 §7.1，否则会把旧实验读错：
+> ① Wave5 capture 中 `tp_all_reduce` 在 ctx=65536 占 device span **1.84%**
+> （不是早期误判的 74.1% wall）；该比例绑定旧实现与旧采样，**不是** §8 最终
+> selector 的绝对收益上限；
 > ② profiling 把 barrier **自旋等待计入 kernel compute**，所以「每次 40+ µs」里有一大部分是等 peer，不是它自己的算术耗时。
 
 > **一句话结论（2026-07-27 视角，已被 §7 更新）**：step3p5 decode 里每层都要做的 `tp_all_reduce`（8 卡把各自的部分和加起来、再让每张卡都拿到完整结果），
@@ -31,7 +35,7 @@
 | **TP（tensor parallel，张量并行）** | 把一个大权重矩阵按列/行切成 8 份，8 张卡各算一部分。step3p5 用 TP=8。 |
 | **all-reduce（全规约）** | 一种集合通信：每张卡手里有一份「部分结果」，all-reduce 之后**每张卡都拿到「所有卡部分结果的和」**。step3p5 里 attention 的 `o_proj`、MoE 的 shared expert 算完都是部分和，必须 all-reduce 求和后才能接残差 + 下一层 RMSNorm。 |
 | **P / n_ranks** | 参与通信的卡数。这里 P=8。 |
-| **N** | 要规约的数据量。这里是 hidden 张量 `[BATCH=16, HIDDEN=4096]` 的 BF16，约 128 KB。 |
+| **N** | 要规约的数据量。历史 §1–§7 的完整 capacity payload 是 `[BATCH=16, HIDDEN=4096]` BF16，约 128 KiB；§8 的 decode 单行快路径是 `[1,4096]` BF16，8 KiB。 |
 | **rank / peer** | rank = 「我是第几张卡」；peer = 「除我之外的其它卡」。 |
 | **reduce-scatter（规约-分散）** | all-reduce 的前半步：P 张卡把数据切成 P 段，第 r 张卡只负责把「第 r 段」从所有卡收齐并求和。结束后每张卡手里有「一段已经加好的结果」。 |
 | **all-gather（全收集）** | all-reduce 的后半步：每张卡把自己那段加好的结果广播给所有卡，最后每张卡拼出完整结果。**reduce-scatter + all-gather = 一次完整 all-reduce**。 |
@@ -43,7 +47,7 @@
 | **signal window（信号窗口）** | 一小块跨卡可见的 INT32 内存，专门放 barrier 用的计数器。`alloc_window_buffer` 分配时会清零。 |
 | **UB（Unified Buffer）** | AICore 上的片上高速缓存，容量很小（约 188 KB）。一个 tile 的工作集超过它就编不过（`Vec buffer usage exceeds platform limit`）。 |
 | **FP32 累加** | 8 个 BF16 部分和直接用 BF16 相加会掉精度，所以先 `cast` 成 FP32 累加、最后再 `cast` 回 BF16。 |
-| **`pl.range` vs `pl.parallel`** | pypto 的两种循环：`pl.range` 是**串行**循环（一轮接一轮）；`pl.parallel` 是**并行**循环（把每轮映射到不同 AICore 核上同时跑）。仅当各轮之间**互不依赖**时才能用 `pl.parallel`。 |
+| **`pl.range` vs `pl.parallel`** | pypto 的两种循环标注；是否真的并行取决于所在层级和 codegen。Orchestration 层可映射为多 task/core；本专项实证 InCore AIV codegen 不消费 `ForKind`，把 notify/wait 扇出从 `pl.range` 改成 `pl.parallel` 会生成逐字节相同的代码（见 §7.3），不能仅凭源码标注宣称并行。 |
 | **device_wall.sched** | simpler runtime 打的 DFX 计时点，表示这次 kernel 在**设备上**真正执行调度的墙钟时间（单位 ns）。这是我们唯一可信的耗时指标（见 §3）。 |
 
 ---
@@ -790,6 +794,10 @@ done
 
 ## 7. Wave5 之后：剩余瓶颈与后续候选（2026-08-05 复核）
 
+> **历史章节，已被 §8 supersede。** 本节的 16-row 成本、1.84% span、C5/C6/C7
+> 排序和「完整 payload 已到字节下界」只描述 Wave5 静态三波实现，不能外推到
+> `active_rows == 1` 的 8 KiB one-shot mesh，也不再是当前实施清单。
+>
 > 复核基准：`pypto-lib stepfun/develop@7099476b`（Wave5，0162 release-qualified）。
 > 本节所有 file:line 均直读该分支源码；标注「未复验」的条目是 agent 调查结论，未逐行确认。
 
@@ -1007,6 +1015,10 @@ all-reduce 是 o_proj 之后一个独立 task，期间 47 核空转。对比 vLL
 `tp_all_reduce` 在 ctx=65536 只占 device span **1.84%** / busy **2.33%**。
 **即使把 collective 干到 0，64K ITL 也只降 1.84%。** 上一轮 C4 实测正是 ctx≤4096 −3.6%、64K 预期 <1%。
 
+> **2026-08-12 纠偏**：这段“天花板”只绑定 Wave5 的旧镜像、旧 DFX 分母与静态
+> 三波实现，不能外推到 §8。最终 selector 的同机 source-overlay Whole A/B/A
+> 实测为 `-3.609%`；因此本段只保留为当时的优先级判断，不再作为当前上限。
+
 因此建议顺序：
 
 1. **先测，别先改**：把 3 个 wave 拆成独立时间戳，把「自己的耗时」和「等 peer 的耗时」分开
@@ -1014,3 +1026,155 @@ all-reduce 是 o_proj 之后一个独立 task，期间 47 核空转。对比 vLL
    （`combine_wait` 13.4 ms = device 时间 24%），不是这个 collective。
 2. 自身耗时确实占大头再走 **C5 → C6 → C7**；C7 需先 rebase 拿 bf16 atomic-add。
 
+## 8. HCCL small-message selector 思路迁移版（2026-08-12）
+
+> PyPTO 落地版本：`pypto-lib stepfun/develop@69ad31e4fd6e40b30e43c2566ce8f8ebd0b2427d`
+> （基线 `9ca01d2`）。
+
+### 8.1 边界：迁移的是选择思路，不是 HCCL executor
+
+本轮参考的是
+`/data/chensiyu/hw_project/hccl@f8a396dd95d7f9e44063d5f358925d0678ec3a58`
+中按消息规模选择 collective 算法的思路，并在 PyPTO 现有
+TP window/notify/remote-load 原语上重新实现。必须明确：
+
+- 没有复制或调用 HCCL C++ executor；
+- vLLM 侧只调用 `HcclAllReduce`，这一层看不到 HCCL 最终选择了哪个 executor；
+- 真实 executor 选择必须以运行时 HCCL 日志为准。因此不能声称
+  “TP=8、8 KiB 在 HCCL 中一定选择 one-shot”，只能称为
+  **HCCL small-message selector 思路迁移**。
+
+HCCL 新版非零消息的 out-of-place 路径在排除兼容回退、cache replay、CCU
+fast-launch 与单卡分支后，调用与选择链路是：
+
+```text
+HcclAllReduce
+  → AllReduceOutPlace
+  → AllReduceOutPlaceCommon
+  → Selector(..., algName)
+  → HcclExecOp(..., algName)
+  → 已注册 executor/template
+```
+
+对应入口在 `src/ops/all_reduce/all_reduce_op.cc`，自动选择器在
+`src/ops/all_reduce/selector/all_reduce_auto_selector.cc`。它不是固定 Ring，
+而是综合通信引擎、拓扑/RankGraph、网络层数、rank 数、数据量、dtype、reduce op、
+in-place 与确定性模式后选择实现。该提交可见的主要族包括：
+
+| HCCL 实现族 | 源码中体现的用途 |
+|---|---|
+| Mesh 1D one-shot / two-shot / two-shot mesh-chunk | 单层 mesh 按引擎与消息规模切换；two-shot 走 reduce-scatter + all-gather |
+| NHR | CLOS、非规则层级或 selector 回退路径 |
+| Parallel RSAG | 多层/大消息并行执行 reduce-scatter 与 all-gather |
+| Sequence | 分层串联 Mesh/NHR/DPU 阶段 |
+| Concurrent | Mesh 与 CLOS/NHR 两路并发 |
+| OmniPipe / OmniPipe 2D | 多层或二维拓扑的流水化 RS/AG |
+| OrderPreserved | `DETERMINISTIC_STRICT` 下的保序路径 |
+
+例如 AIV 的板内 `rank_size <= 8` 分支会以 128 KiB 为拐点在 Mesh one-shot 与
+two-shot 之间选择；AICPU、CCU 还有各自阈值和适用条件。这个例子只证明 HCCL
+确实采用「小消息 one-shot、大消息换协议」的 selector 结构，不等于本轮 vLLM
+调用在实际环境中必然命中 AIV 的该分支。
+
+本节数据来自固定 immutable 镜像上的 **source-overlay validation**，不是重新构建
+或发布了包含该实现的新镜像。
+
+### 8.2 最终 PyPTO selector
+
+Main 根据所有 TP rank 一致的 `active_rows` 选择两条协议：
+
+1. **`active_rows == 1`：两波 one-shot mesh**
+   - payload 为 `1 × 4096 × BF16 = 8192 B = 8 KiB`；
+   - 先用静态 `1 × HIDDEN` self-TPUT 发布本 rank 完整行；
+   - Wave 1 完成 publication notify/wait；
+   - 按 rank `0..7` 顺序 remote-load 完整行，使用一个 FP32 accumulator，
+     最后只做一次 BF16 cast；
+   - Wave 2 在所有远端读取完成后闭合 window 生命周期。
+2. **`active_rows != 1`：静态三波 fallback**
+   - 保留 reduce-scatter + push all-gather；
+   - Wave 1 发布 source partial，Wave 2 发布 reduced shard，Wave 3 保护最终
+     local read；
+   - fallback 的物理传输 shape 保持静态，不再依赖 runtime valid shape。
+
+reduce-scatter ownership 固定为
+`TP_ALL_REDUCE_OWNED_CHUNK = HIDDEN // TP_WORLD_SIZE`。它与可调的
+`TP_ALL_REDUCE_CHUNK` 完全解耦：后者只控制 TPUT staging 和 final-copy transfer
+grain。这样 `chunk=256` 不会只归约半个 hidden，其他合法 transfer chunk 也不会改变
+rank ownership。
+
+MTP 保留共享 all-reduce ABI，但当前三个调用都传静态 `BATCH`，因此明确使用静态
+三波 fallback；本轮不宣称 MTP 命中或受益于 single-row selector。
+
+为把 selector 输入贯穿 dense 路径，`dense_mlp_body_tp` 的源码调用 ABI 在
+`mlp_layer_idx` 后新增 `num_tokens: pl.Scalar[pl.INT32]`。仓内 Main 调用传运行时
+`num_tokens`，MTP 调用传静态 `BATCH`。仓外直接调用或 inline 该 body 的代码升级
+到 `69ad31e` 时必须补该实参。
+
+### 8.3 focused five-layer 机制证据（历史对照）
+
+早期 focused K6b-vs-smallmesh DFX 中，regular call 的 kernel-duration
+pooled mean 对照为：
+
+| 实现 | regular-call kernel-duration pooled mean |
+|---|---:|
+| K6b | 38.325 µs/call |
+| smallmesh | 22.667 µs/call |
+| 差值 | **-40.9%** |
+
+这里的单位是 **微秒（µs）而不是毫秒（ms）**。统计样本为 8 ranks × 7 个
+regular calls（56 个 kernel-duration-us 值）的 pooled mean；排除了 index 0
+首次同步污染以及 calls 7/9 的 local-setup 大值。它**不是** K1 定义的 strict
+critical-tail 指标；首次调用的 77–449 ms 启动/同步长耗时也不能解释成 smallmesh
+协议耗时。该数字只用于解释 one-shot mesh 的机制收益，不代表 focused run 的完整
+source tree 就是最终 `69ad31e`，也不替代 §8.4 的最终 tree-equivalent Whole A/B/A。
+
+### 8.4 Whole 有效 A/B/A
+
+持 full-machine lock、确认两半机空闲后，有效 Whole A/B/A 结果为：
+
+| arm | 实现 | Whole ITL |
+|---|---|---:|
+| A1 | `9ca01d2` static three-wave baseline | 31.065 ms |
+| B | smallmesh candidate | 29.912 ms |
+| A2 | `9ca01d2` static three-wave baseline | 30.999 ms |
+
+两次 baseline 均值为 `31.032 ms`，candidate 相对该均值：
+
+- 绝对收益：**-1.120 ms**
+- 相对收益：**-3.609%**
+
+三臂的 precision gate 和逐迭代 gate 均 PASS；因此这里使用的是完整有效 A/B/A，
+而不是此前 A2 退化为 token 91 的无效 run。B 臂被测 commit `b67afe77` 与最终
+landing `69ad31e` 的 tree 均为
+`e26d762cb8c4abd49a1546e7db2beddeb6480e14`。
+
+### 8.5 最终验证矩阵
+
+| 验证项 | 结果 |
+|---|---|
+| `tests/step3p5/unit` | **365 passed, 7 skipped** |
+| Main/Whole compile | default chunk 与 `TP_ALL_REDUCE_CHUNK=256` 均 PASS |
+| MTP compile | 3/3 programs；default 与 chunk=256 两套配置均 PASS |
+| 8 卡 active-row device gate | rows `1/3/16` 均 PASS；覆盖 one-shot 与静态 fallback |
+| five-layer | L3/L4 exact、finite、TP spread=0；提取了 regular-call kernel-duration pooled mean |
+| Whole A/B/A | 三臂 precision/per-iteration gate 全 PASS |
+
+其中 chunk=256 的 compile matrix 是 ownership/transfer-grain 解耦的必要回归门；
+rows `1/3/16` 则分别覆盖 single-row selector 和两种 multi-row fallback 规模。
+device matrix 未持性能锁，仅作为功能与协议正确性证据；Whole A/B/A 持有全机及两半机
+三个锁，才用于上面的性能结论。five-layer 结论不覆盖既有 zero-token canonical
+structural fail-closed。
+
+权威产物：
+
+```text
+/mnt/persist/chensiyu/workspace/perf-2026q3/
+  tp-allreduce-hccl-smallmesh-validation-20260812/final-static-fallback/
+
+whole-aba/out/final-aba-bs1-ctx64k-20260812-174433/ABA_RESULT.json
+  sha256 383caa23124c7da42d676ef642bc8b488344349564fd4131efa560c6b5ea3757
+```
+
+固定验证镜像 manifest/config 分别为 `sha256:076af8a1…c47f3` /
+`sha256:a9d11188…4d39`；镜像内不包含 `69ad31e`，所以本节仍是 source-overlay
+validation，不是 immutable-image release qualification。

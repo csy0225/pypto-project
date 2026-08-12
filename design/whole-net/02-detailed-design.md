@@ -8,6 +8,11 @@
 > `pypto-lib(-live)/tools/step3p5/`。行号锚定 2026-07 clean pin（见
 > [`../../reference/canonical-test.md`](../../reference/canonical-test.md) 的 pin），
 > 重构后如漂移以符号名为准。
+>
+> **2026-08-12 TP all-reduce 增量说明**：当前
+> `pypto-lib stepfun/develop@69ad31e4`；本轮只把共享 dense ABI 与 §6 的
+> TP all-reduce 更新到该提交。其它章节仍锚定 2026-07 历史生成链，不得据此推断
+> 当前完整 topology；当前全局状态以 [`../../STATUS.md`](../../STATUS.md) 为准。
 
 ## 1. 单 `@pl.program` canonical 结构
 
@@ -19,7 +24,7 @@
 | 模块 binding | `whole_decode_step3p5 = WholeDecodeStep3p5` |
 | host_orch | 输出 `next_hidden_out[tp,BATCH,HIDDEN]` BF16（**pre-final-norm**，无 lm_head） |
 | 重复层结构 | L1/L2 与 L3-L42 使用 runtime `pl.range`；L0/L43/L44 显式 specialization |
-| 共享 dense kernel | `models/step3p5/dense_mlp.py:dense_mlp_body_tp`，供 Main/MTP inline |
+| 共享 dense kernel | `models/step3p5/dense_mlp.py:dense_mlp_body_tp`，供 Main/MTP inline；`69ad31e4` 起在 `mlp_layer_idx` 后新增 `num_tokens` 实参 |
 | 诊断 | 仅在 `tests/step3p5/probes/`，产品 program 不含截断/debug ABI |
 
 - **strict raw-hidden 边界**：整网跑完 Main 45 层，输出 pre-final-norm hidden；
@@ -98,12 +103,29 @@ SiLU / SwigluStep@7）、`expert_shared.py`。
 生成器把它拼进 builder：`_gen_faithful_real.py:496` `FRESH_QUANT_MOE_INPUT` 模板。
 > 背景：早期"in-expert 量化"路径在 device 上 miscompile（gap-5），已切到 dispatch-side quant。见 [`../../postmortems/10-gap5-attention-quant-scope.md`](../../postmortems/10-gap5-attention-quant-scope.md)。
 
-## 6. 通信、per-layer window、512B signal、两波 barrier
+## 6. 通信、per-layer window 与 TP all-reduce selector
 
-- **per-layer window**：每层新分配 `_L{pos}` 前缀 buffer（`attn_tmp_buf_L0` / `pub_counts_buf_L0` / `recv_x_buf_L0` / `combine_done_buf_L0` / `routed_y_window_buf_L0` …，`decode_layer.py:27761+`，`_L1`…`_L41` 重复）；dense 前缀层用 `l0_/l1_/l2_`。**死的旧 alloc 必须删**（否则 `MaterializeCommDomainScopes` 报错）。
-- **512B signal**：`COMM_CONTROL_SIGNAL_BYTES=512`（`decode_layer.py:24895`），逻辑 `[tp,1]` INT32，物理独占 cache line。
-- **`tp_all_reduce` 四相**（`decode_layer.py:24905-24980`）：① stage-in（`ar_chunk=HIDDEN//8`）② notify(AtomicAdd+1)→wait(Ge 1) ③ own-load + `remote_load` + FP32 tadd ④ 完成 barrier(AtomicAdd+1→wait Ge 2)。第 ④ 波由 `tools/step3p5/_add_allreduce_completion_wave.py` 加（单波在 ≥41 层挂）。
-- collectives 全用 `pld.tile.remote_load` + `pld.system.notify/wait`（`NotifyOp.AtomicAdd`/`Set`，`WaitCmp.Ge`）。
+- **stacked all-reduce window**：dense attention/MLP 与 MoE attention/shared-expert
+  各自分配 tmp/signal stack，再按 layer offset 切出 `[BATCH,HIDDEN]` tmp slice 和
+  一个 signal slice；不是旧生成链的每层独立 `_L{pos}` alloc。
+- **512B signal stride**：`COMM_CONTROL_SIGNAL_BYTES=512`，
+  `COMM_SIGNAL_STRIDE_I32=128`；每个逻辑 signal slice 为 `[128,1]` INT32，
+  物理独占 512 B。
+- **Main 单行 selector**：所有 TP rank 一致的 `active_rows == 1` 时，静态
+  `1×4096` self-TPUT → Wave 1 publication → 固定 rank `0..7` 顺序完整行
+  remote-load + 单 FP32 accumulator → 一次 BF16 cast → Wave 2 completion。
+- **静态 fallback**：Main `active_rows != 1` 与 MTP 都走静态三波
+  reduce-scatter + push all-gather + final local copy。MTP 三个调用传静态 `BATCH`。
+- **ownership 与 transfer grain 解耦**：
+  `TP_ALL_REDUCE_OWNED_CHUNK = HIDDEN // TP_WORLD_SIZE = 512` 决定 rank ownership；
+  `TP_ALL_REDUCE_CHUNK` 只决定 self-TPUT/final-copy 搬运粒度。
+- **rank-uniform 合同**：同一次 collective 的所有 rank 必须得到相同
+  `active_rows`，否则 selector 分叉会死锁。
+- **dense 调用 ABI**：仓内 Main 给 `dense_mlp_body_tp` 传运行时 `num_tokens`，
+  MTP 传静态 `BATCH`；仓外 direct/inline 调用方升级时必须同步补该实参。
+- collective 数据面按 selector 分支使用 `pld.tensor.put`、`pld.tile.remote_load`
+  与 `pld.tile.remote_store`，控制面使用 `pld.system.notify/wait`
+  （`NotifyOp.AtomicAdd`/`Set`，`WaitCmp.Ge`）。
 
 ## 7. KV 与权重（数据结构 + IPC）
 
@@ -127,7 +149,7 @@ SiLU / SwigluStep@7）、`expert_shared.py`。
 | gate / dispatch / combine | `gate.py:112` / `dispatch.py:140+` / `combine.py:95+` |
 | INT8 transform | `tools/step3p5/_a5_int8_transform.py` |
 | dispatch/combine pull patch | `tools/step3p5/_patch_moepy_dispatch.py` / `_patch_combine_pull.py` |
-| 两波 barrier patch | `tools/step3p5/_add_allreduce_completion_wave.py` |
+| TP all-reduce 当前算法与验证 | [`../performance/03-tp-allreduce-algorithm-comparison.md`](../performance/03-tp-allreduce-algorithm-comparison.md#8-hccl-small-message-selector-思路迁移版2026-08-12) |
 | weight/KV IPC | `tools/step3p5/pypto_weight_ipc.py` / `pypto_kv_ipc.py` |
 | holder | `tools/step3p5/whole_decode_holder.py` |
 | host 侧 final norm+lm_head（standalone argmax） | `tools/step3p5/final_logits_from_vllm.py` |
@@ -135,10 +157,12 @@ SiLU / SwigluStep@7）、`expert_shared.py`。
 
 ## 9. 不变量清单（改代码前对照）
 
-1. 只有一个 whole-net `@pl.program`；per-layer 通信 buffer 用 `_L{pos}` 且层间不复用。
+1. 只有一个 whole-net `@pl.program`；TP all-reduce tmp/signal 使用 dense/MoE
+   family stack，并以 layer offset 切出互不别名的 per-layer slice。
 2. routed 权重 INT8 + FP32 scale；不引入 BF16-dequant。
 3. dispatch/combine 都是 pull；pull 循环用静态 bound + compound-scalar 定槽，不读 runtime count。
-4. `tp_all_reduce` 保留两波完成 barrier。
+4. `tp_all_reduce` 保留 rank-uniform selector：单行静态两波；其他 Main/MTP
+   静态三波；固定 peer 顺序、FP32 累加、ownership/transfer-grain 解耦不得改变。
 5. 生成器改动后必须 strip→regenerate→byte-compare（roundtrip gate）。
 6. 单卡 ST/UT 用 `apply_perrank_patch()`（保 TP=8 per-rank slice 宽度），不用 unslice。
 

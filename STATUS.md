@@ -19,10 +19,23 @@
 
 ## 1. 当前源码与 0162 本地集成
 
-> **2026-08-12 当前源码 tip：`e5e26f9f`，I7 调度修复已通过并合入。**
-> GitHub `csy0225/pypto-lib:stepfun/develop` 与 0162 指定 checkout
-> `/mnt/persist/chensiyu/workspace/develop/pypto-lib` 均为
-> `e5e26f9f5bf9184f97a4684ae7e865f1a8b0d228`，worktree clean。该提交在
+> **2026-08-12 当前源码 tip：`69ad31e4`，TP all-reduce small-message selector 已合入。**
+> GitHub `csy0225/pypto-lib:stepfun/develop` 与 0162 指定 checkout 均为
+> `69ad31e4fd6e40b30e43c2566ce8f8ebd0b2427d`（parent `9ca01d2`），clean。
+> Main 在 rank-uniform `active_rows == 1` 时走静态 8 KiB 两波 one-shot mesh；
+> 其他行数和 MTP 走完整静态三波 reduce-scatter + push all-gather fallback。
+> landing tree=`e26d762cb8c4abd49a1546e7db2beddeb6480e14`，`decode_fwd.py`
+> SHA256=`a17ae27440a4ff0e62f7fe8b6dc2d5548217ef617b0ddbccb927fda648600d01`。
+> Whole BS1/ctx64K A/B/A 为 `31.065 / 29.912 / 30.999 ms`，candidate 相对
+> baseline center `31.032 ms` 改善 `-1.120 ms / -3.609%`，三臂
+> precision/per-iteration gate PASS。
+> 这是固定 immutable 镜像上的 **source-overlay validation**；尚未构建包含
+> `69ad31e4` 的新镜像，TP all-reduce 最新完整 release-qualified 回退基线仍是
+> Wave5。
+
+> **2026-08-12 Attention I7 历史快照（已由后续 `9ca01d2` 与 `69ad31e4`
+> supersede）**：当时 GitHub 与 0162 checkout 均为
+> `e5e26f9f5bf9184f97a4684ae7e865f1a8b0d228` 且 clean。该提交在
 > `fa58b5cf` 上给 RMS producer 开 early resolve，并把非关键 head-gate 从
 > speculative fanout 隔离，优先预置 QKV。五层 8-rank 中 QKV Worker gap p50
 > 从 `+4.77 us` 变为 `-1.78 us`（setup 已在 RMS 完成前开始）；RMS raw-kernel
@@ -32,13 +45,14 @@
 > exact，candidate=`WITHIN_BASELINE_BRACKET`。这是相对 `fa58b5cf` 的 I7 GO，
 > **不覆盖下述 I6 相对 `f9065261` 的整体 NO-GO**；仍未构建新镜像。
 
-> **2026-08-12 I6 结论：源码已集成，但 packed QKV 整体性能验收 NO-GO。** 0162 候选
+> **历史 2026-08-12 I6 结论：源码已集成，但当时 packed QKV 整体性能验收
+> NO-GO。** 0162 候选
 > worktree `/mnt/persist/chensiyu/workspace/develop-worktrees/qkv-prerope-mix`
 > 的分支 `perf/qkv-prerope-mix-20260811` 已基于
 > `f906526190dc2eca0d479f8e9fa9187ec6d31be9` 提交为
 > **`fa58b5cffe41b30d3f8d94482230867ee34b9e84`**，并 fast-forward push 到
 > 当时的 `stepfun/develop`。该 I6 landing 时远端、0162 main checkout 与
-> candidate worktree 三者均指向 `fa58b5cf` 且 clean；当前 tip 已由 I7 前进到
+> candidate worktree 三者均指向 `fa58b5cf` 且 clean；该 Attention 快照随后由 I7 前进到
 > `e5e26f9f`。实现把 Full 的 10 个、SWA 的 14 个 Q/K/V
 > projection blocks 各自改为 packed QKV projection，并接一个
 > `qkv_split_qknorm_rope` mixed kernel，设备图收敛为
@@ -59,12 +73,12 @@
 > `pypto-lib` 仍为 `cb96747e`，没有构建包含本候选的新镜像。canonical analyzer
 > 仍因零本地 routed-token early-dispatch 缺记录返回 `rc=1`；独立 Attention
 > inventory/dependency audit 通过，但 timing gate 与整网性能门均失败。
-> 当前 `e5e26f9f` 链仍**不得构建为 release candidate，也不得把 I7 的局部调度
-> GO 写成 I6 整体性能集成成功**。
+> 该段只记录当时 `e5e26f9f` 的 Attention 判定；当前 all-reduce landing 与镜像边界
+> 以上方 `69ad31e4` 状态为准。
 
 > **2026-08-11 I6 landing 状态（历史）**：当时 GitHub 远端
-> `stepfun/develop` fast-forward 到 `fa58b5cf`；当前远端和 0162 指定 checkout
-> 已由 I7 前进到 `e5e26f9f`。固定 K8 镜像仍只包含 `cb96747e`；下述新代码是在该 immutable 镜像上通过
+> `stepfun/develop` fast-forward 到 `fa58b5cf`；该历史链随后由 I7 前进到
+> `e5e26f9f`，当前远端以 §1 的 `69ad31e4` 为准。固定 K8 镜像仍只包含 `cb96747e`；下述新代码是在该 immutable 镜像上通过
 > `/candidate` **source overlay** 编译和验证，不能写成镜像已包含新实现。
 
 ```text
@@ -74,10 +88,11 @@ image/source baseline  cb96747eb21f5f4932d6a24eddaa69c85d095ef6
   -> fa58b5cffe41b30d3f8d94482230867ee34b9e84  packed QKV + pre-RoPE epilogue
   -> 18d1b5197acf4829b171bfa144eb06e5b0cacfdf  RMS producer prestage
   -> e5e26f9f5bf9184f97a4684ae7e865f1a8b0d228  prioritize critical QKV prestage
+  -> 9ca01d243e534949287fa769e5be35031ebc4be7  align Full QKV dispatch
+  -> 69ad31e4fd6e40b30e43c2566ce8f8ebd0b2427d  single-row all-reduce selector
 
-GitHub stepfun/develop  e5e26f9f5bf9184f97a4684ae7e865f1a8b0d228
-0162 local develop     e5e26f9f5bf9184f97a4684ae7e865f1a8b0d228
-0162 candidate         e5e26f9f5bf9184f97a4684ae7e865f1a8b0d228
+GitHub stepfun/develop  69ad31e4fd6e40b30e43c2566ce8f8ebd0b2427d
+0162 local develop     69ad31e4fd6e40b30e43c2566ce8f8ebd0b2427d
 remote push            DONE
 new immutable image    NOT BUILT
 ```
@@ -106,8 +121,8 @@ new immutable image    NOT BUILT
 
 | 仓库/组件 | 分支或 pin | 当前 commit | 状态 |
 |---|---|---|---|
-| pypto-lib（GitHub） | `csy0225/pypto-lib:stepfun/develop` | `e5e26f9f` | 远端 tip；RMS→QKV critical prestage |
-| pypto-lib（0162 local） | `stepfun/develop` | `e5e26f9f` | 指定 checkout clean，与远端对齐 |
+| pypto-lib（GitHub） | `csy0225/pypto-lib:stepfun/develop` | `69ad31e4` | 远端 tip；single-row all-reduce selector |
+| pypto-lib（0162 local） | `stepfun/develop` | `69ad31e4` | 指定 checkout clean，与远端对齐 |
 | pypto | `csy0225/pypto:stepfun/develop` | `1c048a74` | 远端 tip；= `8e92b468` + reset 仪表 + K8 选择性清零（`distributed_runner.py` +174/−22） |
 | simpler | immutable pin | `e2efebcbd190302609c0775d2984f409f5f42c76` | 当前 canonical image pin |
 | pto-isa | immutable pin | `ecb6c303f797749f811a494742c3c08156aacabb` | 当前 canonical image pin |
@@ -138,19 +153,35 @@ new immutable image    NOT BUILT
 models.step3p5.decode_fwd:whole_decode_step3p5
 ```
 
-> **2026-08-12 tp-all-reduce 改造（分支 `perf/tp-allreduce-ring-20260812`，
-> pypto-lib commit `a791071`）**：把 attention_full / attention_swa o_proj TP epilogue
-> 内联的 barrier-mesh all-reduce 换成 ring reduce-scatter + all-gather（2(N-1) 步，
-> 每步独占信号 cell、非单调 Set(1)/Ge(1)，避开 codegen 507018 根因），信号窗
-> `tp_size` → `2*(tp_size-1)+1`。对照 `/data/chensiyu/hw_project/hccl` 已实现算子，
-> 对齐 vllm-ascend `hcclAllReduce` 同族的 ring 家族。0162 8 卡 `_stage_two_layer_attn`
-> harness **compile OK**；codegen-contract / chip_orch.cpp 编排编译两项 gate 与原始
-> baseline 同败（pre-existing 镜像 pypto 配对问题，非本改造引入），端到端 ITL 待配平
-> 镜像重跑。详见 `design/vllm-pypto/04-tp-allreduce-ring-refactor.md` 与
-> 0162 `pypto-lib/docs/upstream-issues/step3p5-tp-allreduce-ring-refactor.md`。
+> **2026-08-12 tp-all-reduce 最终状态**：旧 `a791071` ring 实验经审计是
+> standalone-builder A/A，未命中 production 或 two-layer collective，结论撤回且不得合入。
+> 最终 `69ad31e4` 采用 HCCL small-message selector 思路：单行 8 KiB 走静态两波
+> one-shot mesh，其他 Main 行数及 MTP 走静态三波 fallback；ownership 固定
+> `HIDDEN // TP_WORLD_SIZE`，与 transfer chunk 解耦。unit=`365 passed, 7 skipped`；
+> Main/MTP default+chunk256 compile、8 卡 rows `1/3/16` device gate 均 PASS。
+> focused historical K6b-vs-smallmesh regular-call kernel-duration pooled mean
+> 为 `38.325 → 22.667 µs/call`（-40.9%，不是 strict critical-tail，也不代表
+> 完整最终 source tree）；Whole A/B/A
+> `31.065 / 29.912 / 30.999 ms`，candidate=`-1.120 ms / -3.609%`，三臂
+> precision/per-iteration gate PASS。详见
+> [`design/performance/03-tp-allreduce-algorithm-comparison.md`](design/performance/03-tp-allreduce-algorithm-comparison.md#8-hccl-small-message-selector-思路迁移版2026-08-12)
+> 与 [`design/vllm-pypto/04-tp-allreduce-ring-refactor.md`](design/vllm-pypto/04-tp-allreduce-ring-refactor.md)。
 
 
 ## 2. 镜像与验证状态
+
+### TP all-reduce small-message selector：source-overlay GO
+
+`69ad31e4` 的 landing tree 与最终候选一致。单行 selector、静态 fallback、MTP ABI、
+ownership/transfer-grain 解耦均已通过 unit/compile/device gate；有效 Whole A/B/A 的
+三臂精度和逐迭代门全部通过。device rows `1/3/16` 未持性能锁，只证明功能；
+`-1.120 ms / -3.609%` 的性能结论来自持全机及两半机三个锁的 Whole A/B/A。
+`dense_mlp_body_tp` 在 `mlp_layer_idx` 后新增 `num_tokens` 实参；仓内 Main/MTP
+调用点已更新，仓外直接调用或 inline 该 body 的代码升级时也必须同步更新。
+five-layer 只声明 L3/L4 exact、finite、TP spread=0；既有 zero-token canonical
+structural fail-closed 未被覆盖。当前仍缺包含该提交的 immutable image 和镜像级
+release/structural qualification。权威 `ABA_RESULT.json` SHA256 为
+`383caa23124c7da42d676ef642bc8b488344349564fd4131efa560c6b5ea3757`。
 
 ### RMSNorm → QKV critical prestage：I7 source-overlay GO
 
@@ -324,7 +355,7 @@ spec:     deployment/docker/builds/stepfun-develop-20260811-k8-selective.env
 ```
 
 这是**第一个包含 K8 发布基线** pypto-lib=`cb96747e` / pypto=`1c048a74` 的
-immutable image；它不包含 §1 当前 pypto-lib tip `e5e26f9f`。构建在 devbox
+immutable image；它不包含 §1 当前 pypto-lib tip `69ad31e4`。构建在 devbox
 （0162 无 buildkitd、github/proxy 均不通，结构上不能构建），
 **全部验证在 0162、digest-only、无源码/runtime overlay**。
 
@@ -434,7 +465,7 @@ Wave5 只对 0162 完整 release-qualified；其源码 pin 是 pypto `defa97c5`�
 ### 历史 2026-08-05 R1/R2（已 supersede）
 
 - R1 已撤销；R2 从未发布，且其 pypto-lib `91c7f46e` 已被后续
-  `491267c4`、`f9065261`、`fa58b5cf` 和当前 `e5e26f9f` supersede。不得恢复
+  `491267c4`、`f9065261`、`fa58b5cf` 和当前 `69ad31e4` supersede。不得恢复
   R2 或用其状态覆盖当前源码。
 - 历史记录：
 [`benchmark/2026-08-05-attention-canonical-r1-r2.md`](benchmark/2026-08-05-attention-canonical-r1-r2.md)。
@@ -475,9 +506,9 @@ Wave5 只对 0162 完整 release-qualified；其源码 pin 是 pypto `defa97c5`�
 ## 4. MoE 当前判断
 
 - 产品改动 `7928a275`、`cd19fe6b` active-route scheduling 和 `491267c4`
-  route/precision release harness 均为当前远端 `stepfun/develop@e5e26f9f` 的祖先。
+  route/precision release harness 均为当前远端 `stepfun/develop@69ad31e4` 的祖先。
 - 当前 tip 的 `decode_fwd.py`
-  SHA256=`c2054854a4a0e3f5618f27694bc33b4fd5146be6e2372b8c98dfe95e3d3602fb`。旧正式 campaign 的 candidate
+  SHA256=`a17ae27440a4ff0e62f7fe8b6dc2d5548217ef617b0ddbccb927fda648600d01`。旧正式 campaign 的 candidate
   SHA256=`7884da7c…`、baseline `56b3d477` SHA256=`3553664c…` 只绑定历史
   source policy。
 - `c9af5790` pre-fix 六档 focused normal A/B 与 L3/L4 hidden golden 已通过；
@@ -496,15 +527,20 @@ Wave5 只对 0162 完整 release-qualified；其源码 pin 是 pypto `defa97c5`�
 
 ## 5. 当前下一步
 
-1. **先修复或拆回由 `fa58b5cf` 引入、且 I7 未消除的整体性能回退，暂不构建
-   release image。** 优先隔离
-   packed projection 与 fused epilogue：分别验证恢复 SWA gate-expand 顺序、恢复
-   独立 Q/KV projection 但保留 fused split/QKNorm/RoPE。
-2. 每个变体先做 candidate-only whole ITL 筛选；最终候选必须重新通过同口径 A/B/A，
-   且 five-layer 8-rank×5-layer strict `<46 us` 全部通过。
-3. 只有性能门闭合后，才构建包含最终候选（pypto runtime 仍为 `1c048a74`）的
-   immutable image；不得把 source-overlay 数据当作新镜像数据。
-4. 在最终镜像上先完成 whole-net N=128 多步精度，再重跑 BS
+**TP all-reduce 代码与 source-overlay gate 已完成；该专题只剩 immutable-image
+qualification。** 构建后需按 release 合同重跑 audit/smoke、Main+MTP compile、
+Main precision/ITL 与必要的 active-batch matrix。以下 Attention/MoE 项保持各自专题顺序，
+不得用 source-overlay all-reduce 数据替代镜像级准出。
+
+1. **基于 `pypto-lib@69ad31e4` 构建 immutable candidate image**，固定
+   manifest/config 与所有组件 pin；不得把 source-overlay 数据当作新镜像数据。
+2. 在新镜像上重跑同口径 Whole A/B/A、Main/MTP compile、Main N=128、多 batch
+   与 canonical structural analyzer；zero-token raw-swim 限制未解决时继续
+   fail-closed。
+3. 保留 single-row/multi-row selector、ownership/transfer-grain 解耦与
+   canonical/two-layer AST exact 合同；不再恢复 `a791071` Ring 或 K6b
+   dynamic-valid-shape 产品路径。
+4. 在最终镜像上重跑 BS
    `1/2/4/7/8/16`、每请求独立 64K、L3/L4 golden 与 counterbalanced A/B。
 5. 为最终 image/source 重新生成 matched source policy：current candidate 必须绑定
    最终 commit 的源码哈希，
@@ -536,6 +572,7 @@ process；后续作业前仍须重新检查卡占用，不能沿用旧 session �
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS(src) | simpler | ptoas-bin |
 |------|------|-------|-----------|---------|-----------|---------|-----------|
+| 2026-08-12 | **TP all-reduce small-message selector 已合入**：`9ca01d2 → 69ad31e4`。Main 单行 8 KiB 走静态两波 one-shot mesh，其他行数与 MTP 保留静态三波 fallback；ownership 与 transfer chunk 解耦。unit `365 passed, 7 skipped`；Main/MTP default+chunk256 compile、8 卡 rows `1/3/16` PASS。focused 历史 regular-call kernel-duration pooled mean `38.325 → 22.667 µs/call`（-40.9%，非 strict critical-tail）；Whole A/B/A `31.065/29.912/30.999 ms`，delta `-1.120 ms/-3.609%`，precision/per-iteration PASS。landing tree `e26d762c…`。仅 source-overlay validation，未构建新 immutable image | `1c048a74` | **`69ad31e4`** | 未移动 | 未移动 | 未移动 | 未移动 |
 | 2026-08-12 | **RMS→QKV critical prestage 已合入**：`fa58b5cf → 18d1b519 → e5e26f9f`。QKV Worker gap p50 `+4.77 → -1.78 us`（setup 与 RMS 重叠），raw-kernel residual p50/max `5.00/5.48 → 2.64/3.16 us`；RMS Worker span max `4.78 us`。五层 L3/L4 exact；整网 A/B/A `30.992/30.997/31.136 ms`、precision PASS、`WITHIN_BASELINE_BRACKET`。远端与 0162 指定 checkout clean@`e5e26f9f`；all-ranks bundle SHA `2f58af78…`。仅为 source-overlay I7 GO，I6 NO-GO 与无新镜像边界不变 | `1c048a74` | **`e5e26f9f`** | 未移动 | 未移动 | 未移动 | 未移动 |
 | 2026-08-12 | **`fa58b5cf` post-merge 性能验收 NO-GO**：整网 BS1/ctx64K A/B/A 精度 byte-exact PASS，但 ITL p50 `31.846 → 33.194 ms`，回退 `+1.348 ms / +4.233%`；fresh 五层 DFX strict `<46 us` 为 39/40，rank7/L0=`54.54 us`。inventory/dependency PASS；异常点为约 12 us AICPU scheduler dispatch stall，但属于端到端门。暂不构建 release image，先拆分定位 packed projection 与 fused epilogue | `1c048a74` | **`fa58b5cf`** | 未移动 | 未移动 | 未移动 | 未移动 |
 | 2026-08-11 | **packed QKV projection + pre-RoPE epilogue 源码集成**：`fa58b5cf`（parent `f9065261`）已 fast-forward push；origin、0162 main/candidate 三者同 commit 且 clean。独立五层 strict Attention 门 40/40 PASS，max `43.60 us`、margin `2.40 us`。验证仍是下行 K8 immutable 镜像上的 source overlay；未构建新镜像，canonical analyzer known `rc=1` 不构成 release qualification | `1c048a74` | **`fa58b5cf`** | 未移动 | 未移动 | 未移动 | 未移动 |

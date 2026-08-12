@@ -5,15 +5,19 @@
 > 完整实验记录在 [`task-tracking.md`](task-tracking.md)，本文件只做面向上游的收口，
 > **不重复证据细节**。
 >
-> **最后更新**：2026-08-11。
+> **最后更新**：2026-08-12。
+>
+> **当前产品边界**：`pypto-lib@69ad31e4` 已用静态 single-row selector +
+> 静态三波 fallback 落地，不依赖下列 K6b dynamic-valid-shape 能力。第 2/3 条仍是
+> 通用上游能力诉求，其 `µs/call` 数字只绑定历史 K6b 模型，不得写成当前产品待解锁收益。
 
 排序按「correctness 优先，其余按解锁收益」：
 
 | # | 诉求 | 仓 | 类型 | 解锁 | 有本地绕路？ |
 |---|------|----|----|------|------------|
 | 1 | `MakeNotifyCodegenPTO` 在 `cacheinvalid` 前补 `pto.barrier <PIPE_ALL>` | pypto | **CORRECTNESS** | 消掉一个不可证明的安全条件 + 解锁删/合并波次类优化 | ❌ 无（模型侧无 PIPE_ALL 原语） |
-| 2 | `pld.tile.remote_load` 加 `valid_shape=` kwarg | pypto | perf | `3.27 µs/call` | ❌ |
-| 3 | `pto.comm.tput` 接受 dynamic dst shape | PTOAS | perf | `3.75 µs/call` | ❌ |
+| 2 | `pld.tile.remote_load` 加 `valid_shape=` kwarg | pypto | perf / generic capability | 历史 K6b 模型 `3.27 µs/call` | ❌ |
+| 3 | `pto.comm.tput` 接受 dynamic dst shape | PTOAS | perf / generic capability | 历史 K6b 模型 `3.75 µs/call` | ❌ |
 | 4 | `pld.system.notify` 加 fence/release 参数 | pypto | perf | `2.39 µs/call`（K2b） | ❌ |
 | 5 | `pld.alloc_window_buffer` 声明「是否需要每请求清零」 | pypto | robustness | 0（收益已用绕路拿到）；防回归 | ✅ 有绕路，但脆 |
 | 6 | host 作用域 `pl.read` 发出未定义的 `tensor.read` | pypto | bug | — | ✅ 改写调用点 |
@@ -56,11 +60,12 @@ pto::comm::TNOTIFY(peer_signal, ...);      // credit
 `pto.fence.barrier_all <gm>`，属 `dsb` 家族，消融已证不够；`pld.tensor.barrier` 是
 **跨 rank** barrier，不是这里要的东西）。⇒ 干净修复只能在上游。
 
-**生产暴露面（口径要准）**：生产 Wave2 的 notify 前导与被证伪的形状逐字节相同，
-且 Wave2 前面正是 `remote_store`。已否证四个候选保护机制（纯 MTE3 流量 / MTE3 级屏障 /
-store-loop 自带屏障 / rank 到达 skew）。结论按更保守方向收口：**没有可证明的安全机制，
-只是当前调度没触发；是否正在损坏未知。** 不要写成「生产正在损坏」，也不要写成
-「生产是安全的」。
+**生产暴露面（口径要准）**：静态三波 fallback 的 Wave2 notify 前导与被证伪的
+形状逐字节相同，且该 Wave2 前面正是 `remote_store`。Main single-row 两波路径的
+数据面不同，不能把这条暴露面直接套到当前 BS1 快路径。已否证四个候选保护机制
+（纯 MTE3 流量 / MTE3 级屏障 / store-loop 自带屏障 / rank 到达 skew）。对 fallback
+结论按更保守方向收口：**没有可证明的安全机制，只是当前调度没触发；是否正在损坏未知。**
+不要写成「生产正在损坏」，也不要写成「生产是安全的」。
 
 ---
 
@@ -74,8 +79,9 @@ MLIR 确认：`remote_store` 的 `tstore` 已经动态（`?x512`）、本地 `pl
 也跟着动态，**但 `remote_load` 仍是静态 16 行**（`tload ins(16x512)`，extent 取自
 `shape=` 而非 valid_shape）。
 
-**解锁**：AR 单次调用总列数 15360 中 `remote_load` 占 `23.3%` ⇒ `3.27 µs/call`。
-不需要这条也能拿到 `50.0% = 7.02 µs/call`（store + final copy），所以这是增量项。
+**历史 K6b 估算**：AR 单次调用总列数 15360 中 `remote_load` 占 `23.3%` ⇒
+`3.27 µs/call`。该 dynamic-valid-shape 分支未落地，已被 `69ad31e4` 的静态
+single-row selector supersede；这里保留的是通用能力与历史量级，不是当前产品 blocker。
 
 **证据**：`0162:.../p2-k6b-runtime-validshape-20260810/K6B-CODEGEN-GATE.md`
 sha256 `03baffd3…`；生成件 `.../ptoas/tp_all_reduce.pto`。
@@ -98,8 +104,9 @@ tp_all_reduce.pto:51:3: 'pto.comm.tput' op expects dst to have a positive static
 ⇒ **阻塞在 PTOAS 而非 pypto**。原始日志
 `0162:.../p2-k6b-runtime-validshape-20260810/codegen-gate-20260810-235230/host.log:1`。
 
-**解锁**：TPUT 占总列数 `26.7%` ⇒ `3.75 µs/call`。与第 2 条一起修好，K6b 从
-`7.02` 到 `14.04 µs/call`。
+**历史 K6b 估算**：TPUT 占总列数 `26.7%` ⇒ `3.75 µs/call`；与第 2 条一起
+曾预测 K6b 从 `7.02` 到 `14.04 µs/call`。K6b 未进入产品，最终
+`69ad31e4` 不依赖 dynamic destination shape。
 
 ---
 
@@ -166,9 +173,11 @@ ITL 与 reset 的分位数不是逐迭代配对的 ⇒ **它不是一个已辨�
 
 这些是我们自己代码的约束，**不是上游诉求**，但和上面几条常一起出现：
 
-- dynamic valid shape 贯穿整个 reduction 会触发 **loop-phi dominance bug**；正确结构是
-  own/remote load 与 reduce loop 保持静态，只在 publish 处
-  `set_validshape(...)`、只对 final-copy 的 load/store 用 dynamic valid shape。
+- dynamic valid shape 贯穿整个 reduction 会触发 **loop-phi dominance bug**；历史
+  K6b 能通过部分 codegen 的结构是 own/remote load 与 reduce loop 保持静态，只在
+  publish 处 `set_validshape(...)`、只对 final-copy 的 load/store 用 dynamic valid
+  shape。该结构的 dynamic publish 仍位于 notify-fence seam；现有运行未复现错误，
+  但没有独立 rank-skew/zero-gap/多 epoch safety proof，且 K11 不采用此路径。
 - `MaterializeCommDomainScopes` 拒绝「分配了 window buffer 但没有对应
   `pld.tensor.window` 材化」的 IR。
 - pypto host DSL 不接受 list comprehension（`Unsupported expression type: ListComp`）。

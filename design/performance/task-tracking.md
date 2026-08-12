@@ -7,7 +7,21 @@
 
 ---
 
-> **✅ 2026-08-12 I7 已合入：RMS→QKV raw-kernel residual p50
+> **✅ 2026-08-12 K11 已合入：single-row small-message selector。**
+> 当前 `csy0225/pypto-lib:stepfun/develop@69ad31e4fd6e40b30e43c2566ce8f8ebd0b2427d`
+> （parent `9ca01d2`）。Main 的 rank-uniform `active_rows == 1` 走静态 8 KiB
+> 两波 one-shot mesh；其他行数与 MTP 保留静态三波 fallback；ownership 固定
+> `HIDDEN // TP_WORLD_SIZE` 并与 transfer chunk 解耦。unit `365 passed, 7 skipped`；
+> Main/MTP default+chunk256 compile、8 卡 rows `1/3/16` PASS。focused 历史
+> K6b-vs-smallmesh regular-call kernel-duration pooled mean 为
+> `38.325 → 22.667 µs/call`（-40.9%，不是 strict critical-tail）；Whole A/B/A
+> `31.065 / 29.912 / 30.999 ms`，delta `-1.120 ms / -3.609%`，三臂
+> precision/per-iteration PASS。旧 `a791071` ring 是 A/A，K6b dynamic-validshape
+> 是未落地的中间方案。five-layer 只声明 L3/L4 exact、finite、TP spread=0；
+> zero-token canonical structural fail-closed 不变。当前仍缺包含 `69ad31e4` 的
+> immutable-image 与 structural qualification。
+
+> **历史：2026-08-12 I7 已合入，RMS→QKV raw-kernel residual p50
 > `5.00 → 2.64 us`。**
 > `allow_early_resolve` 是 producer 属性；`swa_qkv_proj` 原有的 flag 只优化
 > `QKV → split/QKNorm/RoPE`，不能反向优化 `RMS → QKV`。最终提交链
@@ -20,17 +34,19 @@
 > 整网 BS1/ctx64K A/B/A p50=`30.992/30.997/31.136 ms`，candidate 相对
 > baseline center `-0.067 ms / -0.216%`、`0.931×` floor，判定
 > `WITHIN_BASELINE_BRACKET`；三臂 hidden SHA 全等、token `14371` exact。
-> `e5e26f9f` 已 fast-forward push 到 `stepfun/develop`。该结果不覆盖下方 I6
+> `e5e26f9f` 当时已 fast-forward push；当前远端已由后续提交前进到 `69ad31e4`。
+> 该历史结果不覆盖下方 I6
 > 相对 `f9065261` 的整体 NO-GO；仍是 source overlay，未构建新镜像。详见
 > [`../../benchmark/2026-08-12-step3p5-rms-qkv-dispatch-gap.md`](../../benchmark/2026-08-12-step3p5-rms-qkv-dispatch-gap.md)。
 
-> **⛔ 2026-08-12 I6 当前 NO-GO：精度通过，但整网 ITL 与 fresh 五层门失败。**
+> **历史：2026-08-12 I6 当时 NO-GO，精度通过，但整网 ITL 与 fresh 五层门失败。**
 > 设备验证候选 worktree 位于 0162
 > `/mnt/persist/chensiyu/workspace/develop-worktrees/qkv-prerope-mix`
 > （branch=`perf/qkv-prerope-mix-20260811`，base=`f9065261`），已提交为
 > `fa58b5cffe41b30d3f8d94482230867ee34b9e84`；在 I6 landing 时已
 > fast-forward push 到 `stepfun/develop`，且 origin、0162 main/candidate 三者同
-> commit、clean。当前 tip 已由 I7 前进到 `e5e26f9f`。Full/SWA 分别以
+> commit、clean。该 Attention 快照随后由 I7 前进到 `e5e26f9f`；当前 tip 以
+> 上方 `69ad31e4` 为准。Full/SWA 分别以
 > 10/14 个 packed QKV projection blocks 替代独立 Q/K/V projection，随后各接一个
 > `qkv_split_qknorm_rope` mixed kernel，图为
 > `qkv_proj → qkv_split_qknorm_rope → attn_mix`。unit=`362 passed, 7 skipped`、
@@ -48,14 +64,16 @@
 > 2026-08-11 的 40/40、max `43.60 us` 仅保留为历史 capture，不能覆盖 fresh failure。
 > 固定镜像内仍为 `pypto-lib@cb96747e`，全部是 **source overlay**；canonical
 > analyzer 的 `rc=1` 仍来自零本地 routed-token early-dispatch record 缺失，不能写成
-> canonical structural PASS、immutable-image seal 或 production-qualified。当前不得
-> 构建 release image；先隔离 packed projection 与 fused epilogue 的回退来源。
+> canonical structural PASS、immutable-image seal 或 production-qualified。该 I6
+> 阶段当时不得构建 release image，需先隔离 packed projection 与 fused epilogue；
+> 该历史操作结论已被后续 `9ca01d2`/`69ad31e4` supersede，当前 image 下一步以上方
+> K11 状态为准。
 
 > **✅ 2026-08-11 Attention mix + SWA RMSNorm multicore 已完成源码集成**：
 > 该轮落地 commit 为 `fa58b5cf`（其 parent `f9065261` 包含
 > `21d928b9` Attention mix + `f9065261` RMSNorm multicore）；当前
-> GitHub `csy0225/pypto-lib:stepfun/develop` 与 0162 指定 checkout 已随后由 I7
-> fast-forward 到 `e5e26f9f` 且 clean。固定镜像 manifest `sha256:076af8a…` 内仍是
+> GitHub 与 0162 checkout 当时随后由 I7 fast-forward 到 `e5e26f9f`；当前远端
+> 已前进到 `69ad31e4`。固定镜像 manifest `sha256:076af8a…` 内仍是
 > `cb96747e`；全部新结果均为该 immutable 镜像上的只读 `/candidate`
 > **source overlay**，不是新镜像验证。
 >
@@ -111,10 +129,14 @@
 > 实证：删 Wave3 bench `−5.92 µs/call`、整网 **`+35.76 µs/call`（`+1.72 ms/step`，73× floor）**，
 > 且三臂 byte-exact ⇒ 精度论证对、性能结论反。同理 K5-C 的定律外推失效（预测 `−20 µs`、
 > 实测 `−0.54 µs`）。**受影响的账目**：K9 的 `−4.92 µs/call` 已撤回；「合并 Wave1+Wave2」
-> 的 bench `5.6 µs/call` 降级为未确认。当前唯一已确认 AR 侧收益 = K6b `7.02 µs/call`
-> （`0.337 ms/step`），远小于 K8 的 `~1.95 ms/step`。
+> 的 bench `5.6 µs/call` 降级为未确认。K6b 的 `7.02 µs/call` 只保留为中间实验，
+> dynamic-validshape 版本未落地。当前落地的 AR 收益以 K11 Whole A/B/A
+> `-1.120 ms / -3.609%` 为准；focused `38.325 → 22.667 µs/call` 只是
+> regular-call kernel-duration pooled mean 的机制证据，不是 strict critical-tail。K8
+> 是独立的 host reset 优化，不能与 per-collective 数字混为同一口径。
 
-> **✅ 2026-08-11 K8 已在整网上兑现（本轮第一个也是目前唯一一个 A/B/A + 精度门双过的优化）**：
+> **✅ 2026-08-11 K8 已在整网上兑现（当时第一个 A/B/A + 精度门双过，
+> 且目前仍是最新 immutable-image 优化）**：
 > control-prefix 重排 + 单次 `47,616 B` 清零。**两个独立 bracket 一致**：v1
 > `−1.7505 ms/step`（66× floor）、硬化后的 v3 `−1.7455 ms/step`（`−5.16%`，**89.5× floor**），
 > 差 `0.005 ms`。两次都四臂/三臂 `hidden_sha256` 全等生产 baseline `567b206b…`、`token=14371`。
@@ -280,7 +302,7 @@ producer → 数学变换/quant/route-map → transport/window
 ### Track J — MoE compute 优化
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
 |----|--------|--------|------|-------|------|------|----------|
-| J1 | L0–L4 routed gate/up stage split + task-grain tuning | P0 | 🟦 | codex | A1, C1–C3, D1–D2, G1, I2 | 产品实现 `7928a275`、active-route scheduling 和 route/precision release harness 均为当前 `stepfun/develop@e5e26f9f` 的祖先。普通 expert 为 `row16/K512/N64/down-N256`，保留 scatter→wait 真依赖与 L43/L44 specialization。旧 `c9af5790` 镜像 `sha256:cab8966…` 的三轮 normal A/B 已 seal：BS `1/2/4/7/8/16` 每请求独立 64K，L3/L4 hidden hash exact，p50 分别改善 `9.16/1.83/3.52/6.07/0.53/11.61%`；matched-source 8/8 run sealed PASS。旧 source-overlay N=128=`127/128`、spread=0。阻塞：最终源码 tip 的 immutable image及其六档 64K golden/A/B、N=128、formal DFX/reanalysis；本轮 all-rank swimlane 为 structural `FAIL_CLOSED` limited delivery，未闭合 release seal。设计见 [`05-moe-optimization.md`](05-moe-optimization.md) | 2026-08-12 |
+| J1 | L0–L4 routed gate/up stage split + task-grain tuning | P0 | 🟦 | codex | A1, C1–C3, D1–D2, G1, I2 | 产品实现 `7928a275`、active-route scheduling 和 route/precision release harness 均为当前 `stepfun/develop@69ad31e4` 的祖先。普通 expert 为 `row16/K512/N64/down-N256`，保留 scatter→wait 真依赖与 L43/L44 specialization。旧 `c9af5790` 镜像 `sha256:cab8966…` 的三轮 normal A/B 已 seal：BS `1/2/4/7/8/16` 每请求独立 64K，L3/L4 hidden hash exact，p50 分别改善 `9.16/1.83/3.52/6.07/0.53/11.61%`；matched-source 8/8 run sealed PASS。旧 source-overlay N=128=`127/128`、spread=0。阻塞：最终源码 tip 的 immutable image及其六档 64K golden/A/B、N=128、formal DFX/reanalysis；本轮 all-rank swimlane 为 structural `FAIL_CLOSED` limited delivery，未闭合 release seal。设计见 [`05-moe-optimization.md`](05-moe-optimization.md) | 2026-08-12 |
 | J2 | gate fan-out 与 norm/quant 解耦（deferred `inv_rms`） | P0 | ✅ | claude | J1 | 已发布 `stepfun/develop@d13b2ca6`（单 commit FF，只改 `decode_fwd.py` +63/-35，sha `d392311c… -> 28080c53…`）。`gate_expert_fanout` 只写 raw FP32 logits，`inv_rms/sigmoid/bias` 尾巴搬进本来就等 `inv_rms` 的 `gate_topk`；算子顺序与数值语义不变，codegen 侧 `params_t70` 不再 `add_input(moe_inv_rms)`，task 数与 `block_num=9` 不变。0162 三臂 A/B/A：bs=1/64k/nb512 p50 `36.494 -> 33.849 ms`（**+7.25%**，地板 0.634）、bs=8/64k/nb4096 p50 `97.528 -> 91.722 ms`（**+5.95%**，地板 2.637）；bs=16 物理不可行（16 GiB 单次 rtMalloc → `207001`）。**两档三臂 hidden payload 各自 byte-exact**（bs=1 = N256 golden `567b206b…`、bs=8 `1fcd4fcc…`）→ 按项目口径 sha256 即准出。机理：MoE-only 段 15→14 hop、`norm_quant` 离开关键路径、链头 `81.8 -> 56.5 us`。数据见 [`../../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md`](../../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md) | 2026-08-10 |
 
 ### Track K — TP all-reduce 二次优化（campaign 内部代号 P2；注意与本表「优先级」列的 P0/P2 无关）
@@ -288,69 +310,38 @@ producer → 数学变换/quant/route-map → transport/window
 |----|--------|--------|------|-------|------|------|----------|
 | K1 | AR critical-tail 口径确立 + notify/drain 分账（Phase 0，只插桩不改生产） | P0 | ✅ | codex（claude 独立复核 REPRODUCED） | I2 | headline 口径改为 `critical_tail = max(rank_exit) - max(rank_entry)`；T/P/T 三臂 half-range `0.06 µs`、插桩扰动 `0.36 µs`(<1%)、`latest_entry==last_exit 128/128`、`phase_sum_error_ticks {0,0}`。**critical-tail p50 `43.18 µs`**，校准分解 control `18.38 µs`(42.6%) / data-compute `24.82 µs`(57.5%)。最大可寻址项 = 三轮 notify control 合计 `16.51 µs`（不是 Wave2 publish completion `10.62 µs`）。pooled rank×epoch p50 `171.95 µs` 已显式降级为 **host 顺序提交 artifact**，不得当 collective latency。claude 补一条定律：`first_peer_control 0.700 µs` ≈ `marginal_per_peer 0.801 µs` → `cost(n)=a+b·n` 中 **a≈0、b≈0.80**，故 16.5 µs 是 21 次 notify 的边际成本而非每 wave 固定开销。上游侧补全五仓 branch 枚举，`PTOAS fix/issue711-tnotify-mte-drain` 已是生产 pin 祖先，是 **data-before-signal 正确性约束**、不可回退也不可摘。原件 `0162:/mnt/persist/chensiyu/workspace/p2-ar-diag-20260810/phase0-split-20260810-190834/`，复核 `0162:/mnt/persist/chensiyu/workspace/perf-2026q3/claude-verify-p2-phase0-20260810/`（`claude_verify_p2_phase0.py` sha256 `d8fccb90…`、`recompute.json` sha256 `dc6d3c01…`；**执行脚本只存在于 0162，本仓不留副本**） | 2026-08-10 |
 | K2a | batched notify：`n stores + 1 barrier` vs `n stores + n barriers` 两点对比 | P0 | ❌ NO-GO | codex（claude 独立读原始 diag） | K1 | **已实测否决。** 三臂 A1 `4.46` / B `4.44` / A2 `4.46 µs`，`parent_center 4.460`、`half_range 0.000`、delta `+0.020 µs`(0.45%)、`output_exact=true`、`credit_errors` 全 0。反解每 barrier `0.0033 µs`，18 个可摘 barrier = `0.060 µs/call`，48 次 = `0.0029 ms` —— 比地板 `0.634 ms` 低两个数量级。**证实 K1 的 `a≈0` 定律**：`0.786 µs/notify` 几乎全部是 remote credit store 本身，`dsb`/`pipe_barrier(PIPE_ALL)` 份额≈0，所以 barrier 多重性批处理无价值，唯一杠杆是**减少 remote store 次数**（→ K5/RD 因此复活，K6 因此立项）。原件 `0162:/mnt/persist/chensiyu/workspace/p2-barrier-store-20260810/run-20260810-195604/` | 2026-08-10 |
-| K2b | publisher release fence hoist（每 peer fence → 每 wave 一次）+ whole-cache invalidate 间接成本 | P0 | 🟦 | codex（claude 独立读原始 diag） | K1, K2a | 生产 notify 点位不是裸 TNOTIFY：`MakeNotifyCodegenPTO`（pypto `src/backend/common/pto_ops_distributed.cpp`）在每个 `pto.comm.tnotify` 前无条件 emit `pto.cmo.cacheinvalid all #gm` + `pto.fence.barrier_all #gm`。128 KiB 单档三臂（warmup 2 / measure 16，kernel sha256 A`8b264955` B`ec3ad385` C`f2be3406`，三臂 `output_exact=true`、`credit_errors`/`load_errors` 全 0）：`notify_us` p50 A per_peer_full `16.17` → B per_wave_full `13.78` → C per_wave_fence_only `13.56`，**A→B = `2.39 µs/call`**，落在预估 prefix 天花板 `2.70~3.13 µs` 内；C 只再省 `0.22 µs` → 收益几乎全来自 fence 提升、cacheinvalid 那一半贡献很小。**两条限定**：① 本轮只有单个 A 臂、无 A1/B/A2 bracketing，`2.39` 只能记作单臂差值，需补 bracketing 才能算「已测」；② claude 的「whole-cache invalidate 有间接成本、`transmission_factor>1`」假设 **as measured 不成立** —— 三臂 `post_minus_hot_us = cold_minus_hot_us = 0.0`，21/3/0 次 invalidate 下游 load 无差别。但 `cold_load ≈ hot_load ≈ 92.28 µs`（连显式 invalidate 都不让 cold 变慢）说明该 workset 是 GM-bound、探针可能结构上测不出 locality，此 null 一半属于仪器 → 不宣布假设死亡，但 K2b 维持在直接 prefix 天花板、不升为 path1 首位。**落地约束**：`pld.system.notify` Python 签名（`system_ops.py:112`）无 fence/release 参数，K2b 改不了 `decode_fwd.py`，**必须上游 pypto 补丁** → 排在纯 model 侧的 K6 之后。原件 `0162:/mnt/persist/chensiyu/workspace/p2-k2b-release-cache-20260810/formal-128k-20260810/run-20260810-231938/`（另有 `bisect-20260810/` 记录多档 workset 触发 harness `code -100` 的定位过程，已绕开：128 KiB 单档即生产下游工作集） | 2026-08-10 |
+| K2b | publisher release fence hoist（每 peer fence → 每 wave 一次）+ whole-cache invalidate 间接成本 | P0 | 🟦 | codex（claude 独立读原始 diag） | K1, K2a | 生产 notify 点位不是裸 TNOTIFY：`MakeNotifyCodegenPTO`（pypto `src/backend/common/pto_ops_distributed.cpp`）在每个 `pto.comm.tnotify` 前无条件 emit `pto.cmo.cacheinvalid all #gm` + `pto.fence.barrier_all #gm`。128 KiB 单档三臂（warmup 2 / measure 16，kernel sha256 A`8b264955` B`ec3ad385` C`f2be3406`，三臂 `output_exact=true`、`credit_errors`/`load_errors` 全 0）：`notify_us` p50 A per_peer_full `16.17` → B per_wave_full `13.78` → C per_wave_fence_only `13.56`，**A→B = `2.39 µs/call`**，落在预估 prefix 天花板 `2.70~3.13 µs` 内；C 只再省 `0.22 µs` → 收益几乎全来自 fence 提升、cacheinvalid 那一半贡献很小。**两条限定**：① 本轮只有单个 A 臂、无 A1/B/A2 bracketing，`2.39` 只能记作单臂差值，需补 bracketing 才能算「已测」；② claude 的「whole-cache invalidate 有间接成本、`transmission_factor>1`」假设 **as measured 不成立** —— 三臂 `post_minus_hot_us = cold_minus_hot_us = 0.0`，21/3/0 次 invalidate 下游 load 无差别。但 `cold_load ≈ hot_load ≈ 92.28 µs`（连显式 invalidate 都不让 cold 变慢）说明该 workset 是 GM-bound、探针可能结构上测不出 locality，此 null 一半属于仪器 → 不宣布假设死亡，但 K2b 维持在直接 prefix 天花板，不提高当前优先级。**落地约束**：`pld.system.notify` Python 签名（`system_ops.py:112`）无 fence/release 参数，K2b 改不了 `decode_fwd.py`，**必须上游 pypto 补丁** → 排在纯 model 侧的 K6 之后。原件 `0162:/mnt/persist/chensiyu/workspace/p2-k2b-release-cache-20260810/formal-128k-20260810/run-20260810-231938/`（另有 `bisect-20260810/` 记录多档 workset 触发 harness `code -100` 的定位过程，已绕开：128 KiB 单档即生产下游工作集） | 2026-08-10 |
 | K3 | reduce→publish 按 chunk 流水 | P1 | ⬜ | — | K1 | 重叠上界 `min(reduce_owned 7.92, publish_completion 10.62) = 7.92 µs`，**单项越不过整机门 14 µs**，只能进 bundle；分块还会增加 TSTORE 启动数，实际收益可能显著低于上界 | 2026-08-10 |
 | K4 | Wave3 双缓冲/epoch window + final-copy fusion | P1 | ⬜ | — | K1 | Wave3 `7.69 µs` 拆开为 notify control `5.51` + copy completion `2.18`；双缓冲打前者、copy fusion 打后者，**不得把 7.69 同时承诺给任一单项**。`self TPUT drain 3.92 µs` 只有让上游 producer 直接写 comm window 才可能删 | 2026-08-10 |
-| K5-C | recursive halving RS + recursive doubling AG | **P0** | ⬜ DRAFT（未编译未跑） | codex 起草 / claude 补变体 | K2a, K6a | **被统一定律从末位提到 P0**：`a≈0` ⇒ 减少 remote 交易次数是最大杠杆，6 步 × (1 remote_store + 1 notify) = **12 次交易 vs parent 35**，且不需 remote_load 与 final copy。RS masks 4/2/1、payload 列宽 `2048/1024/512`；AG masks 1/2/4、列宽 `512/1024/2048`；六个 disjoint receive slot + `[epoch,step]` signal slot 防跨步/跨 epoch credit 复用。**codex 抓到并修正了 claude 原预测的一个矛盾**：「224 KiB」与「仅 FP32 re-parenthesization」不能同时成立 —— 原 `26.8 µs/call` 用的是 BF16 payload（C16），而 C16 每个 RS step 后要 cast 回 BF16 才能发送，**引入 3 次中间舍入，是超出括号改变的第二个数值变化**。**claude 再补一个严格更优的变体 C32′**：RS 结束时 owned shard 已是全 8 rank 的完整 FP32 和，此刻 cast 一次即与 parent 的 `BF16(FP32 sum)` 同一舍入契约，**故 AG 只需广播已定稿的 BF16 终值，AG 侧用 FP32 是纯流量浪费**。四变体（parent 每 rank 每行 `30,720 B`）：**C16** BF16/BF16 `14,336 B` = 46.7% → 预测 `16.6 µs`（省 `26.8`），数值变化 = 括号 + 3 次中间舍入；**C32**（codex）FP32/FP32 `28,672 B` = 93.3% → 预测 `23.6 µs`（省 `19.9`），仅括号；**C32′**（claude）FP32/BF16 `21,504 B` = 70.0% → 预测 `20.1 µs`（**省 `23.4 µs/call` = `1.12 ms`**），仅括号 —— **严格优于 C32：字节少 25%、数值契约相同**。三变体都远超 14 µs 门，**故门不是筛选依据，精度代价才是** → 建议运行序列改为 `A1 / C32′ / A2 / C32 / A3 / C16 / A4`，卡时间紧则 `A1 / C32′ / A2` 即可定去留。**定律外推的已知薄弱点（唯一可能翻车处）**：parent 的 21 次 notify 分 3 wave、wave 内 7 次可连发；C32′ 的 12 次交易分 **6 个串行 round**，每 round 必须等上一 round 数据到位。`0.80 µs/transaction` 是从 3-wave 拓扑与 scan B（轮内可连发）拟合的，**未覆盖「6 个串行 round」**；若 round 间有固定握手延迟则真实成本高于预测（`wave1_wait` 方差曾 `0.6 → 371 µs` 是此类风险的既有证据）。**精度代价**：括号改变 ⇒ 非 byte-exact ⇒ 准出升级为 live vanilla vLLM W8A8 oracle（N=128 逐 token ≥95%，需整机 + oracle 容器）。**2026-08-11 claude 无卡 codegen 复核（未上设备）**：draft 原本连编译都过不了，修两处后 **两变体 rc=0**；`rh_rd_bf16` payload `229,376 B`（224 KiB）、`rh_rd_fp32` `458,752 B`（448 KiB），均 6 payload store + 6 notify store。**两处修复都是真实 API 约束**：① `chip_orch` 必须全量类型标注（frontend 直接拒）；② ★ `notify` 的 value 与 `wait` 的 expected 必须显式 `pl.cast(1, pl.INT32)` —— 裸 `1` 发射成 `%c1_index : index`，PTOAS 拒 `invalid kind of type specified: expected builtin.integer, but found index`；后端 `MakeNotifyCodegenPTO` 明写契约「tnotify value 的 MLIR 类型必须与 signal 元素类型一致，且发射 value 自己的 ScalarType」。**未解之谜（如实记录）**：生产 `decode_fwd.py` 与 K6 generator 同样传裸 `1` 却得到 `%c1_i32`，机制未查明 → 规则写成「显式 cast 是稳健写法」而非「裸 1 一定是 INDEX」（属 dev-workflow gotcha，落点是 sub-repo `known-pypto-pitfalls.md`）。**三项新约束**：③ **静态 op 普查不可跨「循环 vs 全展开」比较** —— parent 用 `pl.range(group_size)` 故 3 静态 tnotify = **21 动态**，K5 全展开 6 静态 = **6 动态**，静态 `3<6` 而动态 `21>6` **方向相反**；动态交易数因此确认 parent `21+14=35` vs K5 `6+6=12`，**定律前提结构上成立**。④ ★ **UB 占用**：parent `96.0 KB`(52.2%) / bf16 `112.0 KB`(60.9%) / **fp32 `160.0 KB`(87.0%)**，峰值 `mem_vec_6` **128 KB** = RS step-0 的 `[16,2048]` FP32 送出 tile。⇒ 「K4 不得计入 RD 预算」除「同抽 notify 池」外**多一条硬理由：只剩 24 KB 余量，UB 装不下**；C32′ 的 UB 峰值与 C32 相同（峰值在 RS 侧，AG 改 BF16 不降峰值）故仍严格优于 C32；且 **C32/C32′ 不能外推到 batch>16**（FP32 RS step-0 在 batch=32 需 256 KB > 184 KB 限制），要分块而**分块增加交易次数、与「减交易」的收益来源直接对冲** —— 这是 K5-C 的结构性张力。⑤ whole-cache invalidate 从 21 降到 6，但 K2b 已实测其对下游 load 无可测差别，**不得记为额外收益**。**上设备前仍缺**：CPU 仿真 byte-exact 正确性对比（本轮 0 行为验证）、C32′ 变体尚未实现、`A1/C32′/A2` 性能序列 + 卡锁、6 receive slot 与 `[epoch,step]` 的跨 epoch 不复用未经设备验证。原件 `0162:/mnt/persist/chensiyu/workspace/p2-k5-rhrd-20260810/`：codex `CONTRACT.md` + `k5_generate_source.py`（sha `88b6a372…` **未被改动**）；claude `CLAUDE-C32-PRIME.md`（sha `554dcc4d…`）、`CLAUDE-CODEGEN-REVIEW.md`（sha `9f3a57f5…`）、`claude_k5_generate_source.py`（sha `0f0fd995…`）、`claude_codegen_gate.sh`、campaign `codegen-gate-20260811-001734` | 2026-08-11 |
+| K5-C | recursive halving RS + recursive doubling AG | P0 | ❌ device NO-GO | codex | K2a, K6a | C32′（FP32 RS + BF16 AG）在补齐正确性 fence 后 64 epoch byte-exact，但 critical-tail `42.63 µs` 对 parent `43.24/43.10 µs` 只改善 `0.54 µs/call`，远低于门。交易数虽从 35 降到 12，依赖深度却从 3 波增为 6 个串行 round；证明 K6 交易定律不能跨拓扑外推。不落地，不再作为 K11 后续路线 | 2026-08-11 |
 | K6a | AR 行数按**编译期** storage capacity 特化（`BATCH = STORAGE_BATCH_CAPACITY`） | P0 | ✅ 收益已实测 | codex（claude 独立读原始 diag + 拟合） | K1 | **实测 `14.44 µs/call` = `0.693 ms`（48 次），80× half_range，首个单项越过 14 µs 门。** 十臂 A1/A2 bracket：`43.26 / 43.62` → center `43.440`、half_range `0.180 µs (0.41%)`，且与 K1 独立 campaign 的 `43.18 µs` 一致 → harness 复现基线。scan A（batch=tile=N，一次 N 行传输）p50 `29.00/30.10/32.86/36.00/43.26` for N=`1/2/4/8/16`。**落地不需改 kernel**：`config.py` 的 `BATCH = STORAGE_BATCH_CAPACITY = env("PYPTO_STEP3P5_STORAGE_BATCH_CAPACITY", 16)`，只服务 bs=1 的部署编译成 capacity=1 即可；唯一机械改动 `BATCH_TILE = 16` 需变 `min(BATCH, 16)`（否则 `pl.slice(..., [BATCH_TILE, ...])` 在 BATCH=1 越界）。**代价 = 放弃并发多行 batching，是部署配置取舍、不是纯优化。****副产物结论**：现有 bs=1 整网数字（34.3 ms 等）均在 capacity=16 下测得 → 一直背着这 `0.693 ms` 可避免的 AR 成本。**限定**：bs=16 收益 `0.18 µs`（=1× half_range=噪声），bs=8 只 `7.44 µs/call = 0.357 ms` 而 bs=8 地板 `2.637 ms` 需 `54.9 µs/call` → **K6a 在 bs=8 门下无望，只能作低 batch 收益**，且必须实测 bs=8/16 不回退。原件 `0162:/mnt/persist/chensiyu/workspace/p2-k6-active-rows-20260810/run-20260810-233142/`，复核 `perf-2026q3/claude-verify-k6-scan-20260810/`（`VERDICT.md` sha256 `cc589dbb…`） | 2026-08-10 |
-| K6b | AR payload 按 **runtime** `active_tokens` 裁剪 | P1 | ✅ codegen 门 PASS，可进产品实现 | codex（claude 逐 op 读生成 MLIR） | K6a | **无卡 codegen 门通过。** 判据是生成 MLIR 中 `partition_tensor_view` 的行维、**不是**编译成功。原件 `0162:.../p2-k6b-runtime-validshape-20260810/codegen-gate-store-20260810-235314/.../ptoas/tp_all_reduce.pto`，类型分布 `10 × <?x512xbf16>`（动态）/ `2 × <16x512xbf16>`（remote_load）/ `4 × <16x4096xbf16>`（TPUT）。逐 op：**✅ `pld.tile.remote_store`**（`:157 tstore ins(tile_buf<rows=16, v_row=?>) outs(?x512)`）动态、tile 仍静态分配 rows=16 → **机制确认**；**✅ 本地 `pl.load`/`pl.store` 也跟着动态**（`:93 tload ?x512`、`:135 tstore ?x512`、`:200/:203` final copy 读写皆 `?x512`）→ **final copy 的 4096 列也可缩，这是未预测到的额外收获**；**⚠ `pld.tile.remote_load` 仍静态 16 行**（`:123 tload ins(16x512)`，extent 取自 `shape=` 参数而非 valid_shape）→ 需上游 `valid_shape=` kwarg；**❌ TPUT 已在独立臂中测过并被 PTOAS 否证**（不是未测）—— 主臂只传了 `chunk_rows/chunk_cols` 故 partition view 是全量常量（`:48 sizes=[%c16_index, %c4096_index]`）；codex 另起 `k6b_generate_source_runtime_tput.py` 补齐 `shape=` + 两个 offsets 后，**pypto 正确 emit 了 `pto.comm.tput(... !pto.partition_tensor_view<?x4096xbf16> ...)`，但 PTOAS 在 `tp_all_reduce.pto:51:3` 硬拒**：`'pto.comm.tput' op expects dst to have a positive static shape`（原始日志 `codegen-gate-20260810-235230/host.log:1`）。**⇒ 阻塞在 PTOAS 而非 pypto**，构成第三条上游诉求。**账（列数 TPUT 4096 / load 3584 / store 3584 / copy 4096 = 15360，斜率 `0.9357 µs/row`）**：已确认可缩 = store `23.3%` + copy `26.7%` = **50.0% → `7.02 µs/call` = `0.337 ms`，不需任何上游改动**；TPUT `26.7%`（需 PTOAS 改）+ remote_load `23.3%`（需 pypto 改）→ 两条上游都修好才到 `100% → 14.04 µs/call`。**★ 内部一致性检查通过**：四项全通推出的 `14.04` vs K6a 实测 `14.44 µs/call`，**差 2.8%** —— K6a 是「编译期把所有 shape 改小」语义上等价于四项全缩，**两条独立推导对上，验证了按 bytes 归因的分配模型**（此前标注为「估计」的方法现有实证支撑）。**建议**：① K6b 直接进产品实现，不必再上卡验证（机制已在 MLIR 层确认、总量已由 K6a 实测、归因已交叉验证），上卡复核与 bundle 一起做；② 补一臂定 TPUT（`shape=` + `dst_offsets`/`src_offsets` 三者必须同时给，见 `tensor_ops.py:367`），仍无卡；③ **三条上游诉求**（前两条 pypto、第三条 PTOAS，同属「把 DMA/fence 语义与静态类型解耦」）：`pld.tile.remote_load` 缺 `valid_shape=` kwarg（解锁 `3.27 µs/call`）、`pld.system.notify` 缺 fence/release 参数（解锁 K2b 的 `2.39 µs/call`）、`pto.comm.tput` 拒绝 dynamic dst shape（解锁 `3.75 µs/call`）。④ **落地时的实现约束**（codex 实测踩到）：把 dynamic valid shape 贯穿整个 reduction 会触发 **loop-phi dominance bug**；正确结构是 own/remote load 与 reduce loop 保持静态，只在 publish 处新建 `reduced_tile_valid = set_validshape(reduced_tile_raw, active_rows, 512)`，并只对 final-copy 的 load/store 用 dynamic valid shape。报告 `0162:.../p2-k6b-runtime-validshape-20260810/K6B-CODEGEN-GATE.md` sha256 `03baffd3…` | 2026-08-11 |
-| K8 | persistent window 每步清零 `30.6 MiB` → 只清 `47,616 B` control 前缀 | **P0** | ✅ 已落地 + immutable image 已发布 | claude（codex landing review + reset 仪表） | K1 | **本轮唯一「A/B/A + 精度门」双过的优化。** 调研：每步 `_reset_persistent_domains` 清整个 `32,063,232 B` window，实际必需的只有 7 个 control counter 共 `47,616 B`（`0.1485%`）。实现两侧：模型侧 `decode_fwd.py`（+11/−7）把那 7 个 buffer 提到 16 个 alloc 的最前面，构成**唯一连续前缀** `[0, 47616)`；runtime `distributed_runner.py`（+174/−22，含 codex 的 `PYPTO_PERSISTENT_RESET_TRACE` / `reset_body_us` / `memset_all_us` 仪表）只 memset 该前缀，并带 **16-buffer 指纹 fail-closed 回退全清**（指纹不匹配或名字变体 → 全清），且**只对 WholeDecode 生效**（v3 硬化；v1 被 landing review 否掉）。**源码级 A/B/A 双 bracket**：ITL p50 `33.84 → 32.08 ms`（**−1.7455 ms / −5.16%**，89.5× 检测地板）、`_reset_persistent_domains` body `2253 → 518 µs`、`hidden_sha256` `567b206b…` byte-exact + token `14371`。**镜像级复现**（manifest `sha256:076af8a1…c47f3`）：p50 `32.14 ms`（与候选臂差 `0.06 ms` ≪ 地板）、reset body p50 `523.1 µs`、109/109 步 `k8_prefix_applied=true`、N=128 三轮 `123/128` 且与 Wave5 逐位相同。落地件 sha：`decode_fwd.py` `eb1f89bf…04fb5`、runtime `fe50c11f…39622e`。**衍生负结果**：天花板探针失败 —— 语义无效的臂不能界定性能上界（见更新日志）。数据见 [`../../benchmark/2026-08-11-k8-selective-window-zeroing.md`](../../benchmark/2026-08-11-k8-selective-window-zeroing.md)（源码级）+ [`../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md`](../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md)（镜像级） | 2026-08-11 |
+| K6b | AR payload 按 runtime `active_tokens` 裁剪（dynamic valid shape） | P1 | ⏸ 历史中间方案（未落地） | codex | K6a | 历史 codegen 证明 remote-store 与 final local copy 可动态裁剪，但 remote-load 仍是静态 16 行；dynamic-destination TPUT 被 PTOAS 拒绝。把 valid shape 贯穿 reduction 还会触发 loop-phi dominance/convergence。dynamic publish 位于已知 notify-fence seam；现有设备运行未复现错误，但没有独立 rank-skew/zero-gap/多 epoch safety proof。该版本只作为 K11 的历史 focused 对照，不得再按旧建议进入产品实现；最终 `69ad31e4` 删除 dynamic DMA 依赖，改用静态 single-row selector + 静态三波 fallback。历史报告 `0162:.../p2-k6b-runtime-validshape-20260810/K6B-CODEGEN-GATE.md` | 2026-08-12 |
+| K8 | persistent window 每步清零 `30.6 MiB` → 只清 `47,616 B` control 前缀 | **P0** | ✅ 已落地 + immutable image 已发布 | claude（codex landing review + reset 仪表） | K1 | **截至 2026-08-11 是首个「A/B/A + 精度门」双过的优化，且仍是最新 immutable-image 优化。** 调研：每步 `_reset_persistent_domains` 清整个 `32,063,232 B` window，实际必需的只有 7 个 control counter 共 `47,616 B`（`0.1485%`）。实现两侧：模型侧 `decode_fwd.py`（+11/−7）把那 7 个 buffer 提到 16 个 alloc 的最前面，构成**唯一连续前缀** `[0, 47616)`；runtime `distributed_runner.py`（+174/−22，含 codex 的 `PYPTO_PERSISTENT_RESET_TRACE` / `reset_body_us` / `memset_all_us` 仪表）只 memset 该前缀，并带 **16-buffer 指纹 fail-closed 回退全清**（指纹不匹配或名字变体 → 全清），且**只对 WholeDecode 生效**（v3 硬化；v1 被 landing review 否掉）。**源码级 A/B/A 双 bracket**：ITL p50 `33.84 → 32.08 ms`（**−1.7455 ms / −5.16%**，89.5× 检测地板）、`_reset_persistent_domains` body `2253 → 518 µs`、`hidden_sha256` `567b206b…` byte-exact + token `14371`。**镜像级复现**（manifest `sha256:076af8a1…c47f3`）：p50 `32.14 ms`（与候选臂差 `0.06 ms` ≪ 地板）、reset body p50 `523.1 µs`、109/109 步 `k8_prefix_applied=true`、N=128 三轮 `123/128` 且与 Wave5 逐位相同。落地件 sha：`decode_fwd.py` `eb1f89bf…04fb5`、runtime `fe50c11f…39622e`。**衍生负结果**：天花板探针失败 —— 语义无效的臂不能界定性能上界（见更新日志）。数据见 [`../../benchmark/2026-08-11-k8-selective-window-zeroing.md`](../../benchmark/2026-08-11-k8-selective-window-zeroing.md)（源码级）+ [`../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md`](../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md)（镜像级） | 2026-08-11 |
 | K9 | 删 Wave3（final-copy 波次） | P1 | ❌ 整网 NO-GO（实测否决，保留为负结果） | claude | K1 | bench 层面看似省，但整网 A/B/A **ITL `+1.72 ms/step`，符号与 bench 相反**；byte-exact 成立但性能回退 ⇒ **不落地**。价值在于确立「bench 收益不等于整网收益，符号都可能反」这条纪律，以及暴露中间臂偏置（见更新日志 2026-08-11 校正行） | 2026-08-11 |
 | K10 | 去掉剩下那一次**阻塞** host control round | P1 | ⬜ | — | K8 | K8 之后 reset 路径仍有一次阻塞 host↔device control 往返，上界 **`0.45–0.53 ms/step`**。⚠ **两条口径纪律**：① **不得**表述为「4.4 ms 异步化 reset」；② **不得**引用已被否证的 no-reset 探针（语义无效臂）。实施顺序：① device 侧 zero prologue → ② request epoch/generation → ③ async / 双缓冲。评估只认整网 A/B/A + byte-exact | 2026-08-11 |
+| K11 | HCCL selector 思路的 single-row one-shot mesh | **P0** | ✅ 已合入，source-overlay GO | codex | K1, K6b | `stepfun/develop@69ad31e4`：rank-uniform `active_rows == 1` 走静态 8 KiB 两波 one-shot mesh；其他 Main 行数与 MTP 走静态三波 fallback；ownership=`HIDDEN // TP_WORLD_SIZE`，与 transfer chunk 解耦。`dense_mlp_body_tp` 新增 `num_tokens` 实参，仓外调用方升级时必须同步补齐。旧 `a791071` ring 为 A/A，禁止合入。unit `365 passed, 7 skipped`；Main/MTP default+chunk256 compile、8 卡 rows `1/3/16` PASS。focused 历史 regular-call kernel-duration pooled mean `38.325 → 22.667 µs/call`（-40.9%，非 strict critical-tail）；Whole A/B/A `31.065/29.912/30.999 ms`，delta `-1.120 ms/-3.609%`，precision/per-iteration PASS。five-layer structural fail-closed 不变；剩余 immutable-image/structural qualification | 2026-08-12 |
 
-**★ Track K 统一定律（2026-08-10，K6 scan 拟合 + K1/K2a 交叉验证）**
+**Track K 历史三波 parent 拟合（2026-08-10，已 supersede）**
 
+历史静态三波 parent 曾拟合为：
+
+```text
+AR_cost ≈ 0.80 µs × N_remote_transactions + 0.94 µs/row × active_rows
 ```
-AR_cost ≈ 0.80 µs × N_remote_transactions  +  0.94 µs/row × active_rows
-```
 
-三条独立测量互证：
+K1 的 remote credit store（`0.8010 µs`）、K6 scan B 的 payload transfer
+（`0.7616 µs`）以及 K6 scan A 的截距（实测 `28.442 µs`，35 次交易预测
+`28.035 µs`）在**同一三波拓扑内**互相吻合。它解释了 K2a 批 barrier 为何无收益，
+也促成了按 active rows 优化的方向。
 
-| 来源 | 量 | 值 |
-|------|----|----|
-| K1 notify law | 每次 remote credit store 边际成本 | `0.8010 µs` |
-| K6 scan B | 每次 payload 传输边际成本（`10.6628 µs/round ÷ 14 传输/round`） | `0.7616 µs`（差 5%） |
-| K6 scan A | 截距（row-count 无关项）实测 vs 交易计数预测 | `28.442` vs `35 × 0.8010 = 28.035`（差 `−0.407 µs` = **1.4%**） |
+该拟合不是跨拓扑性能模型：K5-C 把交易数从 35 降到 12，却因依赖深度变成六个
+串行 round，设备实测只改善 `0.54 µs/call`，已经否证旧 path2 外推。K6b 的
+dynamic-valid-shape 也未落地。旧 path1/path2 组合、`26.8 µs/call` 预测和据此给出的
+实施顺序全部退休，不再指导产品实现。
 
-其中 `35 = 21 notify credit store（7 peer × 3 wave）+ 14 payload（7 remote_load + 7 remote_store）`。
-scan A 最小二乘 `cost = 28.442 + 0.9357 × rows`，残差 `−0.38/−0.21/+0.67/+0.07/−0.15`。
-回代：bs=1 → `28.9`（实测 `29.00`）、bs=16 → `43.0`（实测 `43.26/43.62`）。
-
-**这条定律同时解释了 K1 的 `a≈0` 和 K2a 的实测否决：成本是 per-remote-transaction 的固定
-发起/完成开销，与单次传输大小几乎无关。** 因此只有两个杠杆 —— **减少 remote 交易次数**
-与 **减少行数** —— 且二者作用在不同项上、**可加**。这也是 K5（减交易）被从末位提到前列、
-K2a（批 barrier）被否决的共同原因。
-
-**定律的外推限制**：scan B 多轮臂 `latest_entry_is_last_exit_rate` 从 `0.953` 掉到
-`0.625/0.625/0.594/0.531`，headline 统计在多轮臂条件变差（效应量 10~160 µs 远大于
-half_range 0.18 µs 故方向可信，但 `10.66 µs/round` 系数带此保留）；且 scan B 的 t=16 与
-scan A 的 N=16 用**同一个臂** `base16_a1`，两条 scan 在共享点上是恒等式、**未独立交叉验证**。
-
-
-（`13 × 48 = 0.624 ms < 0.634 ms` 越不过历史地板）。上门前重算
-`projected_gain = delta_per_call × on_path_call_count(48) × transmission_factor(0..1)`，
-并与**当次** A/B/A 的 contemporaneous parent half-range 比较 —— `0.634 ms` 不是永久常数。
-P2 绝对天花板 = 48 次 on-path AR × 43 µs ≈ `2.20 ms` = 整网 25.8 ms 的 **8.5~9.7%**
-（不是 5 层 swimlane rank2 的局部 15.9%）。standalone probe 相对灵敏度 `0.14%` 约为整机门
-`2.5%` 的 18 倍，故 **microbenchmark 为主证据、整机只做 no-regression**。
-
-**没有任何单项能独立越过 14 µs 门** —— 此判断已被 K6a 推翻：K6a 实测 `14.44 µs/call`
-（bs=1）是首个越门的单项。其余仍成立：K2a 实测 `0.060` 已否决、K2b 单臂 `2.39`、
-K3 上界 `7.92`、K4 `5.51 + 2.18`、self-TPUT `3.92`、K6b 估计 `~3.7`。
-K5-C 按定律外推预测 `26.8 µs/call`（bs=16 也有效）但需实测。
-
-**天花板不可相加**：K2b / K4 都从同一个 `16.51 µs` 三轮 notify control 池取水。
-但 **K6a（row 项）与 K5-C（transaction 项）作用在定律的不同项上、可加**。
-两条路径的精度代价不对称：
-
-| 路径 | 组成 | 预估 `µs/call` | 48 次 | FP32 求和顺序 | 精度准出 |
-|------|------|---------------|-------|--------------|---------|
-| **path1（保序）** | K6a `14.44`(bs=1) + K4 `5.06` + K2b `2.70` + K3 `7.92` | `30.12` | `1.446 ms` | rank0→7 canonical 保留 | hidden payload sha256 **byte-exact**（更便宜且更严，不占 cards 0-7） |
-| **path2（RD/RS）** | K5-C `26.8`（外推）+ K6a 可叠加 | `26.8+` | `1.286 ms+` | 括号改变 | live vanilla vLLM W8A8 oracle，N=128 逐 token ≥95%（需整机 + oracle 容器） |
-
-path1 现在**仅靠 K6a 一项就越门**（bs=1），故先走 path1；path2 的 K5-C 因在
-**bs=16 也有效**（path1 在 bs=16 只剩 K4/K2b/K3 的 `15.68 µs = 0.753 ms`，
-而 bs=16 地板需 `54.9 µs/call`）而仍需实测，作为高 batch 档的唯一希望。
+当前产品结论只以 K11 为准：单行走静态两波 one-shot mesh，其他 Main 行数与 MTP
+走静态三波 fallback；Whole A/B/A 已证明 `-1.120 ms / -3.609%`，后续只做
+immutable-image qualification，不再恢复旧 Ring、K5-C 或 K6b 路线。
 
 ---
 
@@ -358,22 +349,23 @@ path1 现在**仅靠 K6a 一项就越门**（bs=1），故先走 path1；path2 �
 
 | 状态 | 数量 |
 |------|------|
-| ⬜ TODO | 13 |
+| ⬜ TODO | 12 |
 | 🟦 IN PROGRESS | 3 |
 | ✅ DONE | 22 |
-| ❌ / ⛔ NO-GO | 4 |
+| ⏸ PAUSED / SUPERSEDED | 1 |
+| ❌ / ⛔ NO-GO | 5 |
 | ⛔ BLOCKED | 0 |
-| **合计** | **42** |
+| **合计** | **43** |
 
-**base 校正后关键路径**：A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2/I3/I4/I5/I7/J2/K1/K6a/K6b/**K8** 已 ✅；
-其中 **K8 是本轮唯一「整网 A/B/A + 精度门」双过并已发布 immutable image 的优化**
+**base 校正后关键路径**：A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2/I3/I4/I5/I7/J2/K1/K6a/**K8/K11** 已 ✅；K6b 已降为被 K11 supersede 的历史中间方案。
+其中 **K8 是已通过整网 A/B/A + 精度门并发布 immutable image 的 host-reset 优化**
 （ITL `33.84 → 32.08 ms` 源码级 / `32.14 ms` 镜像级，byte-exact + N=128 `123/128`）。
-historical pull C2 仅作回归基线；C5、K2a 与 **K9** 是三个实测否决的负结果（K9 整网
+K11 已完成源码 landing 与 source-overlay Whole A/B/A，尚待 immutable image；historical pull C2 仅作回归基线；C5、K2a、K5-C 与 **K9** 是四个实测否决的负结果（K9 整网
 `+1.72 ms/step`，符号与 bench 相反）。当前 performance 看板进行中的是
 **B3（KV resident/in-place 的连续多轮 row-diff/liveness 证据）**、**J1（formal DFX /
 publication / swimlane 收尾）**、**K2b（publisher release fence hoist，需上游 pypto 补丁）**；下一优先是
-**K10（去掉剩下那一次阻塞 host control round，上界 `0.45–0.53 ms/step`，K8 的直接后继）**
-与 **K5-C（recursive halving/doubling，唯一在 bs=16 也有效的候选）**。
+**K10（去掉剩下那一次阻塞 host control round，上界 `0.45–0.53 ms/step`，K8 的直接后继）**。
+K5-C 已由设备实测判定 NO-GO，不再列为候选；K11 只剩 immutable-image qualification。
 历史 I1 Attention/Vec 与 TP all-reduce stability 已在 0162 release-qualified；
 I3/I4 的 `f9065261` 当前仅为 source-overlay GO；I6 的 `fa58b5cf` 为
 source-overlay 实现/精度 PASS、性能 **NO-GO**；I7 的 `e5e26f9f` 只对
@@ -399,6 +391,7 @@ source-overlay 实现/精度 PASS、性能 **NO-GO**；I7 的 `e5e26f9f` 只对
 
 | 日期 | ID | 变更 | 备注 |
 |------|----|----|------|
+| 2026-08-12 | K11 | single-row small-message selector 合入 `stepfun/develop@69ad31e4` | `active_rows==1` 为静态 8 KiB 两波 one-shot mesh，其余 Main/MTP 为静态三波 fallback；ownership/transfer chunk 解耦。unit `365 passed, 7 skipped`；Main/MTP default+chunk256 compile、8 卡 rows `1/3/16` PASS。focused 历史 regular-call kernel-duration pooled mean `38.325→22.667 µs/call`（非 strict critical-tail）；Whole A/B/A `31.065/29.912/30.999 ms`，delta `-1.120 ms/-3.609%`，precision/per-iteration PASS。landing tree `e26d762c…`；未构建新 immutable image。 |
 | 2026-08-12 | I7 | RMS→QKV critical prestage 已完成设备门并合入 `stepfun/develop` | baseline `fa58b5cf` 的 QKV raw-kernel start − RMS raw-kernel end 为 min/p50/max=`4.60/5.00/5.48 us`；最终 `e5e26f9f` 为 `2.08/2.64/3.16 us`，p50 减少 `2.36 us`（47.2%）。更直接的调度证据：QKV Worker gap p50=`+4.77 → -1.78 us`，setup 已与 RMS 重叠；candidate RMS Worker span=`4.16/4.35/4.78 us`。方案：RMS producer 开 early resolve；保留 QKV producer flag 优化下一跳；用已存在的 `swa_attn_out_zero` TaskId 把非关键 head-gate 隔离为 normal dispatch。target unit `22 passed`，五层 L3/L4 exact。整网 A/B/A=`30.992/30.997/31.136 ms`、hidden/token exact、`WITHIN_BASELINE_BRACKET`。commit 链 `18d1b519..e5e26f9f` 已 FF push；all-ranks bundle SHA `2f58af78…`。I6 NO-GO、canonical zero-route limitation 和新镜像未构建边界均不变。 |
 | 2026-08-12 | I6 | post-merge 整网 ITL 与 fresh 五层 DFX 将状态改为 NO-GO | 最终 clean `fa58b5cf`、固定 manifest `sha256:076af8a…`、BS1/ctx64K/512 blocks。A/B/A p50=`31.787 / 33.194 / 31.905 ms`，candidate 相对 baseline center `31.846 ms` 回退 `+1.348 ms / +4.233%`；三臂 hidden SHA `567b206b…`、finite、token `14371` exact，精度 PASS。fresh 五层 8-rank swimlane 共 8 份，strict gate 39/40，rank7/L0=`54.54 us`；该点为约 12 us AICPU scheduler dispatch stall，kernel compute 与依赖正常。campaign=`0162:/mnt/persist/chensiyu/workspace/perf-2026q3/qkv-prerope-postmerge-validation-20260811-r1/`；fresh report JSON `0b5cbe20…`，whole ABA result `065f67c8…`。 |
 | 2026-08-11 | I6 | packed QKV projection + split/QKNorm/RoPE 独立严格五层门完成并推送 | 0162 candidate worktree=`/mnt/persist/chensiyu/workspace/develop-worktrees/qkv-prerope-mix`，branch=`perf/qkv-prerope-mix-20260811`，base=`f9065261`；commit `fa58b5cffe41b30d3f8d94482230867ee34b9e84` 已 fast-forward push，origin、main/candidate 三者同 commit 且 clean。图收敛为 `qkv_proj → qkv_split_qknorm_rope → attn_mix`；Full/SWA inventory=`10+1 / 14+1`，旧 projection/norm/rope family=0。unit `362 passed, 7 skipped`，whole compile `rc=0`，focused 三臂 `container.rc=0`，12 edge、Q-publication 12/12、heterogeneous context 与 L3/L4 precision PASS。严格 merged Worker View **40/40 PASS**，global max `43.60 us`，margin `2.40 us`；分层范围 L0 `42.40–43.60`、L1 `39.10–41.60`、L2 `38.80–41.14`、L3 `39.30–41.16`、L4 `38.96–41.62 us`。证据根 `0162:/mnt/persist/chensiyu/workspace/perf-2026q3/qkv-prerope-final-device-gate-20260811-r1/`，report JSON SHA `e12e6bd2…`、MD `96467afb…`、seal `e2be0cad…`。固定镜像内仍为 `cb96747e`，只作 source-overlay Attention gate；canonical analyzer 的 known `rc=1` 不得升级为 structural/release PASS。 |

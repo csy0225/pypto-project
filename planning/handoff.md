@@ -1,54 +1,118 @@
 # 接力上下文（Handoff）
 
 > **只描述下一位 agent 现在要接的工作。最后更新：2026-08-12。**
-> 当前状态以 [`../STATUS.md`](../STATUS.md) 为准；历史过程不要复制回本文件。
+> 当前状态以 [`../STATUS.md`](../STATUS.md) 为准。
 
 ## 1. 当前判定
 
-`fa58b5cffe41b30d3f8d94482230867ee34b9e84` 已完成源码集成，但当前性能验收
-**NO-GO**：
+TP all-reduce 单行优化已完成源码落地和 source-overlay 最终门：
 
 ```text
-qkv_proj → qkv_split_qknorm_rope → attn_mix
+pypto-lib stepfun/develop
+  HEAD    69ad31e4fd6e40b30e43c2566ce8f8ebd0b2427d
+  parent  9ca01d243e534949287fa769e5be35031ebc4be7
+  tree    e26d762cb8c4abd49a1546e7db2beddeb6480e14
 ```
 
-- 整网精度：PASS；
-- 整网 ITL：FAIL，candidate p50 `33.194 ms`，baseline center `31.846 ms`，
-  回退 `+1.348 ms / +4.233%`；
-- fresh 前五层 DFX：FAIL，strict `<46 us` 为 `39/40`；
-- worst：rank7/L0 Full=`54.54 us`；
-- inventory/dependency/legacy audit：PASS；
-- immutable image：未构建。
+- GitHub remote 与 0162 指定 checkout 对齐、clean；
+- Main BS1 使用静态 `1×4096` 两波 one-shot mesh；
+- Main 多行与 MTP 使用静态三波 fallback；
+- Whole A/B/A：`31.065 / 29.912 / 30.999 ms`；
+- candidate：`-1.120 ms / -3.609%`；
+- precision/per-iteration gate：PASS；
+- immutable image：**未构建**。
 
-2026-08-11 的五层 `40/40`、max `43.60 us` 是历史单次 capture，已被
-2026-08-12 final-commit fresh run 的 39/40 supersede，不能继续作为当前准出结论。
+## 2. 源码位置与最终实现
 
-## 2. 0162 源码状态
-
-所有源码与脚本均只在 0162 创建或修改；本地项目仓仅允许文档变更。
-
-```text
-candidate worktree
-  /mnt/persist/chensiyu/workspace/develop-worktrees/qkv-prerope-mix
-
-branch
-  perf/qkv-prerope-mix-20260811
-
-parent/base
-  f906526190dc2eca0d479f8e9fa9187ec6d31be9
-
-final commit
-  fa58b5cffe41b30d3f8d94482230867ee34b9e84
-
-status
-  origin/stepfun/develop, main checkout and candidate worktree aligned; clean
-```
-
-0162 路径：
+0162 指定 checkout：
 
 ```text
 /mnt/persist/chensiyu/workspace/develop/pypto-lib
-/mnt/persist/chensiyu/workspace/develop-worktrees/qkv-prerope-mix
+branch  stepfun/develop
+HEAD    69ad31e4fd6e40b30e43c2566ce8f8ebd0b2427d
+origin  69ad31e4fd6e40b30e43c2566ce8f8ebd0b2427d
+status  clean
+```
+
+最终 selector：
+
+```text
+Main active_rows == 1
+  static 1×4096 self-TPUT
+  -> Wave 1 publication
+  -> fixed rank-order full-row remote loads
+  -> one FP32 accumulator / one final BF16 cast
+  -> Wave 2 completion
+
+Main active_rows != 1
+  static three-wave reduce-scatter + push-all-gather fallback
+
+MTP
+  shared ABI, three calls pass static BATCH, always static fallback
+```
+
+ownership 必须保持：
+
+```text
+TP_ALL_REDUCE_OWNED_CHUNK = HIDDEN // TP_WORLD_SIZE = 512
+```
+
+它与 `TP_ALL_REDUCE_CHUNK` 的 staging/final-copy transfer grain 解耦。
+
+源码兼容性提醒：`dense_mlp_body_tp` 在 `mlp_layer_idx` 后新增了
+`num_tokens: pl.Scalar[pl.INT32]`。仓内 Main 已传运行时 `num_tokens`，MTP 已传
+静态 `BATCH`。仓外的直接调用方以及
+`pl.inline(dense_mlp_body_tp._func)` 调用方升级时必须同步补该位置实参；这是源码
+调用 ABI 变化，不能沿用旧参数表。
+
+## 3. 最终验证
+
+```text
+canonical/two-layer AST       FINAL_STATIC_SELECTOR_CONTRACT_PASS
+unit                           365 passed, 7 skipped
+ruff / diff-check              PASS
+Whole compile default          PASS
+Whole compile chunk=256        PASS
+MTP 3/3 default                PASS
+MTP 3/3 chunk=256              PASS
+8-card rows 1/3/16             PASS
+```
+
+rows `1/3/16` 覆盖 single-row smallmesh 与两档 multi-row fallback；该 device
+matrix 未持性能锁，只是功能证据。
+
+Whole BS1 / ctx64K / 512 blocks / warmup 10 / measured 100：
+
+```text
+A1 9ca static fallback p50     31.065 ms
+B  final-tree smallmesh p50    29.912 ms
+A2 9ca static fallback p50     30.999 ms
+baseline center                31.032 ms
+candidate delta                -1.120 ms / -3.609%
+performance                    IMPROVEMENT_BEYOND_BRACKET
+precision/per-iteration        PASS / PASS
+```
+
+B 臂 `b67afe77` 与最终 landing `69ad31e` 的 Git tree 相同。三臂 hidden SHA：
+
+```text
+567b206bb03d89f84020e1dddd61098a8f79f32f81b8f4fcf56443113e27f03e
+```
+
+三臂 finite、TP spread=0、tail token `14371` exact。
+
+five-layer 只声明 L3/L4 exact、finite、TP spread=0，并提取了 regular-call
+kernel-duration pooled mean；
+既有 zero-token canonical structural analyzer 仍 fail-closed。
+
+## 4. 权威产物
+
+```text
+/mnt/persist/chensiyu/workspace/perf-2026q3/
+  tp-allreduce-hccl-smallmesh-validation-20260812/final-static-fallback/
+
+whole-aba/out/final-aba-bs1-ctx64k-20260812-174433/ABA_RESULT.json
+  sha256 383caa23124c7da42d676ef642bc8b488344349564fd4131efa560c6b5ea3757
 ```
 
 固定验证镜像：
@@ -58,179 +122,53 @@ manifest sha256:076af8a167405d5d0831e234cd16521c77d8bfdd173eff063d820802057c47f3
 config   sha256:a9d111880883cea0b02e425fdfeaccc2b14bb1d1174c0b73488d8ee6d8004d39
 ```
 
-镜像内 `pypto-lib` 仍为 `cb96747e`；候选是 read-only source overlay，runtime
-无 overlay。
+镜像内 `pypto-lib` 仍为 `cb96747e`；`69ad31e` 是 read-only source overlay，
+runtime 无 overlay。
 
-## 3. 已通过的正确性门
+## 5. 已退休的分支
 
-```text
-unit                    362 passed, 7 skipped
-whole compile           PASS
-focused correctness     PASS
-edge contexts           12/12 exact
-Q publication           Full/SWA 12/12
-heterogeneous contexts  [1,2816,2817] exact
-five-layer L3/L4        exact, finite, TP spread=0
-whole precision         exact, finite, token 14371
-```
+### `a791071` attention-inline Ring
 
-整网 A/B/A 三臂 hidden SHA256 均为：
+该实验没有命中 production canonical `WholeDecodeStep3p5.tp_all_reduce`，实质为
+A/A；compile OK 不能推断 device correctness 或性能。不得继续扩展或恢复。
 
-```text
-567b206bb03d89f84020e1dddd61098a8f79f32f81b8f4fcf56443113e27f03e
-```
+### `b4d45b3` K6b dynamic-valid-shape
 
-因此可以明确回答“整网精度通过”；不能据此回答“性能集成通过”。
+动态 publish/final-copy 虽能过部分 codegen，但 self-TPUT/remote-load 仍受静态
+shape 约束。dynamic publish 位于已知 notify-fence seam；现有设备运行未复现错误，
+但没有针对该 seam 的独立 rank-skew/zero-gap/多 epoch safety proof。该分支只保留为
+focused 历史证据，不得写成“可进产品、不必上卡”。
 
-## 4. 整网 ITL A/B/A
+## 6. 正确性硬约束
 
-合同：
+1. `active_rows` 必须在所有 TP rank 上一致，否则 selector 分叉会死锁；
+2. 固定 peer 顺序、单 FP32 accumulator、一次 BF16 cast 不得改变；
+3. 两波与三波不能复用未清零的同一 signal slot；
+4. exact two-layer mirror 必须继续与 canonical body AST 一致；
+5. 本实现不等于修复 notify fence；未来合并波次或把 payload store 与自己的
+   credit 拉近，仍受 `UPSTREAM-NOTIFY-FENCE` 阻塞；
+6. 仓外 `dense_mlp_body_tp` 调用点必须传新增的 `num_tokens` 实参。
 
-```text
-A1/A2 baseline  f906526190dc2eca0d479f8e9fa9187ec6d31be9
-B candidate     fa58b5cffe41b30d3f8d94482230867ee34b9e84
-BS              1
-context         65536
-blocks          512
-warmup/iters    10/100
-devices         8–15
-```
+## 7. 下一步
 
-结果：
+1. 基于 `pypto-lib@69ad31e` 构建 immutable candidate image；
+2. 固定 manifest/config 和所有组件 pin；
+3. 在新镜像上重跑 Whole A/B/A、Main N=128、多 batch、MTP、canonical
+   structural analyzer；
+4. source-overlay 与 image gate 分账；新镜像闭环前不得写
+   production/release-qualified；
+5. 不再启动 Ring 或 dynamic-valid-shape 产品化，除非出现新的独立证据。
 
-```text
-A1 p50             31.787 ms
-A2 p50             31.905 ms
-baseline center    31.846 ms
-half-range floor    0.059 ms
-B p50              33.194 ms
-delta              +1.348 ms / +4.233%
-delta/floor         22.85x
-precision           PASS
-performance         REGRESSION_BEYOND_BRACKET
-```
+## 8. 机器与操作约束
 
-证据：
-
-```text
-/mnt/persist/chensiyu/workspace/perf-2026q3/
-  attn-mix-device-gate-20260811/out/aba-bs1-ctx64k-20260812-102231/
-
-ABA_RESULT.json
-  sha256 065f67c889a5eb108c49770261ccadf4d8f2970882b657efafb205ee35d6510b
-```
-
-## 5. Fresh 前五层 DFX swimlane
-
-运行时间为 2026-08-12 10:39:59–10:44:15（Asia/Hong_Kong），共生成 8 份
-merged swimlane。严格口径：
-
-```text
-start  = earliest layer-local *_qkv_proj Worker View ts
-finish = latest layer-local *_qkv_split_qknorm_rope Worker View ts+dur
-gate   = max(8 ranks × 5 layers) < 46.000 us
-```
-
-结果：
-
-| Layer | Min us | Max us | Pass |
-|---|---:|---:|---:|
-| L0 Full dense | 41.46 | **54.54** | 7/8 |
-| L1 SWA dense | 38.90 | 43.14 | 8/8 |
-| L2 SWA dense | 38.66 | 40.02 | 8/8 |
-| L3 SWA MoE | 39.16 | 41.72 | 8/8 |
-| L4 Full MoE | 39.38 | 41.50 | 8/8 |
-
-```text
-total       39/40
-failed      rank7/L0 Full
-span        54.54 us
-over gate   8.54 us
-```
-
-只读诊断：
-
-- QKV 10 个 Worker slice 的单片 kernel duration 与其它 rank 一致；
-- fused task 实际 compute `6.44 us`，也与其它 rank 一致；
-- rank7 在 QKV 发射窗口出现约 `12 us` AICPU scheduler dispatch stall，导致
-  projection family span `44.68 us`；
-- deps 与 lineage 完整，前驱已完成；
-- 该 launch skew 是端到端 stage latency，不能从 strict gate 中剔除。
-
-证据：
-
-```text
-/mnt/persist/chensiyu/workspace/perf-2026q3/
-  qkv-prerope-postmerge-validation-20260811-r1/five_layer/
-
-analysis_final/attention_gate_report.json
-  sha256 0b5cbe2064663d179a509739e8c6ccd89777c839fcaca1023c4d1403c3a025a1
-
-analysis_final/attention_gate_report.md
-  sha256 f00149e36403e264018abd55fee4531672535a4b517dd43e5a052a78715c582e
-```
-
-外层 runner `rc=0`；candidate container `rc=1` 仍包含 canonical zero-route
-missing-swim record 限制。独立 analyzer 本轮也返回 `rc=1`，原因是 39/40 性能门
-失败；其 structural inventory/dependency/legacy 子门为 PASS。
-
-## 6. 下一步
-
-不要直接构建 `fa58b5cf` release image。所有代码和脚本仍只允许在 0162 完成。
-
-优先隔离两个变体：
-
-1. 恢复 SWA `head_gate_expand` 在 QKV projection 之前；
-2. 保留 fused split/QKNorm/RoPE，但恢复独立 Q 与 KV projection task。
-
-每个变体：
-
-1. 先跑 candidate-only whole ITL 筛选；
-2. 对最终候选跑同口径 A/B/A；
-3. 重跑 unit/compile/focused exact/Q-publication；
-4. 重跑 fresh 8-rank×5-layer strict `<46 us`；
-5. 只有整网无回退且 40/40 后才考虑 immutable image。
-
-如果 packed projection 持续造成整网回退，应明确 NO-GO，只保留 fused
-split/QKNorm/RoPE。
-
-## 8. 待续：tp-all-reduce barrier-mesh → ring（0162，2026-08-12）
-
-```text
-源 fa58b5c -> 分支 perf/tp-allreduce-ring-20260812 (pypto-lib a791071)
-状态：ring 8 卡 compile OK；端到端 harness 受 pre-existing 镜像 pypto 配对 gate
-     拦截（原始 barrier-mesh 同样失败），ITL 未在本镜像跑通。
-```
-
-任务：vllm-ascend 用 `hcclAllReduce`（HCCL V2 选 ring/tree，stream overlap）做 TP
-all-reduce；pypto 现行 attention o_proj/shared-expert 末尾手写 **barrier-mesh**
-（stage-in → 全局 barrier → 逐 chunk 全 mesh 读），跨卡 DMA ~4× 于 ring。对照
-`/data/chensiyu/hw_project/hccl` 已实现算子，改造为同族 ring reduce-scatter +
-all-gather（2(N-1) 步，每步独占信号 cell、非单调 Set(1)/Ge(1)，刻意避开当初
-ring→barrier 的 codegen 507018 根因）。信号窗 `tp_size` → `2*(tp_size-1)+1`。
-
-```text
-files:  models/step3p5/attention_full.py, attention_swa.py
-docs:   pypto-lib/docs/upstream-issues/step3p5-tp-allreduce-ring-refactor.md
-        (0162)；local design/vllm-pypto/04-tp-allreduce-ring-refactor.md
-```
-
-- 8 卡 `_stage_two_layer_attn` harness 跑出 `compile OK in 1.4s`（ring 被编译器真
-  实接受）；codegen-contract / chip_orch.cpp 编排编译两项 gate 与原始 baseline 同败
-  （pre-existing，非本改造引入）。
-- 待办：配平镜像上重跑 ITL；同模式扩展 moe.py (T/N_RANKS)、mtp_hidden_fwd.py、
-  prefill_attention_*；collectives.py 的 @pl.jit.inline ring 同步改非单调 Set。
-- 复现脚本在 0162 `/mnt/persist/chensiyu/workspace/ar_bench/`（仅 0162）。
-
-## 7. 机器与约束
-
-当前验证 session 已结束，cards 8–15 的容器与进程已清理；后续启动前仍须重新检查
-锁、容器、fuser 与 NPU process，不能沿用旧空闲结论。
+后续启动前重新检查锁、container、`fuser` 与 NPU process，不能沿用旧 session
+的空闲结论。
 
 禁止事项：
 
-- 本地创建/修改代码或测试脚本；
-- 先在本地写脚本再复制到 0162；
-- 用历史 40/40 覆盖 fresh 39/40；
-- 用独立 analyzer 的 structural 子门覆盖 canonical fail-closed；
-- 用局部五层变快推断整网 ITL 变快。
+- 在本地项目仓创建或修改 pypto-lib 产品代码；
+- 用未持锁的 device matrix 作为性能数据；
+- 把 focused regular-call kernel-duration pooled mean
+  `38.325 → 22.667 µs/call` 当作 strict critical-tail 或最终完整源码 A/B/A；
+- 用 host 独立检查覆盖 canonical structural fail-closed；
+- 把 source-overlay 数据写成 immutable-image 结果。
