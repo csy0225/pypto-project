@@ -1,5 +1,286 @@
 # Milestones —— 2026 Q2
 
+## 2026-08-21 —— R9 hang 机制部分定位（amplifier，非闭合环）+ codex 6 天循环根因 + dispatch 域融合线**整体关闭**（orchestrator 不在关键路径）⛔
+
+> ⚠ **本条经过 4 次自我更正（A/B/C/D）+ 一次收盘更正（E）。E 推翻了本条上午写的"环闭合"，
+> 记录了解耦候选在 device 门上的 NO-GO 与"阻塞读是承重流控阀"这一反直觉发现，
+> 并最终以 §E6 的量化**关闭整条线**（orchestrator 不在关键路径 ⇒ ROI = 0）。**
+> 读的时候直接看 §E 的最终口径；上面的 §1 保留为**过程记录**，其"环闭合"结论**已撤回**。
+
+**当日最终结论**：
+
+1. ~~**机制已闭合**~~ **← 已由 §E 撤回。** 已确立的部分是：**一个 orchestration 级的阻塞
+   标量读（动态 spmd grid 定尺）落在了一个体内含跨卡 `pld.system.wait` 的 task 的输出上**：
+
+   ```
+   orch: scatter_blocks = pl.read(local_route_count,[1])        # decode_fwd.py:2611
+       -> AICPU get_tensor_data -> wait_for_tensor_ready(read)  # pto_runtime2.cpp:221
+       -> 等 producer ring3/local933 = dispatch_meta 完成
+   dispatch_meta 体内: pld.system.wait(meta_arrived[src] >= moe_epoch)   # 跨卡
+   ~~peer 卡在 combine_wait(627) → 饿死第 8 个 rank → 环闭合~~   <-- §E 撤回
+   ```
+
+   device 证据：`FATAL(code=8): Timeout (750000000 cycles): producer (ring=3, local=933)
+   not completed`（16 次）；签名两次 hang 完全一致 = `7×sched_error_code=100` +
+   `1×sched_error_code=0`。
+2. **⚠ 该耦合在生产基线 R5 里逐字节存在。** `combine_scatter` 的数据相关 grid 与
+   `dispatch_meta` 的跨卡 wait 在 R5/R9 相同；R5→R9 的全部差异是别处那一行。
+   ⇒ R9 更像是**把调度 skew 推进了可达区间**，而不是造出新结构。
+   （但 §E 的 R5 长跑数据说明那一行对 hang 概率**不是中性的**。）
+3. ~~**这解释了 campaign 为什么不收敛**~~ —— 方向仍成立（都在扰动同一个先已存在的耦合），
+   但"因为环闭合"这个理由已撤回。
+4. **R9 维持 NO-GO**（预登记规则 R1）。§E 追加：匹配 ITERS 后 R9 **也不快**。
+
+**决定性的一步是一个环境变量**：`orch_error_code=8` 只是分类、不含地址；点名 producer 的
+`FATAL(code=8)` 由 AICPU `unified_log_error` 发出，被
+`CheckLogLevel(AICPU, DLOG_ERROR)` 门住，**必须设 `ASCEND_GLOBAL_LOG_LEVEL=3`**。
+之前所有 arm 只设了 `ASCEND_PROCESS_LOG_PATH` ⇒ 目录建了、文件空的、字符串全丢。
+**成本为零，价值是 6 天。**
+
+**修复方向（全部已判定，⇒ 无一可获利）**：① 去掉数据相关 grid，改静态 grid + kernel 内界
+（**已实现；codegen 门过、device 门 ⛔ NO-GO，见 §E3/§E4**）；② 把 grid 定尺标量与跨卡 wait
+拆开（**曾以为是活着的方向，⛔ 已随 §E6 关闭：orchestrator 不在关键路径，ROI = 0**）；
+③ ~~限制 orch run-ahead~~ **← 方向反了：那个读本身就是 run-ahead 节流，删掉它才导致
+ring 死锁（§E4）**；④ 回退那一行（= R5，耦合仍在）**← 终态即此，生产不做改动**。
+权威报告 `0162:…/dispatch-fusion-triage-20260821/MECHANISM.md` **v2**
+sha256 `2e964264b6c7ae24d5681b71d5176d62e1350f1b115fde9a9c822880ee354f66`
+（v1 `3f670f1a…` 声称环已闭合，**已被取代**）。
+
+---
+
+接手 codex 的 dispatch 融合 campaign（**6 天 / 357 个 run 目录 / 0 落地**），先查
+"为什么这么久"，再判 R9 的 GO/NO-GO。
+
+**R9 判定 = NO-GO，理由是 liveness 不是 ROI。** 三臂 A/B/A（整机锁串行，生产
+ctx 65536 + 512 KV block）：
+
+| arm | tree | 结果 |
+|---|---|---|
+| A1 | R5 `67b73589` | rc=0，p50 **27.757 ms**、mean 32.068、`hidden_sha256=567b206b…`、tail token `14371` exact |
+| B | R9 `dd0e9cea` | **rc=1 HANG** —— 无 itl_report、无 precision |
+| A2 | R5 | 未跑（B 失败后 `set -e` 中止） |
+
+B 的失败已解码（**不把 `code -8` 当黑盒**）：`orch_error_code=8 TENSOR_WAIT_TIMEOUT`
+/ `sched_error_code=100` / `sub_class=S1:running-stalled (detail=1)` /
+`completed=546/1744 running=1 ready=0 waiting=30` /
+`stuck_task_id=12884902515` = **ring 3 / local 627** / `stuck_core=24,26,28`（多 rank
+⇒ 跨卡）。8× `aclrtResetDeviceForce` 已清卡，事后 HBM 回到 ~3.2 GB、无残留进程。
+
+**codex 6 天循环的三个根因**（全部写进 [`postmortems/12`](../postmortems/12-integration-churn-meta.md) §3 根因 6/7/8）：
+
+1. **`stuck_task_id` 从没被兑现成"哪个 kernel 在等什么"就出下一个候选** —— 46 次
+   `-8`（08-17 23:44 ~ 08-20 22:02），8 个变体，没有任何 evidence 目录记录过
+   ring/local 对应哪个 kernel、缺哪个条件、该由谁置位。
+2. **便宜门看不见目标 bug = 假绿** —— R9 反复跑绿的 `device-gates/*` 全是五层
+   harness，装不下整网 1702-task 图。
+3. ~~**一个候选捆两个独立优化**~~ **← 已于同日自我更正，见下方「三条更正」§C。**
+
+**同日三条更正（都是我自己的结论被我自己的下一个实验推翻，按纪律记在这里）**：
+
+**A. hang 是概率性的，不是"只在生产配置"。** 生产配置复跑一次 → **PASS**，
+p50 `26.615 ms`（min 25.984 / mean 27.161）、reset_trace 109 行完整。所以生产配置
+**2 次挂 1 次**。原写的"小配置门**结构上**看不见"**被否证**；n=2 vs n=2 也**无法**区分
+「概率与配置有关」与「概率与配置无关」，两者都兼容数据。
+⇒ **门的设计随之改变**：概率性失败意味着"生产配置跑通一次"也不是 liveness 门。
+便宜补法 = **拉长单轮曝光**而非重复整轮 —— 一轮 11 分钟里 decode 只占约 3 秒
+（110 × 27 ms），其余全是 compile + weight load，所以 `--itl-iters` 100→1000
+只多约 25 秒墙钟、曝光放大约 10 倍。
+
+**B. `stuck_task_id` 已兑现成 kernel + 谓词 + 责任方（根因 1 的欠债还上了）。**
+用生产配置 + `PYPTO_DISTRIBUTED_DEP_GEN=1` 的 `deps.json`：
+
+```
+ring 3 / local 627  =  swa_moe_chip_orch_combine_wait   (block_num=1, early=True)
+未满足谓词：pld.system.wait(combine_arrived[src], expected=moe_epoch*n_local_experts, Ge)
+应由谁置位：rank src 自己的 combine_wait —— 同一 task 先 notify 全 peer、再 wait 全 peer
+```
+
+⇒ `combine_wait` 是**对称 all-rank rendezvous**，**停在里面的 rank 全是受害者**。
+元凶在同一份日志里：8 个 rank 的 `sched_error_code` 分布 = **7×`100` + 1×`0`**，那个
+`sched_error_code=0` 的 rank **不产出 `sub_class=` 行**、只报 orch `TENSOR_WAIT_TIMEOUT`
+（它的 scheduler 没停，是 **orchestrator** 卡住）。**可推广判据：对称 barrier 里查少数派报告。**
+仍缺最后一环：`wait_for_tensor_ready` 走的是「producer 未 COMPLETED」还是「consumers
+未释放」分支及具体 producer ring/local —— 该信息在 AICPU `FATAL(code=8)` 里，需
+`ASCEND_GLOBAL_LOG_LEVEL=3` 才落盘（前两次 arm 没开，log 目录是空的；已修好）。
+**已源码证伪一个机制假设**：「predicated 任务漏放 fanout 引用」不成立（predicate 失败走
+`dummy_ready_queue` 内联退休，`on_task_release` → `release_producer` 逐个释放 fanin）。
+
+**C. "候选捆了两个优化"是基线选错造成的假象。** `grep -c routed_nz` 三列 =
+`develop 0 / **R5 19** / R9 19` —— NZ GMM 融合在 R5 里就有了。`diff R5 R9` 的
+`decode_fwd.py` **只差一行**（`dispatch_gather` 的 `deps` 多一个 `dispatch_push_tid`）。
+⇒ 相对生产基线 R5，R9 是**教科书级隔离候选**，归因毫无歧义。
+**这条更正加重而非减轻根因 1/2 的责任**：一行的改动烧了 6 天，只能由"没兑现
+`stuck_task_id`"+"门看不见生产配置"解释。教训改写为：**特征矩阵与 `diff` 必须相对
+"你实际要发布的那个基线"算，不是 `develop`。**
+
+**D. 与 DFX 推断相反的数据点。** R9 跑通那次整网 p50 `26.615 ms`，R5 两次是
+`27.478` / `27.757 ms`。**非配对单次比较、不满足 A/B/A bracket 口径、不能当收益记账**，
+但方向与下方"五层 DFX 显示收益不传播"相反 ⇒ 那条推断（R5-vs-R7、两臂都是五层）对 R9
+只是弱证据。**这条线的想法可能有价值，值得在修掉 liveness 隐患后重估，而不是直接废弃。**
+
+**我自己也踩了第 2 条的升级版（当天自我推翻两次）**：R9 先通过了整网单步 liveness
+（6127→303、tp_spread 0）与 N=128 replacement-equivalence（256/256 tensor 与 R5
+**逐字节相等**），但那两个门跑在 `MAX_SEQ=4096 / 32 block`。生产配置是**另一张
+task 图**（1744 vs 1702 task），小配置门**没抓到**。判据修正为：
+**每个 liveness / 精度门都必须在生产 ctx + 生产 KV block 数下跑，且单轮曝光要拉长。**
+⚠ 见上方更正 A —— 生产配置本身也只是 2 次挂 1 次，所以"小配置**结构上**看不见"已被否证。
+
+**优化前提本身也有问题**：`DFX_R5_R7_COMPARISON`（五层）显示 dispatch 域
+stage 赢了但**不传播** —— `dispatch_count_start_to_gather_end` 40.08→36.74
+（**−3.34 µs**），而 `dispatch_count_start_to_gmm1_start` 78.05→78.32
+（**+0.27 µs**）；`dispatch_meta` 7.12 消失但 `dispatch_wait` 2.18→12.56
+（**+10.38**）把收益吸走。⇒ 瓶颈像是 **WAIT**，不是 small-op latency。建新候选前
+先验证这个前提。
+
+**产出**（0162 `perf-2026q3/dispatch-fusion-triage-20260821/`）：四个参数化 runner
+（`wholenet_liveness.sh` 输出 `VERDICT` 分类 + `STUCK`；`n128_replacement_gate.sh`
+只取半机锁；`aba_itl.sh` 生产 ctx 三臂计时门取整机锁；**`faultlog_r9.sh` 单臂诊断，
+只取半机锁 + `ASCEND_GLOBAL_LOG_LEVEL=3` 抓 AICPU FATAL + `ITERS` 可调曝光**）、
+`depgen-bin/lookup_task.py`（`(ring, local)` → kernel 名 + 邻域 + 前驱/后继）、
+预注册决策规则 `DECISION_RULE.prereg.md`（**在 B 出数之前写的**）+ caveat addendum
++ `VERDICT.md`。
+⚠ **arm B 不是"确定性 S1 复现器"**（初稿这么写，已否证）——它是**概率性**复现器，
+命中率约 1/2；要提高命中率用 `ITERS=1000` 拉长单轮曝光，不要重复整轮。
+
+**两个 runner 坑**（写进 [`postmortems/12`](../postmortems/12-integration-churn-meta.md) §6 与 memory）：① ITL arm **必须
+`--privileged`**，否则 24.86 GiB VMM weight pool 的 `aclrtMalloc` 直接 `rc=107002`
+（卡是空的，不是 OOM）；② `PYPTO_DEVICES` 选的是**物理**卡号，privileged 下
+`--device /dev/davinci*` 是摆设 —— 老 runner 里 `devices=8-15` 的 lock 注释是错的，
+实际跑在 0-7。
+
+**更正一条旧记录**：`_route_anchor` / `_routed_anchor` / `dump_phys` 三个 unused
+变量在 **R5 与 R9 都各出现一次**，是 baseline 既有残留，**不是 R9 引入**，因此不在
+任何 R9 落地清理范围内。
+
+### §E 收盘更正（推翻本条上午的"环闭合"）+ 解耦候选 device 门 NO-GO
+
+**E1. R5 对照长跑（决定性）**：同配置 `ITERS=1000` 一轮 **PASS**、无 FATAL、p50
+`26.329 ms`（`faultlog-R5-iter1000/`）。两个推论：① R9 生产配置 **3 次挂 2 次** vs
+R5 10× 曝光 1 次 1 过 ⇒ **那一行对 hang 概率不是中性的**（n=1，**不**证明 R5 绝对安全）；
+② 匹配 ITERS 后 **R9 也不快**（R9 `26.615` > R5 `26.329`）⇒ 上面 §D 那个"方向相反的
+数据点"**作废** —— 之前的 `27.478` / `27.757` 是 `ITERS=100` 臂，不可比。
+**R9 = 既不 live 也不快，NO-GO 双重成立。**
+
+**E2. ❌ 撤回「闭合死锁环」与「1 元凶 + 7 受害者」**（§B 的元凶段随之失效）：
+
+- **提交序否证**：orchestrator 卡在 local **933**，则它必然早已提交过 local **627**；
+  而已 RUNNING 的 `combine_wait` 是**先 notify 再 wait**、发 notify 不需要 orchestrator
+  ⇒ **环没有闭合边**。
+- **pid 计数否证**：`grep -ho "AICPU([0-9]*," | sort | uniq -c` = **8 个 distinct pid**，
+  `producer (ring=3, local=933)` **16 次无一例外** ⇒ **8 个 orchestrator 全部阻塞在同一个
+  producer 上**，不存在"第 8 个受害者"。
+- **判据修正**：`sched_error_code` 少数派报告告诉你**哪个子系统停了**（orch vs
+  scheduler），**不是哪个 rank 有责任**。8 个样本、二态分布，极易过度解读成因果。
+
+**仅存的结构性主张** = **deadlock amplifier**：那个阻塞标量读把 orchestrator 的前进耦合
+到跨卡进度上，于是任何上游跨卡停滞被放大成全 rank orchestrator 冻结。**不是已证 root cause。**
+
+**E3. 静态 scatter grid 候选（`dispatch-orch-decouple-20260821`）：过 codegen 门，
+device 门 NO-GO。** 配对结构验证（同门同镜像编译 R5 与候选，比 orchestrator 生成码）：
+
+| | R5 基线 | 候选 |
+|---|---:|---:|
+| `get_tensor_data` 总数 | 11 | **7** |
+| 打在 `local_route_count`（producer 含跨卡 wait） | **4** | **0** |
+| `scatter_blocks` | `active_expert_count_inline*` | `static_cast<int64_t>(8)` |
+
+device 三臂（生产 ctx 65536 / 512 blk，`ITERS=1000`，半机锁）：
+
+| 臂 | sched 超时 | 死在 | 签名 |
+|---|---|---|---|
+| WORKERS=8 | 默认 | `inv=10` | `orch_error_code=2` **HEAP_RING_DEADLOCK**，无 FATAL |
+| WORKERS=1 | 默认 | `inv=1` | `sched_error_code=100` `S1:running-stalled` `completed=1551/1744` **`orch_done=1`** |
+| WORKERS=1 | 45 000 ms | `inv=357` | **HEAP_RING_DEADLOCK**（与 w8 同签名） |
+
+第三臂推翻了"两者不是同一根因"的中间结论：**w1 从来不是 rendezvous 死锁，只是慢**，
+默认 scheduler 超时先响；抬高超时后它跑了 357 invocation，然后撞上**和 w8 同一个**
+ring 死锁。**两臂一个机制。**
+
+**E4. ★ 关键发现（比候选本身重要，且改写了修复方向）：那个阻塞标量读不只是缺陷，
+它还是一个承重的流控阀。** `RUNTIME_LOGIC.md`（a2a3 `host_build_graph/docs/`）：
+§4.4「ring 耗尽时 orchestrator **阻塞**」⇒ ring 就是对 orchestrator run-ahead 的背压；
+§4.5 ring 太小会因 **scope 引用**死锁（`fanout_count` 含一个只在 `scope_end()` 释放的
+scope 引用，而 `scope_end()` 由 orchestrator 调用，orchestrator 又在等 ring 空间）。
+
+原来那个每层一次的阻塞读把 orchestrator 的 run-ahead 限制在**一层内**。删掉它 ⇒
+**`orch_done=1`（一次把全部 1744 task 提交完）** ⇒ 整个调度体制变了，run-ahead 无界
+⇒ ring 饱和 ⇒ §4.5 死锁。
+
+**这不是容量账**：runner 本就设 `PTO2_RING_HEAP=4294967296` /
+`PTO2_RING_TASK_WINDOW=131072`；w1 只是把失败从 `inv=10` 推到 `inv=357`。
+**无界 run-ahead 下任何有限 ring 终会饱和，加容量只能推迟。**
+⇒ 原计划的"加大 ring 容量"实验**作废，不必再跑**。
+
+**⚠ 机制只到"观测"为止（对抗性自审，收盘后补）**：`orch_done=1` 是观测；
+"run-ahead 无界 ⇒ ring 饱和"**算术上不足以解释数据** —— 一次 invocation 只有 **1744** task，
+ring 有 **131072** slot ⇒ **单次 invocation 再深的 run-ahead 也填不满 ring（差 75 倍）**。
+而 w1 死在 `inv=357`、w8 死在 `inv=10` ⇒ **资源必然跨 invocation 累积**；两臂很可能
+**受限于不同资源**（w8 的 8× block 主要吃 heap 字节，w1 主要吃 slot）。
+⇒ **真正的缺陷可能是「回收 / 泄漏」被这个改动暴露，而不只是「提交得太超前」**，
+**若是泄漏，E6 的本地节流未必能修**。⇒ **实现 E6 之前先判定 (a) run-ahead 深度 vs
+(b) 每 invocation 未回收**（读 ring allocator + `scope_end()` / `on_task_release` /
+`release_producer`，并查是否有每 invocation 的 ring 占用日志）。**别在没判定前烧 device 门。**
+
+**修正后的设计规则**（取代 MECHANISM v2 里更简单那条）：orchestration 级阻塞标量读
+若其 producer 含跨卡 wait，是隐患；**但不能直接删** —— 必须换成一个只依赖**本地
+device 进度**的节流，否则是把稀有的概率性跨卡死锁换成确定性 ring 死锁。
+
+**E5. 两个可复用判别法**：
+
+- **`SIMPLER_SCHEDULER_TIMEOUT_MS` 能把 `S1` 分成「真死锁」与「只是慢」** —— env-only、
+  零改码，是 runtime 自己文档化的判别法。本例它直接推翻了一个错的双根因结论。
+- ⚠ **runtime 提示里的 env 名不可信**：`error_names.h:172` 让你调
+  `PTO2_SCHEDULER_TIMEOUT_MS`，**该 env 不存在**；真名 **`SIMPLER_SCHEDULER_TIMEOUT_MS`**
+  （`runtime_timeout_config.h:25`，读于 `:165` 与 `device_runner_base.cpp:90`），且受
+  `scheduler_timeout_us < op_execute_timeout_us` 约束（实测 op 超时 50000 ms，故用 45000）。
+  同族 `PTO2_TENSOR_DATA_TIMEOUT_MS` 是编译期 constexpr、根本不可设。
+  **一律去源码 grep `getenv` 核对。**
+
+**E6. ✅ 已测（收盘）⇒ 整条线关闭**：原本写"ROI 至今 0 个数据点，要有一个能活下来的候选才能测"，
+**那是错的** —— 三个失败臂在挂掉前都跑了几百个 invocation，稳态 span 早就够统计。
+只解析已有 STRACE 嵌套 span（`runner_run ⊃ device_wall ⊃ graph_build ⊃ sched ⊃ orch`，
+每 invocation 一组、丢 warmup `inv<10`、8 rank 汇池；工具 `analysis-bin/orch_span_stats.py`）：
+
+| p50 span | R5（有阻塞读） | w1（去掉阻塞读） | Δ |
+|---|---:|---:|---:|
+| `device_wall` | 17466.93 µs | 17910.32 µs | **+443.4** |
+| `graph_build` | 17457.59 | 17900.76 | +443.2 |
+| `sched` | 17439.98 | 17883.85 | +443.9 |
+| **`orch`** | **17279.28** | **4443.18** | **−12836.1（−74.3%）** |
+| 样本 | n=8008 | n=2776 | |
+
+**`orch` 缩 12.8 ms / −74%，`device_wall` 一点没降反而略升 ⇒ orchestrator 与 device 并发、
+两种情况下都提前完成，从不在关键路径上 ⇒ 去掉阻塞读的 ITL ROI = 0（微负）。**
+⇒ **本地节流候选（原 E6）与「判 ring 耗尽机制」一并关闭；生产继续 R5，不做改动。**
+诚实边界：非 A/B/A bracket、两轮不同 run 各取一臂、w1 那轮最终挂了；但结论不依赖这些 ——
+`orch` 降 12.8 ms 而 `device_wall` 没降，量级差 29×。
+**教训：不要为了拿一个数去写新候选，先看现有日志里是不是已经有那个数。**
+
+**E6b. ★★ 同一份数据里的新线索（量级远大于本线）**：R5 每 invocation
+`simpler_run` p50 = `26.45 ms`（与 ITL p50 `26.329 ms` 对得上），其中
+**`bind.args` = `6.12 ms` ≈ ITL 的 23%** —— 纯 host 侧参数绑定，`simpler_run ≈ bind + runner_run`
+加性串行（w1 侧 `5.87 ms`，同量级 ⇒ 不是偶发）。**比 dispatch 域任何 small-op 融合的可得收益
+大一到两个数量级**，且不碰 device 语义、不碰跨卡同步、不动 `@pl.program` 结构
+⇒ 建议作为下一条性能主线先去核实。
+
+**E7. dispatch 域还剩什么可融合 —— 逐个都撞已文档化的硬约束**：
+
+- `dispatch_meta` + `dispatch_wait`：合并后 orchestrator 的阻塞读要等**更多**跨卡进度
+  ⇒ **加剧** amplifier。**先解耦，再融合。**
+- `dispatch_count_publish` + `dispatch_push`：task 边界**正是** self-row 可见性 fence
+  （`decode_fwd.py:1740-1744` 注释：remote_store-to-self 没有 peer notify 提供跨 task
+  可见性 fence）⇒ 合并破坏 fence。
+- `dispatch_wait` 吸进 `dispatch_gather`：违反「不要把跨卡 wait 吸进 compute kernel」——
+  会把 scheduler 能直接读出缺谁的 `S4` 退化成要人肉映射的 `S1`。
+- `dispatch_push` / `dispatch_gather` 的 grid 由 **host** `num_tokens` 定尺
+  （`:1810` / `:1817`）⇒ 本来就不产生 orchestrator 阻塞读，无耦合可解。
+
+⇒ 叠加 DFX「收益被 `dispatch_wait` 吸走（`2.18→12.56 µs`）、瓶颈是 **WAIT** 不是 small-op
+latency」，再叠加 E6 的量化（orchestrator 不在关键路径）：
+**dispatch 域小算子融合这条线终态关闭，不留"先换节流再谈融合"的后路。**
+
+权威记录：`0162:…/dispatch-orch-decouple-20260821/FINDINGS.md`。
+
 ## 2026-08-12 —— TP all-reduce single-row selector 合入，source-overlay GO ✅
 
 `pypto-lib stepfun/develop` 已普通 fast-forward 到

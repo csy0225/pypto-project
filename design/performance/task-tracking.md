@@ -7,6 +7,31 @@
 
 ---
 
+> **⬜ 2026-08-21 新线索（尚未验证，量级最大的一条）：host 侧 `bind.args` ≈ ITL 的 23%。**
+> 从 R5 MoE 生产基线（`decode_fwd.py` sha `67b73589…`，ctx-64K BS1）的 runtime STRACE
+> 嵌套 span 读出：每 invocation `simpler_run` p50 = **`26.45 ms`**（与该配置 ITL p50
+> `26.329 ms` 对得上），其中 **`bind.args` = `6.12 ms`**、`runner_run` ≈ `20.3 ms`，
+> 两者**加性串行**（`simpler_run ≈ bind + runner_run`）。对照臂 `bind.args = 5.87 ms`，
+> 同量级 ⇒ 不是偶发、与 device 侧改动无关。
+>
+> ⇒ **纯 host 侧参数绑定开销，占 ITL 约 23%，比 dispatch 域任何 small-op 融合的可得收益
+> 大一到两个数量级**，且不碰 device 语义、不碰跨卡同步、不动 `@pl.program` 结构。
+>
+> **下一步（尚未做）**：① 确认它是否真在 ITL 关键路径上（能否与 device 执行重叠）；
+> ② 看有多少是跨 step 不变、可缓存的；③ 定位这 `6.12 ms` 的构成。
+> 证据：`0162:…/dispatch-orch-decouple-20260821/{FINDINGS.md, analysis-bin/orch_span_stats.py}`；
+> 方法与判据见 [`07-hardware-scheduler-performance.md`](07-hardware-scheduler-performance.md) §9.6。
+
+> **⛔ 2026-08-21 MoE dispatch 域小算子融合线整体关闭（负结论已定稿）。**
+> R6-R9 融合候选 NO-GO（概率性 hang + 匹配曝光后也不快）；结构修复候选
+> `dispatch-orch-decouple-20260821` device 门三臂全挂（**那个 orchestration 级阻塞标量读
+> 是承重的 run-ahead 节流阀，删掉即 `orch_done=1` ⇒ ring 死锁**）；最后量化表明
+> **orchestrator 从不在关键路径上**（p50 `orch` `17279 → 4443 µs` 即 −74%，而
+> `device_wall` `17467 → 17910 µs` 反升）⇒ **整类改动 ROI 上界 = 0**。
+> MoE 生产继续用 R5，不做改动。详见 [`../../blockers.md`](../../blockers.md)、
+> [`07-hardware-scheduler-performance.md`](07-hardware-scheduler-performance.md) §9、
+> [`../../archive/milestones-2026-Q2.md`](../../archive/milestones-2026-Q2.md) 2026-08-21 §E。
+
 > **✅ 2026-08-12 K11 已合入：single-row small-message selector。**
 > 当前 `csy0225/pypto-lib:stepfun/develop@69ad31e4fd6e40b30e43c2566ce8f8ebd0b2427d`
 > （parent `9ca01d2`）。Main 的 rank-uniform `active_rows == 1` 走静态 8 KiB

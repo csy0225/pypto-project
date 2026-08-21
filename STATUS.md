@@ -5,7 +5,39 @@
 > 整体规划在 [`planning/roadmap.md`](planning/roadmap.md)；接力面在
 > [`planning/handoff.md`](planning/handoff.md)；镜像组合在
 > [`deployment/version-matrix.md`](deployment/version-matrix.md)。
-> **最后更新：2026-08-12。**
+> **最后更新：2026-08-21。**
+>
+> ⚠ **本文件 §1 起是 TP all-reduce / QKV 线（2026-08-12 口径，tip `69ad31e4`）。**
+> 2026-08-15 ~ 08-21 的 MoE `moe-routed-packed-fusion` 线（R5 发布 + R6-R9 dispatch
+> 融合 campaign）**未回写到下面各节**，其当前口径全部在此：
+>
+> - MoE 生产继续用 **R5**（`decode_fwd.py` sha `67b73589…`，ctx-64K BS1 p50
+>   `27.757 ms` @ITERS=100 / `26.329 ms` @ITERS=1000，`hidden_sha256=567b206b…`，
+>   tail token `14371`）。
+> - **R6-R9 dispatch 融合线 = NO-GO**（概率性 liveness hang + 匹配曝光后也不快）。
+>   曾写"机制已闭合、完整死锁环"，**已被对抗性复核撤回**；现口径 = 停点/分支/阻塞对象
+>   已确立、闭合环未确立，仅存 **deadlock amplifier** 一条结构性主张。
+> - 结构修复候选 `dispatch-orch-decouple-20260821`（`combine_scatter` 静态 grid，
+>   sha `c5d87e25…`）：无卡 codegen 门过（`local_route_count` 上的 orchestrator
+>   阻塞读 4→0），**device 门三臂全挂 ⇒ 该方向也 NO-GO**。
+>   ★ 原因反直觉：**那个阻塞标量读同时是承重的 run-ahead 流控阀** —— 删掉它就
+>   `orch_done=1`（一次提交完整张 1744-task 图）⇒ run-ahead 无界 ⇒ ring 饱和 ⇒
+>   `HEAP_RING_DEADLOCK`。**不是容量账**（ring 已 4 GiB / 131072 slots，加容量只把
+>   失败从 `inv=10` 推到 `inv=357`）。
+> - ⇒ **2026-08-21 收盘：整条线关闭。** 只解析已有 STRACE span（不占卡）比较 R5
+>   （有阻塞读）与候选 w1（无阻塞读）：p50 `orch` `17279.28 → 4443.18 µs`
+>   （**−12836 µs / −74.3%**），而 `device_wall` `17466.93 → 17910.32 µs`（**+443 µs**）
+>   ⇒ **orchestrator 与 device 并发、两种情况下都提前完成，从不在关键路径上
+>   ⇒ 去掉阻塞读的 ITL ROI = 0（微负）。** 原计划的「本地节流」候选与「判 ring 耗尽
+>   机制」一并关闭。留下的可复用产物 = 两条设计规则 + 一个可量化否决门，见
+>   [`design/performance/07-hardware-scheduler-performance.md`](design/performance/07-hardware-scheduler-performance.md) §9。
+> - ★★ **同一份数据给出量级更大的新线索**：R5 每 invocation `simpler_run` p50
+>   `26.45 ms`（与 ITL p50 `26.329 ms` 对得上），其中 **`bind.args` = `6.12 ms`
+>   ≈ ITL 的 23%**，纯 host 侧参数绑定、与 `runner_run` 加性（对照臂 `5.87 ms` 同量级）
+>   ⇒ **比 dispatch 域任何 small-op 融合大一到两个数量级**，建议作为下一条性能主线。
+>
+> 详见 §9 `ORCH-SCALAR-READ-VS-CROSSRANK-WAIT`、[`blockers.md`](blockers.md) 与
+> [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) 的 2026-08-21 条。
 
 ## 0. Agent 判定当前状态的强制顺序
 
@@ -602,6 +634,7 @@ process；后续作业前仍须重新检查卡占用，不能沿用旧 session �
 
 | # | Blocker | 严重度 | gate 什么 | 详情 |
 |--:|---------|--------|-----------|------|
+| ORCH-SCALAR-READ-VS-CROSSRANK-WAIT<br>（原 DISPATCH-FUSION-S1） | **已确立**：orchestration 级阻塞标量读（动态 spmd grid 定尺 `scatter_blocks = pl.read(local_route_count,[1])`，`decode_fwd.py:2611` → AICPU `get_tensor_data`）落在 `dispatch_meta` 的输出上，而 `dispatch_meta` 体内跨卡等 `meta_arrived` ⇒ **deadlock amplifier**。**❌ 已撤回**：「闭合死锁环」与「1 元凶 + 7 受害者」（提交序 627 < 933；8 个 AICPU pid 全部阻塞在同一 producer）。hang 是**概率性**的（R9 生产配置 3 次挂 2 次；R5 同配置 ITERS=1000 一轮长跑 PASS）⇒ 单次跑通不构成 liveness 门 | 🟡 已定案（负结论）；耦合在 R5 里仍潜伏但不可获利地修 | R6-R9 dispatch 融合线（**NO-GO**，MoE 生产继续 R5）；结构修复候选 device 门三臂全挂（那个阻塞读是承重 run-ahead 节流，删掉即 `orch_done=1` ⇒ ring 死锁；**不是容量账**）。⇒ **2026-08-21 收盘整条线关闭** —— 用已有 STRACE span 量化（不占卡）：p50 `orch` `17279 → 4443 µs`（−74.3%）而 `device_wall` `17467 → 17910`（+443）⇒ **orchestrator 从不在关键路径上，ROI = 0（微负）** ⇒「本地节流」与「判 ring 耗尽机制」一并关闭。留下 = 两条设计规则 + 一个可量化否决门。★★ 同数据新线索：`bind.args` `6.12 ms` ≈ **ITL 的 23%**（host 侧参数绑定），量级远大于本线 | [`blockers.md`](blockers.md) + `0162:…/dispatch-orch-decouple-20260821/FINDINGS.md` |
 | UPSTREAM-NOTIFY-FENCE | pypto `MakeNotifyCodegenPTO` 把 `dcci`(invalidate-only) 排在 payload drain 之前；最小修复 = 一条 pre-CMO `pipe_barrier(PIPE_ALL)`（device 已证，消融矩阵闭合），Wave2 单点代价 `0.405 µs/call` | 🔴 Active / correctness | 一切「把 payload store 与它自己的 credit 拉近」的 AR 优化（删波次 / 合并波次 / 按 peer 融合） | [`blockers.md`](blockers.md) |
 | N1-S-0234 | 0234 同步 pypto-lib 后 whole-net stall（完整对象未确认） | 🔴 Active / 未独立复核 | 取得 SSH 后核对三仓/runtime/环境重跑 canonical | [`blockers.md`](blockers.md) |
 | N1-L | Phase 28 live：per-layer KV + 3-way HBM + live token-exact A/B | 🔴 Active | live single-handoff | [`planning/phases/28-live-integration.md`](planning/phases/28-live-integration.md) |
