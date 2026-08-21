@@ -14,17 +14,34 @@ vLLM fork（见 [`design/00-context-and-goals.md`](design/00-context-and-goals.m
 
 深入技术再下钻到两份 `02-detailed-design.md`（LLD）。
 
-## 📁 仓库怎么组织（7 分区）
+## 📁 仓库怎么组织（分层规则 T0–T6）
+
+**核心区分**：**确定落地的事实**（T1/T2）和**每次开发的过程**（T3/T4）物理分开，各有唯一落点和硬预算。
+
+| 层 | 唯一落点 | 放什么 | 预算 |
+|---|---|---|---|
+| **T0 必读教训** | [`postmortems/LESSONS.md`](postmortems/LESSONS.md) | 触发式索引：你正要做 X → 先记住 Y → 出处。**开工前必读** | ≤150 行 |
+| **T1 当前真相** | [`STATUS.md`](STATUS.md) | 只写**此刻为真**，每条带 sha/digest/门结论 | ≤130 行 |
+| **T2 落地台账** | [`progress/landed.md`](progress/landed.md) | 已发布镜像 + 已合入源码 + 各自过了哪个门 + NO-GO 台账 | 每条 ≤3 行 |
+| **T3 开发流水** | [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) | 每 session 一条 + 完整 pin 时间线 | 每条 ≤40 行 |
+| **T4 未决** | [`blockers.md`](blockers.md) | 只放 **open**；症状/根因/解除条件/链接 | 每条 ≤25 行 |
+| **T5 证据** | [`benchmark/`](benchmark/)、0162 campaign | 长报告、原始数字、campaign 路径。**不回灌 T1–T4** | 不限 |
+| **T6 接力** | [`planning/handoff.md`](planning/handoff.md) | 纯指针 + "现在接什么" ≤3 条 | ≤90 行 |
+
+**判据**：一条内容含"我这次发现 / 曾写 / 已撤回 / 下一位应该" ⇒ 属 **T3 或 T4**，**不属于 T1**。
+一条内容是 sha / digest / 门结论 ⇒ 属 **T1 或 T2**。
+
+其余分区（与分层正交）：
 
 | 分区 | 放什么 |
 |------|--------|
 | [`design/`](design/) | **软件工程设计**：context + 两子系统的 系统设计(HLD) + 详细设计(LLD) |
-| [`planning/`](planning/) | **整体规划**：roadmap + 活跃 phase + ephemeral handoff |
-| [`postmortems/`](postmortems/) | **工程专项复盘**（12 篇，标准五段：背景/现象/根因/解决/弯路/避免） |
+| [`planning/`](planning/) | roadmap + 活跃 phase（+ T6 handoff） |
+| [`postmortems/`](postmortems/) | **工程专项复盘**（16 篇，五段：背景/现象/根因/解决/弯路/避免）+ T0 索引 |
 | [`deployment/`](deployment/) | **生产部署 runbook**：三剑合璧 / 机器恢复 / 版本矩阵 |
-| [`reference/`](reference/) | **参考资料**：canonical 测试、4+1 视图、编程 API、约束 |
-| [`archive/`](archive/) | **历史**（追加式）：session 日志、原型摘要、已完成 phase、交付快照 |
-| 根 | [`STATUS.md`](STATUS.md)（当前状态）· [`blockers.md`](blockers.md)（活跃 open）· [`GLOSSARY.md`](GLOSSARY.md)（术语） |
+| [`reference/`](reference/) | canonical 测试、4+1 视图、编程 API、约束、执行主机契约 |
+| [`archive/`](archive/) | 历史（追加式）：session 日志、原型摘要、已完成 phase、交付快照 |
+| 根 | [`STATUS.md`](STATUS.md) · [`blockers.md`](blockers.md) · [`GLOSSARY.md`](GLOSSARY.md) · [`CLAUDE.md`](CLAUDE.md) |
 
 > `.claude/skills/` 是运行工具；`develop/N1/` 是历史 N1 复现材料，不是当前 pin
 > 或环境 SSOT。当前状态只看 [`STATUS.md`](STATUS.md)、远端 ref 和
@@ -34,18 +51,21 @@ vLLM fork（见 [`design/00-context-and-goals.md`](design/00-context-and-goals.m
 
 | 问题 | 路径 |
 |------|------|
+| **开工前该记住什么坑？** | [`postmortems/LESSONS.md`](postmortems/LESSONS.md) ← **必读** |
+| **哪些是确定落地的？哪些方向已被否决？** | [`progress/landed.md`](progress/landed.md) |
 | 项目背景/目标？ | [`design/00-context-and-goals.md`](design/00-context-and-goals.md) |
 | step3p5 模型本身（config + 层结构）？ | [`design/step3p5-model-architecture.md`](design/step3p5-model-architecture.md) |
 | 整网怎么设计的？ | [`design/whole-net/`](design/whole-net/)（HLD + LLD） |
 | vLLM 集成怎么设计的？ | [`design/vllm-pypto/`](design/vllm-pypto/)（HLD + LLD） |
 | 进度 / 路线图？ | [`planning/roadmap.md`](planning/roadmap.md) |
 | 此刻状态？ | [`STATUS.md`](STATUS.md) |
+| 现在该接什么活？ | [`planning/handoff.md`](planning/handoff.md) |
 | 撞到 507018/507899/hang/编译报错怎么办？ | [`postmortems/`](postmortems/)（按 error signature 查索引） |
 | 新机器怎么部署？ | [`deployment/`](deployment/) |
 | 从零装 pypto 运行时环境（拉仓库→跑通）？ | [`.claude/skills/pypto-runtime-install/SKILL.md`](.claude/skills/pypto-runtime-install/SKILL.md) |
 | 验收金标准？ | [`reference/canonical-test.md`](reference/canonical-test.md) |
 | 术语看不懂？ | [`GLOSSARY.md`](GLOSSARY.md) |
-| 每日进展历史？ | [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) |
+| 每日进展历史 / pin 时间线？ | [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) |
 | 写 pypto kernel 的坑？ | `pypto-lib/docs/known-pypto-pitfalls.md`（sub-repo） |
 
 ## 涉及的仓库

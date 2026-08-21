@@ -22,6 +22,12 @@ signature 或一类根因）。目标是沉淀——让后来者不重复踩坑�
 | [`13`](13-tp-allreduce-pull-notify-race.md) | TP all-reduce pull-form all-gather 跨方向发布 race | `hidden_tp_spread != 0` | whole-net | ✅ 已解 |
 | [`14`](14-image-dirty-worktree-unreproducible-pins.md) | 镜像 dirty worktree 导致 pin 不可复现 | 相同 pin、行为不同 | deployment | ✅ 已解（主路径） |
 | [`15`](15-tp-allreduce-source-publication-lifetime.md) | TP all-reduce source publication / lifetime 边界 | 间歇性 `hidden_tp_spread != 0` | whole-net | ✅ 已解（0162） |
+| [`16`](16-dispatch-fusion-orch-decouple.md) | MoE dispatch 域小算子融合整线 NO-GO（`orch` 阻塞读是承重节流；orchestrator 不在关键路径） | `orch_error=8 TENSOR_WAIT` / `orch_error=2 HEAP_RING_DEADLOCK` | whole-net / perf | ✅ 已定案（**负结论**） |
+
+## 必读教训索引
+
+**开工前先读** [`LESSONS.md`](LESSONS.md) —— 从本目录 16 份复盘的「如何避免」段提炼的
+触发式索引（你正要做 X → 先记住 Y → 出处）。它是 `CLAUDE.md` 铁律 §0 的强制必读项。
 
 ## 模板与新增
 

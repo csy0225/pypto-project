@@ -117,9 +117,15 @@ FATAL(code=8): Timeout (750000000 cycles): producer (ring=3, local=933) not comp
 **orchestrator** 卡住。所以：
 
 - 只 grep `sub_class=` 会**只看到受害者**（本例 7 个 rank 全停在同一个对称 barrier）。
-- 元凶的签名是"**没有** `sub_class` 行 + `sched_error_code=0` + orch `TENSOR_WAIT_TIMEOUT`"。
+- 少数派签名 = "**没有** `sub_class` 行 + `sched_error_code=0` + orch `TENSOR_WAIT_TIMEOUT`"。
 
-**可推广判据：对称 barrier 里多数派是受害者，去查少数派报告。**
+**可推广判据（2026-08-21 修正）：对称 barrier 里，少数派报告说明「哪个子系统停了」
+（orchestrator 还是 L2 scheduler），去查它 —— 但它 <ins>不</ins>说明「哪个 rank 有责任」。**
+
+⚠ 本文档此处原写"**例外那个 rank 才是元凶**"，**已撤回**：后续按 AICPU pid 计数
+（`grep -ho "AICPU([0-9]*," log | sort | uniq -c`）发现 **8 个 distinct pid 全部**阻塞在
+**同一个** producer，不存在"1 个元凶 + 7 个受害者"。见
+[`16-dispatch-fusion-orch-decouple.md`](16-dispatch-fusion-orch-decouple.md) §3/§5。
 
 ### 根因 7（流程）：便宜门"看不见"目标 bug → 反复跑绿 = 假绿
 
@@ -345,7 +351,7 @@ runner_run  ⊃ device_wall ⊃ graph_build ⊃ sched ⊃ orch
 - ❌ **"N=128 太贵所以只能最后跑"** → 证伪：R7 那次 N=128 实际只用 ~7 分钟；贵的不是 run 而是**它被挂在整机锁下串行**。更正后本 session 的 N=128 replacement-equivalence 门只取半机锁、13 分钟出结论。
 - ❌ **"R9 语义中性且无 hang"**（本 session 我自己的结论，同日被自己的下一个门推翻）→ 证伪：ctx 4096/32-block 的整网单步门与 N=128 门都 PASS，但 **ctx 65536/512-block 的生产配置 arm 直接 S1 hang**（`completed=546/1744` ring3/local627，多 rank core 24/26/28）。**更正**：R9 = NO-GO，理由是 liveness 而不是 ROI。教训见 §3 根因 7「加强版」——小配置整网门同样会假绿。
 - ❌ **"R6-R9 四个候选都捆了两个优化，从来没有 dispatch-only 候选"**（本 session 我自己写进 §3 根因 8 的）→ 自我证伪：`grep -c routed_nz` 三列 = `develop 0 / **R5 19** / R9 19`，NZ GMM 融合在 R5 里就有了；`diff R5 R9` 的 `decode_fwd.py` **只差一行**（`dispatch_gather` 的 `deps` 多一个 `dispatch_push_tid`）。**更正**：相对生产基线 R5，R9 是教科书级隔离候选，归因毫无歧义；见改写后的 §3 根因 8。**这条更正加重而非减轻根因 6/7 的责任** —— 一行的改动烧了 6 天，只能由"没兑现 `stuck_task_id`"+"门看不见生产配置"解释。
-- ❌ **"7 个 rank 都停在 `combine_wait` ⇒ `combine_wait` 是根因"** → 证伪：`combine_wait` 是**对称 rendezvous**（先 notify 全部 peer、再 wait 全部 peer），所以停在它里面的 rank 全是**受害者**。同一份日志的 8 个 rank，`sched_error_code` 分布是 **7×100 + 1×0** —— 那个 `sched_error_code=0`（无 scheduler stall，只有 orch `TENSOR_WAIT_TIMEOUT`，且**不产出 `sub_class=` 行**）的 rank 才是元凶。**可推广判据：对称 barrier 里，多数派报告是受害者签名，要去找少数派报告。**
+- ❌ **"7 个 rank 都停在 `combine_wait` ⇒ `combine_wait` 是根因"** → 证伪：`combine_wait` 是**对称 rendezvous**（先 notify 全部 peer、再 wait 全部 peer），所以停在它里面的 rank 全是**受害者**。同一份日志的 8 个 rank，`sched_error_code` 分布是 **7×100 + 1×0** —— 那个 `sched_error_code=0`（无 scheduler stall，只有 orch `TENSOR_WAIT_TIMEOUT`，且**不产出 `sub_class=` 行**）的 rank 说明的是**它的 orchestrator 停了、scheduler 没停**。⚠ **半截更正（2026-08-21）**：这条当时进一步推成"那个 rank 才是元凶"，**已撤回** —— AICPU pid 计数显示 8 个 distinct pid 全部阻塞在同一 producer。**可推广判据只到这一层：少数派报告说明「哪个子系统停了」，不说明「哪个 rank 有责任」。** 见 [`16-dispatch-fusion-orch-decouple.md`](16-dispatch-fusion-orch-decouple.md) §5。
 - ❌ **"predicated 任务漏放 fanout 引用，把 producer 永久钉在非 CONSUMED"**（本 session 的机制假设，动手改之前先证伪）→ 源码证伪：predicate 失败的 task 走 `dummy_ready_queue` 内联退休，路径是 `on_task_complete` + 延迟 `on_task_release` → `for_each_fanin_slot_state` → `release_producer` 逐个释放 fanin（`scheduler_dispatch.cpp` dummy drain + `pto_scheduler.h` `on_task_release`）。所以这个机制不成立，**不要**据此出候选。仍成立的事实：predicated task **永不 early-dispatch**（`pto_scheduler.h:872/938/968`），只在 ready 点解析。
 - ❌ **我预注册的"是写路径 / consumers 未释放（fanout）"** → device 证伪：FATAL 是**读路径** `producer (ring=3, local=933) not completed`。我把这个预测**在拿到数据之前**写进了 `0162:…/dispatch-fusion-triage-20260821/MECHANISM.prereg.md`（sha256 `089587ca…`），正是为了让它可被记分；结果是**错的**，相关 fanout 推理已撤回。**这条本身就是方法论的正面样本**：先写预测、再取数据，错了就是错了，不用事后合理化。真实机制见改写后的 [`blockers.md`](../blockers.md) ORCH-SCALAR-READ-VS-CROSSRANK-WAIT。
 - ❌ **"R9 的生产配置 hang 是确定性的"**（前一版 blocker 的隐含读法）→ 证伪：生产配置 **3 次挂 2 次**（100 iters 挂 / 100 iters 过 / 1000 iters 挂）。**更正**：概率性。**并且这改变了门**——单次生产配置跑通不构成 liveness 门；便宜补法是**拉长单轮曝光**（`ITERS=1000`，只多约 25 秒墙钟、曝光 ×10），不是重复整轮。这一招当场奏效。
@@ -360,6 +366,6 @@ runner_run  ⊃ device_wall ⊃ graph_build ⊃ sched ⊃ orch
 - **早期识别信号**：某个"ready"结论只在 compile / offline / synthetic / 单卡 / 单配置下成立 → 立刻标 `provisional`，别当定论传。
 - **同一个 error 复现第 3 次就停手**：不要"换姿势重试"。第 3 次时强制回答三个问题——(1) runtime 自己说了什么（`sub_class` / `stuck_*`）？(2) 我改的层和它指的层是同一层吗？(3) 我这次跑绿的门能看见这个 bug 吗？三问有一个答不上就先补诊断，不要再出候选。
 - **接手别人的候选先做特征矩阵 + 先跑 `diff`**：`grep -c <新特征> candidate/ <生产基线>/ develop/` **三列**一起数（漏掉生产基线那一列就会把一行的隔离候选误判成"捆了两个"，见 §3 根因 8 的更正），然后对 `decode_fwd.py` 直接 `diff` 生产基线与候选。真捆了两个才拆。
-- **多 rank 故障先看少数派报告**：8 个 rank 的 `sched_error_code` / `sub_class` 分布若是"多数一致 + 一个例外"，**例外那个才是元凶**，多数派通常只是对称 barrier 的受害者。命令：`grep -E "PTO2 runtime failed: orch_error_code=" log | sed -E "s/.*failed: //" | sort | uniq -c`。
+- **多 rank 故障先看少数派报告，但只读到"哪个子系统"这一层**：8 个 rank 的 `sched_error_code` / `sub_class` 分布若是"多数一致 + 一个例外"，例外那个告诉你**停摆主体是 orchestrator 还是 L2 scheduler**（多数派通常是对称 barrier 的受害者签名）。命令：`grep -E "PTO2 runtime failed: orch_error_code=" log | sed -E "s/.*failed: //" | sort | uniq -c`。⚠ **它不告诉你哪个 rank 有责任** —— 要判责任用 AICPU pid 计数：`grep -ho "AICPU([0-9]*," log | sort | uniq -c`（曾据少数派推出"1 元凶 + 7 受害者"，被 8 个 distinct pid 全阻塞在同一 producer 证伪，见 [`16`](16-dispatch-fusion-orch-decouple.md) §5）。
 - **锁粒度跟门性质对齐**：只有 A/B/A 计时门需要整机锁；compile / liveness / 精度门一律半机。错配会把分钟级任务变成需要等两半都空的任务。
 - 相关约束落点：本仓 [`06-gate-topk-deadlock.md`](06-gate-topk-deadlock.md)、[`11-8001-bridge-live-ops.md`](11-8001-bridge-live-ops.md)、`pypto-lib/docs/known-pypto-pitfalls.md`、`pypto-lib/docs/dev-workflow-gotchas.md`、memory `feedback_integration_churn_root_causes` + `feedback_align_deepseek_architecture_first`。

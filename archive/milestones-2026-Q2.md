@@ -1,283 +1,40 @@
 # Milestones —— 2026 Q2
 
-## 2026-08-21 —— R9 hang 机制部分定位（amplifier，非闭合环）+ codex 6 天循环根因 + dispatch 域融合线**整体关闭**（orchestrator 不在关键路径）⛔
+## 2026-08-21 —— MoE dispatch 域小算子融合线**整体关闭**（负结论）⛔
 
-> ⚠ **本条经过 4 次自我更正（A/B/C/D）+ 一次收盘更正（E）。E 推翻了本条上午写的"环闭合"，
-> 记录了解耦候选在 device 门上的 NO-GO 与"阻塞读是承重流控阀"这一反直觉发现，
-> 并最终以 §E6 的量化**关闭整条线**（orchestrator 不在关键路径 ⇒ ROI = 0）。**
-> 读的时候直接看 §E 的最终口径；上面的 §1 保留为**过程记录**，其"环闭合"结论**已撤回**。
+**定案 → 复盘**：[`../postmortems/16-dispatch-fusion-orch-decouple.md`](../postmortems/16-dispatch-fusion-orch-decouple.md)
+（含 11 条已撤回主张 + 9 条铁律 + 全部证据入口）。本条只留流水与不在复盘里的数字。
 
-**当日最终结论**：
+**当日轨迹**：接手 codex 6 天 / 357 run / 8 候选 / 0 落地的 campaign → 一天内定案。
+上午写的"完整死锁环"当天下午被自己的下一个门推翻，共 4 次自我更正 + 1 次收盘更正。
 
-1. ~~**机制已闭合**~~ **← 已由 §E 撤回。** 已确立的部分是：**一个 orchestration 级的阻塞
-   标量读（动态 spmd grid 定尺）落在了一个体内含跨卡 `pld.system.wait` 的 task 的输出上**：
+**结论三段**：
 
-   ```
-   orch: scatter_blocks = pl.read(local_route_count,[1])        # decode_fwd.py:2611
-       -> AICPU get_tensor_data -> wait_for_tensor_ready(read)  # pto_runtime2.cpp:221
-       -> 等 producer ring3/local933 = dispatch_meta 完成
-   dispatch_meta 体内: pld.system.wait(meta_arrived[src] >= moe_epoch)   # 跨卡
-   ~~peer 卡在 combine_wait(627) → 饿死第 8 个 rank → 环闭合~~   <-- §E 撤回
-   ```
+1. **R9 = NO-GO**（`dd0e9cea`，相对生产基线 R5 `67b73589` 的 `decode_fwd.py` **只差一行**：
+   `dispatch_gather` 的 `deps` 多一个 `dispatch_push_tid`）。生产配置 3 次挂 2 次（概率性，
+   非确定性）；匹配曝光后**也不快** —— R5 `ITERS=1000` p50 `26.329 ms` 优于 R9 clean run
+   `26.615 ms`。作废的旧数据点：`27.478` / `27.757 ms` 是 `ITERS=100` 臂，与 1000 臂不可比。
+2. **结构修复候选 = NO-GO**：无卡 codegen 门达标（`local_route_count` 上的 orchestrator 阻塞读
+   4→0），但 device 门三臂全挂（`inv=10` / `inv=1` / `inv=357`）。
+   ★ 反直觉的原因：**那个阻塞读同时是承重的 run-ahead 流控阀**。
+3. **整条线关闭**：只解析已有 STRACE span（不占卡、不改码、不加锁）⇒ p50 `orch`
+   `17279.28 → 4443.18 µs`（**−12.8 ms / −74.3%**）而 `device_wall`
+   `17466.93 → 17910.32 µs`（**反升**）⇒ orchestrator 从不在关键路径 ⇒ **ROI 上界 = 0**。
 
-   device 证据：`FATAL(code=8): Timeout (750000000 cycles): producer (ring=3, local=933)
-   not completed`（16 次）；签名两次 hang 完全一致 = `7×sched_error_code=100` +
-   `1×sched_error_code=0`。
-2. **⚠ 该耦合在生产基线 R5 里逐字节存在。** `combine_scatter` 的数据相关 grid 与
-   `dispatch_meta` 的跨卡 wait 在 R5/R9 相同；R5→R9 的全部差异是别处那一行。
-   ⇒ R9 更像是**把调度 skew 推进了可达区间**，而不是造出新结构。
-   （但 §E 的 R5 长跑数据说明那一行对 hang 概率**不是中性的**。）
-3. ~~**这解释了 campaign 为什么不收敛**~~ —— 方向仍成立（都在扰动同一个先已存在的耦合），
-   但"因为环闭合"这个理由已撤回。
-4. **R9 维持 NO-GO**（预登记规则 R1）。§E 追加：匹配 ITERS 后 R9 **也不快**。
+**DFX 侧补充证据（不在复盘正文，留档）**：R7 五层 DFX 显示 dispatch 域的收益**被
+`dispatch_wait` 吸走** —— `dispatch_meta` 的 `7.12 µs` 消失，但 `dispatch_wait` 从
+`2.18 → 12.56 µs`；`dispatch_count_start_to_gmm1_start` `78.05 → 78.32`（**+0.27 µs**），
+另一路径 **−3.34 µs**。⇒ 瓶颈是 **WAIT（跨卡等待）而非 small-op 调度开销**，
+与第 3 段的 orchestrator 结论独立同向。
 
-**决定性的一步是一个环境变量**：`orch_error_code=8` 只是分类、不含地址；点名 producer 的
-`FATAL(code=8)` 由 AICPU `unified_log_error` 发出，被
-`CheckLogLevel(AICPU, DLOG_ERROR)` 门住，**必须设 `ASCEND_GLOBAL_LOG_LEVEL=3`**。
-之前所有 arm 只设了 `ASCEND_PROCESS_LOG_PATH` ⇒ 目录建了、文件空的、字符串全丢。
-**成本为零，价值是 6 天。**
+**★★ 副产品（量级更大，已转性能主线）**：同一份 STRACE 里 R5 每 invocation `simpler_run`
+p50 `26.45 ms`，其中 **`bind.args` = `6.12 ms` ≈ ITL 的 23%**（纯 host 侧参数绑定、
+与 `runner_run` 加性；对照臂 `5.87 ms`）。见
+[`../design/performance/task-tracking.md`](../design/performance/task-tracking.md)。
 
-**修复方向（全部已判定，⇒ 无一可获利）**：① 去掉数据相关 grid，改静态 grid + kernel 内界
-（**已实现；codegen 门过、device 门 ⛔ NO-GO，见 §E3/§E4**）；② 把 grid 定尺标量与跨卡 wait
-拆开（**曾以为是活着的方向，⛔ 已随 §E6 关闭：orchestrator 不在关键路径，ROI = 0**）；
-③ ~~限制 orch run-ahead~~ **← 方向反了：那个读本身就是 run-ahead 节流，删掉它才导致
-ring 死锁（§E4）**；④ 回退那一行（= R5，耦合仍在）**← 终态即此，生产不做改动**。
-权威报告 `0162:…/dispatch-fusion-triage-20260821/MECHANISM.md` **v2**
-sha256 `2e964264b6c7ae24d5681b71d5176d62e1350f1b115fde9a9c822880ee354f66`
-（v1 `3f670f1a…` 声称环已闭合，**已被取代**）。
-
----
-
-接手 codex 的 dispatch 融合 campaign（**6 天 / 357 个 run 目录 / 0 落地**），先查
-"为什么这么久"，再判 R9 的 GO/NO-GO。
-
-**R9 判定 = NO-GO，理由是 liveness 不是 ROI。** 三臂 A/B/A（整机锁串行，生产
-ctx 65536 + 512 KV block）：
-
-| arm | tree | 结果 |
-|---|---|---|
-| A1 | R5 `67b73589` | rc=0，p50 **27.757 ms**、mean 32.068、`hidden_sha256=567b206b…`、tail token `14371` exact |
-| B | R9 `dd0e9cea` | **rc=1 HANG** —— 无 itl_report、无 precision |
-| A2 | R5 | 未跑（B 失败后 `set -e` 中止） |
-
-B 的失败已解码（**不把 `code -8` 当黑盒**）：`orch_error_code=8 TENSOR_WAIT_TIMEOUT`
-/ `sched_error_code=100` / `sub_class=S1:running-stalled (detail=1)` /
-`completed=546/1744 running=1 ready=0 waiting=30` /
-`stuck_task_id=12884902515` = **ring 3 / local 627** / `stuck_core=24,26,28`（多 rank
-⇒ 跨卡）。8× `aclrtResetDeviceForce` 已清卡，事后 HBM 回到 ~3.2 GB、无残留进程。
-
-**codex 6 天循环的三个根因**（全部写进 [`postmortems/12`](../postmortems/12-integration-churn-meta.md) §3 根因 6/7/8）：
-
-1. **`stuck_task_id` 从没被兑现成"哪个 kernel 在等什么"就出下一个候选** —— 46 次
-   `-8`（08-17 23:44 ~ 08-20 22:02），8 个变体，没有任何 evidence 目录记录过
-   ring/local 对应哪个 kernel、缺哪个条件、该由谁置位。
-2. **便宜门看不见目标 bug = 假绿** —— R9 反复跑绿的 `device-gates/*` 全是五层
-   harness，装不下整网 1702-task 图。
-3. ~~**一个候选捆两个独立优化**~~ **← 已于同日自我更正，见下方「三条更正」§C。**
-
-**同日三条更正（都是我自己的结论被我自己的下一个实验推翻，按纪律记在这里）**：
-
-**A. hang 是概率性的，不是"只在生产配置"。** 生产配置复跑一次 → **PASS**，
-p50 `26.615 ms`（min 25.984 / mean 27.161）、reset_trace 109 行完整。所以生产配置
-**2 次挂 1 次**。原写的"小配置门**结构上**看不见"**被否证**；n=2 vs n=2 也**无法**区分
-「概率与配置有关」与「概率与配置无关」，两者都兼容数据。
-⇒ **门的设计随之改变**：概率性失败意味着"生产配置跑通一次"也不是 liveness 门。
-便宜补法 = **拉长单轮曝光**而非重复整轮 —— 一轮 11 分钟里 decode 只占约 3 秒
-（110 × 27 ms），其余全是 compile + weight load，所以 `--itl-iters` 100→1000
-只多约 25 秒墙钟、曝光放大约 10 倍。
-
-**B. `stuck_task_id` 已兑现成 kernel + 谓词 + 责任方（根因 1 的欠债还上了）。**
-用生产配置 + `PYPTO_DISTRIBUTED_DEP_GEN=1` 的 `deps.json`：
-
-```
-ring 3 / local 627  =  swa_moe_chip_orch_combine_wait   (block_num=1, early=True)
-未满足谓词：pld.system.wait(combine_arrived[src], expected=moe_epoch*n_local_experts, Ge)
-应由谁置位：rank src 自己的 combine_wait —— 同一 task 先 notify 全 peer、再 wait 全 peer
-```
-
-⇒ `combine_wait` 是**对称 all-rank rendezvous**，**停在里面的 rank 全是受害者**。
-元凶在同一份日志里：8 个 rank 的 `sched_error_code` 分布 = **7×`100` + 1×`0`**，那个
-`sched_error_code=0` 的 rank **不产出 `sub_class=` 行**、只报 orch `TENSOR_WAIT_TIMEOUT`
-（它的 scheduler 没停，是 **orchestrator** 卡住）。**可推广判据：对称 barrier 里查少数派报告。**
-仍缺最后一环：`wait_for_tensor_ready` 走的是「producer 未 COMPLETED」还是「consumers
-未释放」分支及具体 producer ring/local —— 该信息在 AICPU `FATAL(code=8)` 里，需
-`ASCEND_GLOBAL_LOG_LEVEL=3` 才落盘（前两次 arm 没开，log 目录是空的；已修好）。
-**已源码证伪一个机制假设**：「predicated 任务漏放 fanout 引用」不成立（predicate 失败走
-`dummy_ready_queue` 内联退休，`on_task_release` → `release_producer` 逐个释放 fanin）。
-
-**C. "候选捆了两个优化"是基线选错造成的假象。** `grep -c routed_nz` 三列 =
-`develop 0 / **R5 19** / R9 19` —— NZ GMM 融合在 R5 里就有了。`diff R5 R9` 的
-`decode_fwd.py` **只差一行**（`dispatch_gather` 的 `deps` 多一个 `dispatch_push_tid`）。
-⇒ 相对生产基线 R5，R9 是**教科书级隔离候选**，归因毫无歧义。
-**这条更正加重而非减轻根因 1/2 的责任**：一行的改动烧了 6 天，只能由"没兑现
-`stuck_task_id`"+"门看不见生产配置"解释。教训改写为：**特征矩阵与 `diff` 必须相对
-"你实际要发布的那个基线"算，不是 `develop`。**
-
-**D. 与 DFX 推断相反的数据点。** R9 跑通那次整网 p50 `26.615 ms`，R5 两次是
-`27.478` / `27.757 ms`。**非配对单次比较、不满足 A/B/A bracket 口径、不能当收益记账**，
-但方向与下方"五层 DFX 显示收益不传播"相反 ⇒ 那条推断（R5-vs-R7、两臂都是五层）对 R9
-只是弱证据。**这条线的想法可能有价值，值得在修掉 liveness 隐患后重估，而不是直接废弃。**
-
-**我自己也踩了第 2 条的升级版（当天自我推翻两次）**：R9 先通过了整网单步 liveness
-（6127→303、tp_spread 0）与 N=128 replacement-equivalence（256/256 tensor 与 R5
-**逐字节相等**），但那两个门跑在 `MAX_SEQ=4096 / 32 block`。生产配置是**另一张
-task 图**（1744 vs 1702 task），小配置门**没抓到**。判据修正为：
-**每个 liveness / 精度门都必须在生产 ctx + 生产 KV block 数下跑，且单轮曝光要拉长。**
-⚠ 见上方更正 A —— 生产配置本身也只是 2 次挂 1 次，所以"小配置**结构上**看不见"已被否证。
-
-**优化前提本身也有问题**：`DFX_R5_R7_COMPARISON`（五层）显示 dispatch 域
-stage 赢了但**不传播** —— `dispatch_count_start_to_gather_end` 40.08→36.74
-（**−3.34 µs**），而 `dispatch_count_start_to_gmm1_start` 78.05→78.32
-（**+0.27 µs**）；`dispatch_meta` 7.12 消失但 `dispatch_wait` 2.18→12.56
-（**+10.38**）把收益吸走。⇒ 瓶颈像是 **WAIT**，不是 small-op latency。建新候选前
-先验证这个前提。
-
-**产出**（0162 `perf-2026q3/dispatch-fusion-triage-20260821/`）：四个参数化 runner
-（`wholenet_liveness.sh` 输出 `VERDICT` 分类 + `STUCK`；`n128_replacement_gate.sh`
-只取半机锁；`aba_itl.sh` 生产 ctx 三臂计时门取整机锁；**`faultlog_r9.sh` 单臂诊断，
-只取半机锁 + `ASCEND_GLOBAL_LOG_LEVEL=3` 抓 AICPU FATAL + `ITERS` 可调曝光**）、
-`depgen-bin/lookup_task.py`（`(ring, local)` → kernel 名 + 邻域 + 前驱/后继）、
-预注册决策规则 `DECISION_RULE.prereg.md`（**在 B 出数之前写的**）+ caveat addendum
-+ `VERDICT.md`。
-⚠ **arm B 不是"确定性 S1 复现器"**（初稿这么写，已否证）——它是**概率性**复现器，
-命中率约 1/2；要提高命中率用 `ITERS=1000` 拉长单轮曝光，不要重复整轮。
-
-**两个 runner 坑**（写进 [`postmortems/12`](../postmortems/12-integration-churn-meta.md) §6 与 memory）：① ITL arm **必须
-`--privileged`**，否则 24.86 GiB VMM weight pool 的 `aclrtMalloc` 直接 `rc=107002`
-（卡是空的，不是 OOM）；② `PYPTO_DEVICES` 选的是**物理**卡号，privileged 下
-`--device /dev/davinci*` 是摆设 —— 老 runner 里 `devices=8-15` 的 lock 注释是错的，
-实际跑在 0-7。
-
-**更正一条旧记录**：`_route_anchor` / `_routed_anchor` / `dump_phys` 三个 unused
-变量在 **R5 与 R9 都各出现一次**，是 baseline 既有残留，**不是 R9 引入**，因此不在
-任何 R9 落地清理范围内。
-
-### §E 收盘更正（推翻本条上午的"环闭合"）+ 解耦候选 device 门 NO-GO
-
-**E1. R5 对照长跑（决定性）**：同配置 `ITERS=1000` 一轮 **PASS**、无 FATAL、p50
-`26.329 ms`（`faultlog-R5-iter1000/`）。两个推论：① R9 生产配置 **3 次挂 2 次** vs
-R5 10× 曝光 1 次 1 过 ⇒ **那一行对 hang 概率不是中性的**（n=1，**不**证明 R5 绝对安全）；
-② 匹配 ITERS 后 **R9 也不快**（R9 `26.615` > R5 `26.329`）⇒ 上面 §D 那个"方向相反的
-数据点"**作废** —— 之前的 `27.478` / `27.757` 是 `ITERS=100` 臂，不可比。
-**R9 = 既不 live 也不快，NO-GO 双重成立。**
-
-**E2. ❌ 撤回「闭合死锁环」与「1 元凶 + 7 受害者」**（§B 的元凶段随之失效）：
-
-- **提交序否证**：orchestrator 卡在 local **933**，则它必然早已提交过 local **627**；
-  而已 RUNNING 的 `combine_wait` 是**先 notify 再 wait**、发 notify 不需要 orchestrator
-  ⇒ **环没有闭合边**。
-- **pid 计数否证**：`grep -ho "AICPU([0-9]*," | sort | uniq -c` = **8 个 distinct pid**，
-  `producer (ring=3, local=933)` **16 次无一例外** ⇒ **8 个 orchestrator 全部阻塞在同一个
-  producer 上**，不存在"第 8 个受害者"。
-- **判据修正**：`sched_error_code` 少数派报告告诉你**哪个子系统停了**（orch vs
-  scheduler），**不是哪个 rank 有责任**。8 个样本、二态分布，极易过度解读成因果。
-
-**仅存的结构性主张** = **deadlock amplifier**：那个阻塞标量读把 orchestrator 的前进耦合
-到跨卡进度上，于是任何上游跨卡停滞被放大成全 rank orchestrator 冻结。**不是已证 root cause。**
-
-**E3. 静态 scatter grid 候选（`dispatch-orch-decouple-20260821`）：过 codegen 门，
-device 门 NO-GO。** 配对结构验证（同门同镜像编译 R5 与候选，比 orchestrator 生成码）：
-
-| | R5 基线 | 候选 |
-|---|---:|---:|
-| `get_tensor_data` 总数 | 11 | **7** |
-| 打在 `local_route_count`（producer 含跨卡 wait） | **4** | **0** |
-| `scatter_blocks` | `active_expert_count_inline*` | `static_cast<int64_t>(8)` |
-
-device 三臂（生产 ctx 65536 / 512 blk，`ITERS=1000`，半机锁）：
-
-| 臂 | sched 超时 | 死在 | 签名 |
-|---|---|---|---|
-| WORKERS=8 | 默认 | `inv=10` | `orch_error_code=2` **HEAP_RING_DEADLOCK**，无 FATAL |
-| WORKERS=1 | 默认 | `inv=1` | `sched_error_code=100` `S1:running-stalled` `completed=1551/1744` **`orch_done=1`** |
-| WORKERS=1 | 45 000 ms | `inv=357` | **HEAP_RING_DEADLOCK**（与 w8 同签名） |
-
-第三臂推翻了"两者不是同一根因"的中间结论：**w1 从来不是 rendezvous 死锁，只是慢**，
-默认 scheduler 超时先响；抬高超时后它跑了 357 invocation，然后撞上**和 w8 同一个**
-ring 死锁。**两臂一个机制。**
-
-**E4. ★ 关键发现（比候选本身重要，且改写了修复方向）：那个阻塞标量读不只是缺陷，
-它还是一个承重的流控阀。** `RUNTIME_LOGIC.md`（a2a3 `host_build_graph/docs/`）：
-§4.4「ring 耗尽时 orchestrator **阻塞**」⇒ ring 就是对 orchestrator run-ahead 的背压；
-§4.5 ring 太小会因 **scope 引用**死锁（`fanout_count` 含一个只在 `scope_end()` 释放的
-scope 引用，而 `scope_end()` 由 orchestrator 调用，orchestrator 又在等 ring 空间）。
-
-原来那个每层一次的阻塞读把 orchestrator 的 run-ahead 限制在**一层内**。删掉它 ⇒
-**`orch_done=1`（一次把全部 1744 task 提交完）** ⇒ 整个调度体制变了，run-ahead 无界
-⇒ ring 饱和 ⇒ §4.5 死锁。
-
-**这不是容量账**：runner 本就设 `PTO2_RING_HEAP=4294967296` /
-`PTO2_RING_TASK_WINDOW=131072`；w1 只是把失败从 `inv=10` 推到 `inv=357`。
-**无界 run-ahead 下任何有限 ring 终会饱和，加容量只能推迟。**
-⇒ 原计划的"加大 ring 容量"实验**作废，不必再跑**。
-
-**⚠ 机制只到"观测"为止（对抗性自审，收盘后补）**：`orch_done=1` 是观测；
-"run-ahead 无界 ⇒ ring 饱和"**算术上不足以解释数据** —— 一次 invocation 只有 **1744** task，
-ring 有 **131072** slot ⇒ **单次 invocation 再深的 run-ahead 也填不满 ring（差 75 倍）**。
-而 w1 死在 `inv=357`、w8 死在 `inv=10` ⇒ **资源必然跨 invocation 累积**；两臂很可能
-**受限于不同资源**（w8 的 8× block 主要吃 heap 字节，w1 主要吃 slot）。
-⇒ **真正的缺陷可能是「回收 / 泄漏」被这个改动暴露，而不只是「提交得太超前」**，
-**若是泄漏，E6 的本地节流未必能修**。⇒ **实现 E6 之前先判定 (a) run-ahead 深度 vs
-(b) 每 invocation 未回收**（读 ring allocator + `scope_end()` / `on_task_release` /
-`release_producer`，并查是否有每 invocation 的 ring 占用日志）。**别在没判定前烧 device 门。**
-
-**修正后的设计规则**（取代 MECHANISM v2 里更简单那条）：orchestration 级阻塞标量读
-若其 producer 含跨卡 wait，是隐患；**但不能直接删** —— 必须换成一个只依赖**本地
-device 进度**的节流，否则是把稀有的概率性跨卡死锁换成确定性 ring 死锁。
-
-**E5. 两个可复用判别法**：
-
-- **`SIMPLER_SCHEDULER_TIMEOUT_MS` 能把 `S1` 分成「真死锁」与「只是慢」** —— env-only、
-  零改码，是 runtime 自己文档化的判别法。本例它直接推翻了一个错的双根因结论。
-- ⚠ **runtime 提示里的 env 名不可信**：`error_names.h:172` 让你调
-  `PTO2_SCHEDULER_TIMEOUT_MS`，**该 env 不存在**；真名 **`SIMPLER_SCHEDULER_TIMEOUT_MS`**
-  （`runtime_timeout_config.h:25`，读于 `:165` 与 `device_runner_base.cpp:90`），且受
-  `scheduler_timeout_us < op_execute_timeout_us` 约束（实测 op 超时 50000 ms，故用 45000）。
-  同族 `PTO2_TENSOR_DATA_TIMEOUT_MS` 是编译期 constexpr、根本不可设。
-  **一律去源码 grep `getenv` 核对。**
-
-**E6. ✅ 已测（收盘）⇒ 整条线关闭**：原本写"ROI 至今 0 个数据点，要有一个能活下来的候选才能测"，
-**那是错的** —— 三个失败臂在挂掉前都跑了几百个 invocation，稳态 span 早就够统计。
-只解析已有 STRACE 嵌套 span（`runner_run ⊃ device_wall ⊃ graph_build ⊃ sched ⊃ orch`，
-每 invocation 一组、丢 warmup `inv<10`、8 rank 汇池；工具 `analysis-bin/orch_span_stats.py`）：
-
-| p50 span | R5（有阻塞读） | w1（去掉阻塞读） | Δ |
-|---|---:|---:|---:|
-| `device_wall` | 17466.93 µs | 17910.32 µs | **+443.4** |
-| `graph_build` | 17457.59 | 17900.76 | +443.2 |
-| `sched` | 17439.98 | 17883.85 | +443.9 |
-| **`orch`** | **17279.28** | **4443.18** | **−12836.1（−74.3%）** |
-| 样本 | n=8008 | n=2776 | |
-
-**`orch` 缩 12.8 ms / −74%，`device_wall` 一点没降反而略升 ⇒ orchestrator 与 device 并发、
-两种情况下都提前完成，从不在关键路径上 ⇒ 去掉阻塞读的 ITL ROI = 0（微负）。**
-⇒ **本地节流候选（原 E6）与「判 ring 耗尽机制」一并关闭；生产继续 R5，不做改动。**
-诚实边界：非 A/B/A bracket、两轮不同 run 各取一臂、w1 那轮最终挂了；但结论不依赖这些 ——
-`orch` 降 12.8 ms 而 `device_wall` 没降，量级差 29×。
-**教训：不要为了拿一个数去写新候选，先看现有日志里是不是已经有那个数。**
-
-**E6b. ★★ 同一份数据里的新线索（量级远大于本线）**：R5 每 invocation
-`simpler_run` p50 = `26.45 ms`（与 ITL p50 `26.329 ms` 对得上），其中
-**`bind.args` = `6.12 ms` ≈ ITL 的 23%** —— 纯 host 侧参数绑定，`simpler_run ≈ bind + runner_run`
-加性串行（w1 侧 `5.87 ms`，同量级 ⇒ 不是偶发）。**比 dispatch 域任何 small-op 融合的可得收益
-大一到两个数量级**，且不碰 device 语义、不碰跨卡同步、不动 `@pl.program` 结构
-⇒ 建议作为下一条性能主线先去核实。
-
-**E7. dispatch 域还剩什么可融合 —— 逐个都撞已文档化的硬约束**：
-
-- `dispatch_meta` + `dispatch_wait`：合并后 orchestrator 的阻塞读要等**更多**跨卡进度
-  ⇒ **加剧** amplifier。**先解耦，再融合。**
-- `dispatch_count_publish` + `dispatch_push`：task 边界**正是** self-row 可见性 fence
-  （`decode_fwd.py:1740-1744` 注释：remote_store-to-self 没有 peer notify 提供跨 task
-  可见性 fence）⇒ 合并破坏 fence。
-- `dispatch_wait` 吸进 `dispatch_gather`：违反「不要把跨卡 wait 吸进 compute kernel」——
-  会把 scheduler 能直接读出缺谁的 `S4` 退化成要人肉映射的 `S1`。
-- `dispatch_push` / `dispatch_gather` 的 grid 由 **host** `num_tokens` 定尺
-  （`:1810` / `:1817`）⇒ 本来就不产生 orchestrator 阻塞读，无耦合可解。
-
-⇒ 叠加 DFX「收益被 `dispatch_wait` 吸走（`2.18→12.56 µs`）、瓶颈是 **WAIT** 不是 small-op
-latency」，再叠加 E6 的量化（orchestrator 不在关键路径）：
-**dispatch 域小算子融合这条线终态关闭，不留"先换节流再谈融合"的后路。**
+**流程根因**（已写进 [`../postmortems/12-integration-churn-meta.md`](../postmortems/12-integration-churn-meta.md)
+根因 9/10/11 + [`../postmortems/LESSONS.md`](../postmortems/LESSONS.md) §A）：候选立项前提没被审 ·
+看门狗把"慢"伪装成"死" · 为拿一个数去写新候选，而那个数已经躺在失败 run 的日志里。
 
 权威记录：`0162:…/dispatch-orch-decouple-20260821/FINDINGS.md`。
 
@@ -394,186 +151,54 @@ sha256 `a34817832550b9c68c907a58774403802d79c1926e8aa085b658ff0aafc9f21b`。
 
 ## 2026-08-10 —— P1a gate 解耦：swimlane critical path 定向优化，bs1/bs8 各约 6%，byte-exact，已发布 `stepfun/develop@d13b2ca6` ✅
 
-**方法**：只看 swimlane critical path（5 层 FiveLayerMoe 代表整网），改动全部收在
-`pypto-lib/models/step3p5/decode_fwd.py`。
+**完整报告（含全部 campaign 路径、pass dump sha、UB 排名表）**：
+[`../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md`](../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md)。
 
-**定位**：interior SWA+MoE 层的 MoE-only 段是 15 hop、compute 222.1 + stall 74.6 =
-`296.7 us`（stall 占 25%）。链头 `norm_quant_moe_input`(25.8) -> `gate_expert_fanout`(32.7)
-之间的串行**只由 `inv_rms` 一个 per-token 标量造成**，而它在 fanout 的 FP32 matmul **之后**
-才乘（`decode_fwd.py:618` `logits_n = pl.row_expand_mul(logits_n, inv_rms)`）——
-也就是 fanout 的 cube matmul 根本不需要 norm_quant 的任何输出。
+**方法**：只看 swimlane critical path（5 层 FiveLayerMoe 代表整网），改动全收在 `decode_fwd.py`。
 
-**改法（P1a，commit `d13b2ca`，branch `perf/gate-decouple-invrms-20260810`）**：
-fanout 只存 raw FP32 logits 到 `logit_buf`（cube->vec 用 `pl.mul(logits_n, 1.0)`，FP32 精确）；
-把 `row_expand_mul(inv_rms) -> sigmoid -> +bias -> score_buf/biased_buf` 整段按同样的
-`ROUTER_GATE_N_CHUNK=32` 分块搬到 `gate_topk` 开头（它本来就要等 inv_rms），
-pad 列 0/NEG_INF 的处理不变。算子顺序完全不变，只多一次 FP32 tensor round-trip。
+**定位**：interior SWA+MoE 层的 MoE-only 段 15 hop、compute 222.1 + stall 74.6 = `296.7 us`。
+链头 `norm_quant_moe_input`(25.8) → `gate_expert_fanout`(32.7) 的串行**只由 `inv_rms` 一个
+per-token 标量造成**，而它在 fanout 的 FP32 matmul **之后**才乘 ⇒ fanout 的 cube matmul
+根本不需要 norm_quant 的任何输出。
 
-**三层验证（都是实测，不是推断）**：
+**改法**：fanout 只存 raw FP32 logits 到 `logit_buf`（cube→vec 用 `pl.mul(logits_n, 1.0)`）；
+`row_expand_mul(inv_rms) → sigmoid → +bias` 整段按同样的 `ROUTER_GATE_N_CHUNK=32` 搬到
+`gate_topk` 开头（它本来就要等 `inv_rms`）。算子顺序不变，只多一次 FP32 tensor round-trip。
 
-1. **codegen 层**（同 image `sha256:cab89668`，a2a3，NB=512，两边都 COMPILE_OK 13.3s）：
-   `whole_chip_orch.cpp` 里 baseline 的 `params_t70`(gate_expert_fanout) 有
-   `add_input(moe_inv_rms__ssa_v2_inline1565)`；candidate 的 `params_t70` 没有了，
-   join 点搬到 `params_t71`(gate_topk)。task 数与 `block_num=9` 均不变。
-2. **device A/B/A**（`parent -> candidate -> parent`，10/100）：
+**三层验证**：① codegen —— candidate 的 `params_t70`(fanout) 不再 `add_input(moe_inv_rms)`，
+join 点搬到 `params_t71`(gate_topk)，task 数与 `block_num=9` 不变；
+② device A/B/A —— bs=1/nb512 `36.493 → 33.849`（**+2.645 ms / +7.25%**，地板 0.634）、
+bs=8/nb4096 `97.528 → 91.722`（**+5.806 ms / +5.95%**，地板 2.637），
+bs=16 @per-request 64K 物理不可行（需 `num_blocks=8192` → 单次 16 GiB `rtMalloc` → `207001`）。
+**对外统一口径：bs=1 与 bs=8 都约 6%**；
+③ 精度 = **byte-exact**（bs=1 三臂 hidden sha = `567b206b…` = N256 发布 golden、tail token
+`14371`；bs=8 三臂 = `1fcd4fcc…`）。
 
-   | 工作点 | parent_center | candidate | gain | gain_floor | 裁决 |
-   |---|---:|---:|---:|---:|---|
-   | bs=1 ctx=65536 nb=512 | 36.493 | 33.849 | +2.645 ms (+7.25%)；min 口径 +1.704 (+4.87%) | 0.634 | GO |
-   | bs=8 ctx=65536 nb=4096 | 97.528 | 91.722 | +5.806 ms (+5.95%)；min 口径 +5.963 (+6.19%) | 2.637 | GO |
-   | bs=16 ctx=65536 | — | — | **物理不可行** | — | 容量上限 |
+**机理闭环**：MoE-only 段 15 → **14 hop**，`norm_quant_moe_input` 离开关键路径；
+链头 `81.8 → 56.5 us`（**−25.3 us/层**），段合计 `296.7 → 280.0 us`，on-path task `99 → 96`。
+`gate_topk` `3.1 → 10.3 us` 正是搬进去的尾巴。`−25.3 us × 42 层 = 1.06 ms` 与事前预估 `1.08 ms` 吻合。
 
-   bs=8 上 p50/min 两口径一致（5.95%/6.19%），bs=1 的 p50 偏高、min 偏低，
-   **对外统一口径：bs=1 与 bs=8 都约 6%**。
-   bs=16 @ per-request 64K 需 `num_blocks=8192` -> 单次 16 GiB `rtMalloc` -> `207001`，
-   canary 只剩 `13.21 GiB` free；P1a 不改 footprint（只多 `[16,512]` FP32 `logit_buf`
-   ≈32 KB/instance，对 24.86 GiB/rank weight pool 可忽略）。按 codex 建议报到 bs=8 并说明上限，
-   **不用 bs=16/ctx=4096 冒充 per-request 64K**。
-3. **精度 = byte-exact**（比 vanilla oracle 更硬，且更便宜）：
-   bs=1 三臂 hidden tensor payload sha256 全部 =
-   `567b206bb03d89f84020e1dddd61098a8f79f32f81b8f4fcf56443113e27f03e`
-   （即 N256 发布版 golden），tail token `14371` 全臂精确；
-   bs=8 三臂全部 = `1fcd4fcc9d0775a7c5fb08784725f9570246858291c85788fad6d4b234a8722e`。
+**发布**：`a31977fb` **FF 到 `d13b2ca6`**（单 commit，只改 `decode_fwd.py` +63/−35）；
+合并后 sha 仍 `28080c53…`，与 A/B/A candidate 臂**逐字节相同** ⇒ 设备数据直接绑定发布代码。
+⚠ 0162 连不上 GitHub 443，push 走 `git bundle` 带回本地再推。
 
-**机理闭环（candidate swimlane，rank0）**：MoE-only 段 15 hop -> **14 hop**，
-`norm_quant_moe_input` **不在关键路径上**；链头 `81.8 us -> 56.5 us`（**-25.3 us/层**），
-段合计 `296.7 -> 280.0 us`；on-path task 数 `99 -> 96`。
-`gate_topk` 3.1 -> 10.3 us 正是搬进去的尾巴，被移走的 25.8 us 完全覆盖。
-`-25.3 us x 42 层 = 1.06 ms`，与事前预估 1.08 ms 吻合。
+**同轮 NO-GO（避免复发）**：`gate_up+act` 合并（真实理由是 **ROI 低于检测地板** ——
+干净 baseline 只占 `14.6 us = 0.65%`，映射整网 `0.13~0.17 ms`；⚠ 原先归因"`pl.range(4)`
+展开不复用 SSA buffer"**已被本轮预测-验证闭环推翻**，真因是融合新增 c2v pipe slot，
+且树内已有能编过的融合路径 ⇒ 融合可行，是 tiling 取舍）；
+`act+h_quant` 合并（grid 维度不同 + h_quant 需整行 amax）；
+`tp_all_reduce` 降 ring step（前提未证实：on-path AR 是 `45+3=48` 次不是 72，占实测 25.8 ms 的
+`8.5~9.7%` 不是 15%；且单个 AR 记到 `35,530.5 us` 说明它主要是吸收 rank skew 的 barrier）。
 
-### 同轮被证伪 / 被否的方向（记下来避免复发）
+**下一步（修正后）**：① 跨 rank 负载均衡（天花板最高，无设计）—— 已证 `combine_wait` 由本 rank
+active local expert 数决定（rank0：L3 有 1 个 → wait `19.26 us`；L4 有 0 个 → wait `155.40 us`），
+且 skew 反过来放大 AR，两件事同源；② cube matmul 的 tile + pipeline 作为**一个 bundle** 上 A/B/A；
+③ `tp_all_reduce` 等 step 级插桩证据。**不再逐个 kernel 试融合** —— 单个都低于检测地板。
 
-- **`expert_gate_up` + `expert_gate_up_act` 合并 = NO-GO（实测）**。
-  ⚠ **本条的根因归因已被同日「更正 ①」推翻**：不是 `pl.range` 展开不复用 buffer，
-  而是融合新增 c2v pipe slot；且融合本身可行（树内已有能编过的路径）。
-  正确的 NO-GO 理由是 **ROI 低于检测地板**。以下为当时记录，保留作过程痕迹。
-  机理本身成立（`ROUTED_GATE_MM_N_CHUNK=256` : `ROUTED_GATE_ACT_N_CHUNK=64` = 4:1，
-  act body 在列方向纯 elementwise、无跨列归约，可干掉 `gate_i32`/`up_i32` 两块
-  `[local_recv_max, inter]` INT32 GM bridge）。但 codegen 直接失败：
-  `expert_gate_up_aiv: Vec buffer usage (401472 bytes) exceeds platform limit (188416 bytes)`。
-  根因 = `known-pypto-pitfalls.md §7`：`pl.range(4)` 是常量 range，展开且**不复用 SSA buffer**，
-  epilogue 向量工作集被独立分配 4 份。预期收益仅 0.42~0.61 ms，不值得为绕 UB 返工，已回退。
-- **`expert_gate_up_act` + `routed_h_quant` 合并 = 不做**。
-  两者 grid 维度不同（`active_experts x (inter/chunk)` vs `active_experts`），
-  且 h_quant 要对整行 `inter` 求 amax，必须等该行所有 act N-chunk 完成。
-  要合就得把 act 降成 per-expert grid，bs=1 时 `active_expert_count` 只有 2~3，act 会显著变慢。
-- **`tp_all_reduce` 降 ring step = 前提未证实，不执行**。
-  修正后的账：on-path AR 是 `45 attention + 3 dense = 48` 次（**不是**把 5 层的 8 次 x9 得 72 —— 那样会把
-  仅 3 个 dense AR 放大成 27 个），AR task-span 约 `2.20 ms`、含前置 gap 约 `2.51 ms`，
-  占实测 25.8 ms 的 `8.5~9.7%`（**不是** 15%）。42 个 MoE shared-expert AR 被 routed/combine 分支压住
-  （早于 join 47.8/59.9 us），不计入当前关键路径。
-  更关键的反例：candidate swimlane 里**单个 AR 花了 35,530.5 us**（AR family 占 makespan 95.1%），
-  128 KB payload 不可能有 35.5 ms 搬运 -> 该时间全是等 peer 的 spin，即 skill 记录的
-  「collective spin-wait 被记成 kernel compute」陷阱。所以 AR 主要是**吸收 rank skew 的 barrier**，
-  降 step 救不了 barrier 该等的最慢 rank。但 clean baseline 8 次 AR 是
-  42.2/39.4/44.6/43.3/43.1/41.8/54.6/42.7 us，紧凑度不像纯 skew -> 另有约 42 us 地板。
-  结论：两效应叠加，**拿到 step 级证据前不碰 collectives**。
-- **旧结论「64k 下 `tp_all_reduce` 只占 span 1.84%、routed expert busy 0.99%，所以 C/D/F 系低 ROI」被推翻**：
-  那是 instrumented span 占比（被 attention task 数放大 5.21x），不是关键路径占比。
-  但**修正口径后 AR 是 8.5~11%**，不是我一度说的 15.4%。
-
-### 基础设施事实（下次撞到别误判）
-
-- 第一次 bs=8 campaign 的 A1-parent（**未改动的发布版源码**）在 codegen 崩了
-  `swa_moe_chip_orch_swiglu7_silu_expert_gate_up | ptoas compilation failed`（错误正文为空）。
-  **没有 rotate 任何 knob**，改用 compile-only 在同 image / 同 NB=4096 / 同串行 codegen 下
-  对 parent 与 candidate 各编一次：两边都 `COMPILE_OK` 88.3s / 88.4s（远大于 NB=512 的 13.3s，
-  说明确实跑完整 codegen）。故判为 **ptoas 瞬时崩溃**，与源码和改动无关，整个 campaign 作废重跑
-  （归档 `...-ABORTED-ptoas-flake` + `ABORT_REASON.md`）。
-- **非 root `fuser /dev/davinciN` 不可信**：cards 0-7 明明有 8 个 `VLLMWorker_TP`（各 54.7 GiB）
-  也报 free。占卡前必须 `sudo -n fuser` + `npu-smi info -t proc-mem` 双查、fail-closed。
-- `a2a3` profile 是**烤在镜像 ENV 里**的（`PYPTO_STEP3P5_ATTN_TASK_PROFILE`），不在 run script 里；
-  4 个带 a2a3 的镜像原本都是 untagged `<none>`，已打 tag
-  （`keep-a2a3-n256-baseline` / `keep-a2a3-moe-focused-20260806` /
-  `keep-a2a3-taskmajor-20260806` / `keep-a2a3-misc`）。
-- 历史 `49.796 -> 35.778 ms` 的 14 ms 落差**不是 warmup 口径**：`max_device_wall` median
-  `39.662 -> 25.758 ms`，而 `bind.args` 只从 `6.735 -> 6.384`。真凶是
-  `a2a3` profile + commit `c9af5790`（attention taskmajor，已在 develop 里）的 bundle。
-
-**下一步**：MoE 的剩余空间在**跨 rank 负载均衡**（codex P3），不在本地 kernel 合并 ——
-已证明 `combine_wait` 由本 rank active local expert 数决定（rank0：L3 有 1 个 -> wait 19.26 us；
-L4 有 0 个 -> wait 155.40 us），且 skew 又反过来放大 AR，两件事同源。
-
-### 同日追加：落地发布 + 两条根因更正
-
-**发布**：`csy0225/pypto-lib:stepfun/develop` 由 `a31977fb` **fast-forward 到 `d13b2ca6`**
-（单 commit，只改 `decode_fwd.py` +63/-35）。合并后 `decode_fwd.py` sha256 仍是
-`28080c53…`，与 A/B/A 的 candidate 臂**逐字节相同**，所以上面全部设备数据直接绑定发布代码、
-不需要重测。0162 `base-tree` 已同步到 `d13b2ca`（下一轮 A/B/A 的 parent）。
-⚠ 0162 连不上 GitHub 443，push 走 `git bundle` 从 0162 带回本地再推。
-
-**更正 ①（`gate_up+act` 的 NO-GO 理由从"能力上限"改为"ROI"）**：上面写的根因
-「`pl.range(4)` 常量 range 展开不复用 SSA buffer，epilogue 工作集被独立分配 4 份」
-**是错的**，本轮用预测-验证闭环逐条推翻：
-
-- 切分三档全部无效：`pl.range(4)` 401472、`pipeline(4,stage=2)` 402496、
-  `pipeline(8,stage=2)` 397888、极简 epilogue 393216 —— 迭代数减半 buffer 反而涨，
-  与"展开不复用"预测相反。
-- K_CHUNK 扫描证伪展开假说：256→393216、512→786432、1024→1572864，**线性于 KC**。
-  拟合出 `融合 = 1536×KC`、`baseline = 512×KC`；据此预测 `KC=128 -> 196608 FAIL`、
-  `KC=64 -> 98304 PASS`，实测精确命中。
-- pass dump 给出直接证据：baseline `expert_gate_up_aiv` 只有 **2 个** `alloc(Vec, 65536)`
-  （offset 0 / 65536），16 次 K 迭代全部复写同两 offset —— **复用本来就生效**。
-  融合后 `dir_mask` 2→3、新增本地 `c2v_slot_buffer`、body 多 `tpop_from_aic×2 + cast×4`，
-  账目 `2×65536 + 4×65536 = 393216` 精确等于报错值。多出的 3 份是**新增的 c2v pipe slot**，
-  不是 load/compute/store。
-- 树内本来就有能编过的融合路径
-  `full_moe_chip_orch_swiglu7_swiglu16_expert_gate_up_aiv`（`4×8192 = 32768 B`，
-  走 `K=64 / N=64 / RECV_SPECIAL_TILE=32`）→ **融合可行，是 tiling 取舍问题**。
-
-真正的 NO-GO 理由是 ROI：`expert_gate_up_act` 在干净 baseline swimlane（rank2）只占
-`7.1+7.5 = 14.6 us = 0.65%`，映射整网 `0.13~0.17 ms`，**远低于 bs=1 的 0.634 ms 检测地板**
-—— 单独上 A/B/A 只会得到"统计不可区分"。
-
-**更正 ②（新硬约束：AIV Vec 预算是 per-kernel-per-core）**：之前那句
-"四个 UB 大户加 stage=2 都装不下"措辞像聚合约束，实际不是。实证
-（`33_after_AllocateMemoryAddr.py` sha256 `e3f9d292…`，脚本 + JSON 在
-`0162:/mnt/persist/chensiyu/workspace/perf-2026q3/ub-scope-20260810/`）：
-
-- 149 个 AIV 函数的 Vec 分配总和 `4676512 B = 24.8×` 的 `188416 B` 限额，**而编译通过**；
-- 每个函数的 `mem_vec_*` offset 从 0 重新开始（榜首全部 `min_offset=0`）；
-- `combine_reduce` 的 spmd `core_num=16`、每核 `40960 B`；若跨 grid 共享需 `655360 B` 会 FAIL。
-
-→ UB 是每个 AIV core 的 scratchpad，kernel 进入时按静态 offset 布局、退出即失效，
-**kernel 边界天然隔离，不靠任务依赖**。反过来说 kernel **不能**把中间结果留在 UB 给下一个
-kernel 用 —— 这才是"融合"必须同时装下两份 staging 的机制。全网 UB 排名
-（`swa_qk_norm_zc` 148352 / `full_rmsnorm_zc` 135488 / `attn_residual_hold` 131072 /
-`expert_gate_up_aiv` 131072 / `tp_all_reduce` 98304 / `combine_reduce` 40960）是
-**各自独立**的占用率。
-
-**K 归约 matmul 加 `pl.pipeline` 可行性（已验证）**：按 deepseek v4 `exp_gate_mm` 形式
-（`pl.create_tensor` 预建 accumulator + `pl.pipeline(0, HIDDEN, KC, stage=2)` +
-`k0==0` 用 `pl.matmul`、其余 `pl.matmul_acc`）改写 `expert_gate_up`：
-`KC=256/stage=2` → `262144 B` FAIL（精确等于预测）；`KC=128/stage=2` → `131072 B`
-**COMPILE_OK**，且 pass dump 证实结构真生效（Vec 分配 `2×65536 -> 4×32768`、
-`pipe: (32768, 4)`、`27_after_LowerPipelineLoops.py` 496 处 pipeline）。
-代价是 K trips `16 -> 32`、K tile 减半，cube 效率损失 vs overlap 收益方向不确定。
-`combine_reduce`（40960×2 = 81920 ✓）是唯一不用缩 tile 就能试的，可作 pipeline 收益校准点。
-
-**前 5 层 swimlane（bs=1、发布代码）固定路径**：
-`0162:/mnt/persist/chensiyu/workspace/perf-2026q3/swimlane-p1a-candidate-20260810-130154`
-→ `runtime/build_output/FiveLayerMoe_20260810_050452/dfx_outputs/rank{0..7}/d0/`
-（`critical_path_report.md` / `deps.json` / `l2_swimlane_records.json` /
-`merged_swimlane_20260810_0506*.json` / `CPM_static.json` / `CPM_observed.json` / `name_map.json`），
-汇总 stdout 在 `runtime/dfx_analysis/critical_path_stdout.txt`。
-LOW-WAIT rank2：makespan `2.210 ms`、static CPM `1.806 ms (81.7%)`、
-stall `0.431 ms (19.5%)` 全 data-wait、`tp_all_reduce` 占 `15.9%`（8 次 on-path）。
-该 run `rc=1` 仅因 analyzer 的 task-level 结构契约在 rank0/1/3/6 各报 5 个
-`missing_on_swim`；**rank2/4/5/7 契约干净**，8 rank artifact 全部完整落盘。
-其 5 层 `p50 = 13.552 ms` 含 DFX 插桩放大，**不可当干净延迟、不可乘 9 反推整网**。
-
-**执行主机契约立规**：发现 codex 在本地机器跑了 P3 swimlane 分析。已 re-home 到
-`0162:/mnt/persist/chensiyu/workspace/perf-2026q3/p3-rehome-20260810/` 指向原始 DFX 重跑
-—— CSV byte 级一致、JSON 68 处差异全是 provenance 路径字符串、数值差异 0（结论未被推翻）。
-新增契约 [`../reference/execution-host-contract.md`](../reference/execution-host-contract.md)
-（0162 镜像 `EXECUTION-HOST-CONTRACT.md`）+ 半机锁 `0162-cards0-7.lock` / `0162-cards8-15.lock`
-+ 无卡 codegen 门 `0162:/mnt/persist/chensiyu/workspace/compile_gate.sh`（约 13.5s @ NB=512，
-必带 `--net host --security-opt apparmor=unconfined`）。
-
-**修正后的下一步**：① 跨 rank 负载均衡（天花板最高，codex P3，但无设计）；
-② cube matmul 的 tile + pipeline 作为**一个 bundle** 上 A/B/A（合计约 10 ms，10% = 1 ms
-≈ 整网 4%，高于地板；前置工作是四个 UB 大户先缩 tile）；③ `tp_all_reduce` 等 codex 的
-step 级插桩证据再决定。**不再逐个 kernel 试融合** —— 单个都低于检测地板。
+**同日立规**：[`../reference/execution-host-contract.md`](../reference/execution-host-contract.md)
+（发现 codex 在本地跑了 P3 swimlane 分析，已 re-home 到 0162 重跑：CSV byte 级一致、
+JSON 68 处差异全是 provenance 路径字符串、数值差异 0，结论未被推翻）+ 半机锁 + 无卡 codegen 门。
+新增可复用规则见 [`../postmortems/LESSONS.md`](../postmortems/LESSONS.md) §A/§D。
 
 ---
 
@@ -1577,20 +1202,50 @@ max|value|=0`（dummy zero weight 期望零输出）。Run time 6.69s。
 
 ---
 
-## Pin snapshot 历史（降序）
+## Pin snapshot 完整历史（降序，窄格）
+
+> 这是 pin 的**完整时间线**。带门结论与镜像 digest 的落地台账在
+> [`../progress/landed.md`](../progress/landed.md)；本表只给 pin，不重复门证据。
+> `SRC` = 源码合入（source-overlay 门）、`IMG` = 有 manifest digest 的镜像。
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------|-----------|
-| 2026-08-12 | TP all-reduce single-row selector 合入；source-overlay Whole A/B/A GO，尚无新 immutable image | `stepfun/develop:1c048a74` | `stepfun/develop:69ad31e4` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
-| 2026-06-25 | Step3p5 BF16 0~47 detail precision PASS | `stepfun/develop:b00c8b23` | `stepfun/develop:d4c01b9` | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
-| 2026-06-24 | CANN 9.0.0 non-GA + DecodeLayerMoE 8卡 ST | `stepfun/develop:b00c8b23` | `stepfun/develop:cfe2093` | `stepfun/develop:e25732f0` | `stepfun/develop:da011a3d` | `c66b4120` | `v0.45` |
-| 2026-06-22 晚 | pypto-project 仓建立 | `develop:b00c8b23` | `develop:9c4773f` | `develop:e25732f0` | `develop:da011a3d` | `a6e06406` | `v0.45` |
-| 2026-06-22 下午 | Phase 20-22 设计 + dev-workflow docs | `develop:b00c8b23` | `develop:69f22b1` | `develop:e25732f0` | `develop:da011a3d` | `a6e06406` | `v0.45` |
-| 2026-06-20 | 5 仓 rebase + fork push | `develop:03136bf6` | `develop:ffaf5d6` | `develop:e25732f0` | `develop:da011a3d` | `a6e06406` | `v0.45` |
-| 2026-06-19 | Phase 16 三剑合璧验证 | `main:a1b066df` | `main:9c5593fb` | `main:109c9f72` | `main:29a8af28` | `afb5c5a9` | `v0.44` |
-| 2026-06-17 | Phase 19 blocker 1-4 清掉 | `main:3f421313` | `main:08f71692` | `main:8e436661` | `main:a1efed75` | `6e84154d` | `v0.43` |
-| 2026-06-15 | Phase 15 单卡 e2e rc=0 | `main:3f421313` | `main:af4b2ed5` | `main:12e766d1` | `main:5392d5da` | `6e84154d` | `v0.43` |
-| 2026-06-05 | Phase 13 re-sync + smoke 绿 | `main:3f421313` | `main:08f71692` | `main:8e436661` | `main:a1efed75` | `6e84154d` | `v0.43` |
+| 2026-08-12 | TP all-reduce single-row selector 合入（SRC） | `1c048a74` | **`69ad31e4`** | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
+| 2026-08-12 | RMS→QKV critical prestage I7（SRC） | `1c048a74` | `e5e26f9f` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
+| 2026-08-12 | `fa58b5cf` post-merge 性能验收 **NO-GO**（ITL `+4.233%`、五层 39/40） | `1c048a74` | `fa58b5cf` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
+| 2026-08-11 | K8 选择性清零发布（IMG `076af8a1…`） | `1c048a74` | `cb96747e` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
+| 2026-08-10 | P1a gate 解耦发布（SRC） | 未移动 | `d13b2ca6` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
+| 2026-08-10 | MoE BS1 N256 发布（SRC） | 未移动 | `a31977fb` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
+| 2026-08-06 | task-major Attention + L0–L4 MoE formal（IMG `3eb694e0…` / `cab89668…`，pre-fix） | `8e92b468` | `c9af5790` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
+| 2026-08-03 | **Wave5 canonical release（IMG `4acc77cd…`，唯一完整 release-qualified）** | `defa97c5` | `7099476b` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
+| 2026-08-03 | Wave4 historical candidate（IMG `8125c678…`，已由 Wave5 取代） | `defa97c5` | `d7e1381b` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
+| 2026-08-02 | Attention/Vec historical candidate（IMG `64c573bc…`） | `defa97c5` | `76d96bdb` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
+| 2026-07-29 | PERF-H1 自包含镜像 build + 回归（IMG `b4e8c8a4…`） | `1f704616` | `4513007d` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
+| 2026-07-29 | PERF-H1 host/device 分账 + retained window 清零改 device memset | `1f704616` | `cfbdcce8` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
+| 2026-07-29 | PERF-C4 AR → reduce-scatter + **push** all-gather（IMG `7924925f…`） | `6933b1aa` | `cfbdcce8` | `ecb6c303` | `fc8c6cae` | **`8459d60f`** | `v0.50` |
+| 2026-07-28 | C/D/G + BS1 收口自包含镜像 | `ca21ab5f` | `563fe62a` | `ecb6c303` | `fc8c6cae` | `216e7632` | `v0.50` |
+| 2026-07-26 | canonical-only Step3p5 release（删兼容 package/alias） | `ca21ab5f` | `53eb7212` | `ecb6c303` | `fc8c6cae` | `216e7632` | `v0.50` |
+| 2026-07-24 | 合并 origin/main + IPC 权重 interior 指针 provenance 修复（IMG tag `…-20260724`） | `ca21ab5f` | `fd26b1be` | `ecb6c303` | `fc8c6cae` | `216e7632` | `v0.50` |
+| 2026-07-24 | PERF-A1 逐层 DFX 接线（holder N1_DFX → swim/pmu + harness `--dfx`） | `ca21ab5f` | `bc5eecb1` | `ecb6c303` | `fc8c6cae` | `216e7632` | `v0.50` |
+| 2026-07-23 | decode-ITL profiling harness（hidden-only via holder） | `8af501fc` | `7cb2a6b3` | `ecb6c303` | `72ada0a1` | `36957c6b` | `v0.45` |
+| 2026-07-23 | simpler develop 回退到可编译 `36957c6b` + pypto gitlink 同步 | `8af501fc` | `4c48215b` | `ecb6c303` | `72ada0a1` | `36957c6b` | `v0.45` |
+| 2026-07-23 | 五仓 `stepfun/develop` 对齐验证过的 N=1 pin + 可复现镜像 | `9ec303f6` | `4c48215b` | `ecb6c303` | `72ada0a1` | `c7fdc574` | `v0.45` |
+| 2026-07-18 | N=1 single-submit 合入三仓 + 干净回归 20/20 | `9ec303f6` | `e1513d22` | `ecb6c303` | `72ada0a1` | `c7fdc574` | `v0.45` |
+| 2026-07-17 | N=1 stable env freeze | `n1fusion-base:e277de9f` | `feat/whole-net-n1-fusion:0e7a0fdd` | `ecb6c303` | `72ada0a1` | `n1fusion-base:36957c6b` | `v0.45` |
+| 2026-06-25 | Step3p5 BF16 0~47 detail precision PASS | `b00c8b23` | `d4c01b9` | `e25732f0` | `da011a3d` | `c66b4120` | `v0.45` |
+| 2026-06-24 | CANN 9.0.0 non-GA + DecodeLayerMoE 8 卡 ST | `b00c8b23` | `cfe2093` | `e25732f0` | `da011a3d` | `c66b4120` | `v0.45` |
+| 2026-06-22 晚 | pypto-project 仓建立 | `b00c8b23` | `9c4773f` | `e25732f0` | `da011a3d` | `a6e06406` | `v0.45` |
+| 2026-06-22 下午 | Phase 20-22 设计 + dev-workflow docs | `b00c8b23` | `69f22b1` | `e25732f0` | `da011a3d` | `a6e06406` | `v0.45` |
+| 2026-06-20 | 5 仓 rebase + fork push | `03136bf6` | `ffaf5d6` | `e25732f0` | `da011a3d` | `a6e06406` | `v0.45` |
+| 2026-06-19 | Phase 16 三剑合璧验证 | `a1b066df` | `9c5593fb` | `109c9f72` | `29a8af28` | `afb5c5a9` | `v0.44` |
+| 2026-06-17 | Phase 19 blocker 1-4 清掉 | `3f421313` | `08f71692` | `8e436661` | `a1efed75` | `6e84154d` | `v0.43` |
+| 2026-06-15 | Phase 15 单卡 e2e rc=0 | `3f421313` | `af4b2ed5` | `12e766d1` | `5392d5da` | `6e84154d` | `v0.43` |
+| 2026-06-05 | Phase 13 re-sync + smoke 绿 | `3f421313` | `08f71692` | `8e436661` | `a1efed75` | `6e84154d` | `v0.43` |
+
+**表注**：① 2026-06-05 ~ 2026-07-23 的 pypto/pypto-lib 分支是 `main` 或 `develop`，
+之后统一为 `stepfun/develop`；② `8af501fc` = `9ec303f6` + runtime gitlink → `36957c6b`；
+③ simpler `c7fdc574`（Phase-24 `import_ipc` 半成品）编译不过，回退时存了 tag
+`backup/stepfun-develop-c7fdc574-20260723`。
 
 ---
 

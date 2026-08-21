@@ -17,22 +17,42 @@ code block 一律不译。
 
 ## 先看哪里
 
+0. **⚠ 开工前必读**：[`postmortems/LESSONS.md`](postmortems/LESSONS.md) —— 触发式教训索引（见铁律 §0）
 1. **给别人讲项目**：[`design/00-context-and-goals.md`](design/00-context-and-goals.md) → 两个 `design/*/01-system-design.md` → [`planning/roadmap.md`](planning/roadmap.md)
 2. **当前状态**：[`STATUS.md`](STATUS.md)
-3. **被什么卡住**：[`blockers.md`](blockers.md)
-4. **接着干什么**：[`planning/handoff.md`](planning/handoff.md)
-5. **撞到已知坑**：[`postmortems/`](postmortems/)
-6. **部署**：[`deployment/phase16-three-pillars.md`](deployment/phase16-three-pillars.md)
+3. **哪些是确定落地的 / 哪些方向已被否决**：[`progress/landed.md`](progress/landed.md)
+4. **被什么卡住**：[`blockers.md`](blockers.md)
+5. **接着干什么**：[`planning/handoff.md`](planning/handoff.md)
+6. **撞到已知坑**：[`postmortems/`](postmortems/README.md)
+7. **部署**：[`deployment/phase16-three-pillars.md`](deployment/phase16-three-pillars.md)
 
-## 仓库分区职责（写东西前先对号入座）
+## 分层规则 ★（写东西前先对号入座）
+
+**核心区分**：**确定落地的事实**（T1/T2）与**每次开发的过程**（T3/T4）物理分开，
+各有唯一落点和硬预算。超预算 = 有东西该下沉，不是该放宽预算。
+
+| 层 | 唯一落点 | 唯一规则 | 预算 |
+|---|---|---|---|
+| **T0 必读教训** | [`postmortems/LESSONS.md`](postmortems/LESSONS.md) | 触发式：`你正要做 X → 先记住 Y → 出处`。只收**已确立**结论 | ≤150 行 |
+| **T1 当前真相** | [`STATUS.md`](STATUS.md) | 只写**此刻为真**，每条带 sha/digest/门结论。**禁止**历史快照、禁止"曾写…已撤回"、禁止 campaign 叙事 | ≤130 行 |
+| **T2 落地台账** | [`progress/landed.md`](progress/landed.md) | 追加式窄格：日期 / 一句话 / pin / 镜像 digest / 门证据 + NO-GO 台账。区分 **SRC**（source-overlay GO）与 **IMG**（immutable-image released） | 每条 ≤3 行 |
+| **T3 开发流水** | [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) | 每 session 一条，细节指向 `benchmark/` 或 0162。也是**完整 pin 时间线**的家 | 每条 ≤40 行 |
+| **T4 未决** | [`blockers.md`](blockers.md) | 只放 **open**；症状/根因一句/解除条件/链接。**定案或解决即转 postmortem（负结论也一样）** | 每条 ≤25 行<br>（多缺口 🔴 ≤35） |
+| **T5 证据** | [`benchmark/`](benchmark/)、0162 campaign 目录 | 长报告、原始数字、campaign 路径。**不回灌 T1–T4** | 不限 |
+| **T6 接力** | [`planning/handoff.md`](planning/handoff.md) | 纯指针 + "现在接什么" ≤3 条 | ≤90 行 |
+
+**判据**：一条内容含"我这次发现 / 曾写 / 已撤回 / 下一位应该" ⇒ 属 **T3 或 T4**，
+**不属于 T1**。一条内容是 sha / digest / 门结论 ⇒ 属 **T1 或 T2**。
+
+分区职责（与分层正交）：
 
 | 分区 | 放什么 | 不放什么 |
 |------|--------|----------|
 | `design/` | HLD/LLD 设计（context→系统设计→详细设计） | 状态、日志、blocker |
 | `planning/` | roadmap（规划）、handoff（接力）、活跃 phase | 每日流水（去 archive） |
-| `postmortems/` | 已解/在查工程问题的五段复盘 | 活跃未分析的 blocker（去 blockers.md） |
+| `postmortems/` | 已解/已定案问题的五段复盘 + T0 索引 | 活跃未分析的 blocker（去 blockers.md） |
 | `deployment/` | 纯生产 runbook | troubleshooting 复盘（去 postmortems） |
-| `reference/` | canonical 测试、4+1 视图、编程 API、约束 | 跨仓设计（去 design） |
+| `reference/` | canonical 测试、4+1 视图、编程 API、约束、执行主机契约 | 跨仓设计（去 design） |
 | `archive/` | session 日志、原型摘要、已完成 phase、交付 | 当前状态 |
 | 根 | STATUS / blockers / GLOSSARY / README / CLAUDE | 其他都进分区 |
 
@@ -44,10 +64,12 @@ code block 一律不译。
 |------|-----------|
 | phase 状态变化 | [`planning/phases/NN-*.md`](planning/phases/) 的 Status 段 + [`planning/roadmap.md`](planning/roadmap.md) 表 + [`STATUS.md`](STATUS.md) Phase 表 |
 | session 末尾 milestone | 追加到 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)（**每日流水 SSOT，不写 STATUS/roadmap**） |
-| 新 blocker 发现 | [`blockers.md`](blockers.md) + [`STATUS.md`](STATUS.md) blocker 摘要 |
-| blocker 解决 | 从 [`blockers.md`](blockers.md) 删掉 → 新建/更新 [`postmortems/NN-*.md`](postmortems/)（五段模板 [`postmortems/TEMPLATE.md`](postmortems/TEMPLATE.md)）+ 更 STATUS 摘要 |
+| 新 blocker 发现 | [`blockers.md`](blockers.md)（≤25 行）+ [`STATUS.md`](STATUS.md) §8 摘要一行 |
+| blocker **解决或定案**（含负结论） | 从 [`blockers.md`](blockers.md) 删掉 → 新建/更新 [`postmortems/NN-*.md`](postmortems/README.md)（五段模板 [`postmortems/TEMPLATE.md`](postmortems/TEMPLATE.md)）+ 在 `postmortems/README.md` 加一行 + 把可复用教训提炼进 [`postmortems/LESSONS.md`](postmortems/LESSONS.md) + 更 STATUS 摘要 |
+| 一个方向被否决（NO-GO） | [`progress/landed.md`](progress/landed.md)「已否决，不要重试」加一行 —— **让下一位不重跑它** |
 | 设计变更（架构/接口/数据流） | 对应 [`design/`](design/) 的 HLD 或 LLD |
-| 组件 pin 移动（任意 fork push） | [`STATUS.md`](STATUS.md) Pin Snapshot（最新行）+ [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) pin 历史 |
+| 组件 pin 移动（任意 fork push） | [`STATUS.md`](STATUS.md) §1/§2（当前值）+ [`progress/landed.md`](progress/landed.md)（门证据）+ [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) pin 时间线 |
+| 镜像发布（有 manifest digest） | [`progress/landed.md`](progress/landed.md) 表 A + [`STATUS.md`](STATUS.md) §2 + [`deployment/version-matrix.md`](deployment/version-matrix.md) |
 | 部署/版本变化 | [`deployment/`](deployment/) 对应 spec |
 | 新 dev workflow 坑 / kernel 限制 | **写 sub-repo** `pypto-lib/docs/dev-workflow-gotchas.md` 或 `known-pypto-pitfalls.md`，**不写本仓** |
 
@@ -69,6 +91,13 @@ unset PAT
 
 ## 铁律（每个 session 都适用）
 
+0. **★ 开工前必读 [`postmortems/LESSONS.md`](postmortems/LESSONS.md)。** 那一页是 16 份复盘
+   「如何避免」段的触发式索引（≤150 行），按 流程 → 整网 → 部署 → codegen 分段。
+   **不读它就动手，等于自愿重犯已经付过学费的错**（本项目已有多次重犯记录，见
+   [`postmortems/12-integration-churn-meta.md`](postmortems/12-integration-churn-meta.md)）。
+   最低要求：扫一遍左列"你正要做"，命中就读该行；命中"改 orchestration 构造"、
+   "删看似多余的同步"、"下死锁结论"、"说某东西 ready"这四类时**必须**读完出处。
+   收到新教训 → 提炼一行回填 LESSONS.md，别只写在 milestone 里。
 1. **单卡 ST/UT 保 TP=8 per-rank slice 宽度**：用 `apply_perrank_patch()`，不用 `apply_tp1_patch()`（unslice 只适合 Phase 15 e2e，chunk-follow-slice 的 kernel 会爆）。
 2. **Phase 16 三剑合璧**：多卡部署必须 driver 25.5.2 + firmware 7.8.0.7.220 + CANN 9.0.0-beta.1（NOT GA）。见 [`deployment/phase16-three-pillars.md`](deployment/phase16-three-pillars.md) + [`postmortems/01-multirank-ipc-507899-507018.md`](postmortems/01-multirank-ipc-507899-507018.md)。
 3. **monkey-patch 后 .pyc stale**：跑过 `apply_perrank_patch`/`cfg.X=Y` 后，下次 fresh run 前 `find <pypto-lib>/models/step3p5 -name "*.py" -exec touch {} +`。
