@@ -21,6 +21,14 @@
 > ② 看有多少是跨 step 不变、可缓存的；③ 定位这 `6.12 ms` 的构成。
 > 证据：`0162:…/dispatch-orch-decouple-20260821/{FINDINGS.md, analysis-bin/orch_span_stats.py}`；
 > 方法与判据见 [`07-hardware-scheduler-performance.md`](07-hardware-scheduler-performance.md) §9.6。
+>
+> **⇒ 2026-08-21 已立项为 `H4`（P0）+ `H5`（P1，观测性前置）**，并按 swimlane 重排了
+> 整个候选池：见 [`09-swimlane-derived-next-optimizations.md`](09-swimlane-derived-next-optimizations.md)。
+> ★ 该文给出**强怀疑 `bind.args ≡ H2`**（H2 根因里的 `~92 make_tensor_arg`/`add_tensor`
+> 就是参数绑定）⇒ 这条"最大新线索"可能早有现成设计。
+> ★ 另给出一条**可复用否决判据**：关键路径 `front-gap = 0.000 ms` 且 stall 100% 为
+> data-wait ⇒ `01-task-granularity` + `02-runtime-overhead` 两章 ROI 上界 = 0
+> （**本可在 dispatch 融合线的 6 天 / 357 run 之前就否决它**）。
 
 > **⛔ 2026-08-21 MoE dispatch 域小算子融合线整体关闭（负结论已定稿）。**
 > R6-R9 融合候选 NO-GO（概率性 hang + 匹配曝光后也不快）；结构修复候选
@@ -311,6 +319,8 @@ producer → 数学变换/quant/route-map → transport/window
 |----|--------|--------|------|-------|------|------|----------|
 | H1 | retained window 清零：host 搬零 → device `aclrtMemset` | P0 | ✅ | claude | A1 | simpler `e2efebcb` + pypto `1f704616`（含 gitlink bump）。清零 `21.50→2.21 ms`、ITL p50 `85.02→65.55 ms`（−22.9%）、每步 H2D `244.7 MiB→0`、mailbox 往返 `248 串行→1 次广播`。同镜像 A/B `main_hidden_8step` 两边 `passed=True`，`main_hidden_only_report.json` 除 `run_sec` 外逐字段相同；单测 8/8。⚠ live N=128 精度门未跑（需 vanilla oracle 占 cards 0-7）；CI 整体 rc=1 但两边同样缺 MTP fixture，与本项无关。数据见 [`benchmark/2026-07-29-host-window-memset.md`](../../benchmark/2026-07-29-host-window-memset.md) | 2026-07-29 |
 | H2 | per-rank 视图重建 hoist 到 `prepare()`（= 跨卡起跑阶梯病根） | P1 | ⬜ | — | H1 | 已量化未修：起跑阶梯 clean run 实测 **2.914 ms**（每 rank 等距 +0.412 ms，n=20），submit 阶段 3.49 ms。根因 = 生成 `host_orch.py` 把 per-rank 体（53 常量 slice + 38 `pl.reshape` + ~92 `make_tensor_arg`/`add_tensor` + 1 `_submit_chip`）包在 `for r__idx_v0 in range(0, world_size, 1)`。**v4-flash `decode_fwd.py:774` 完全同形状** → 属 pypto codegen 通用改进而非 step3p5 缺陷。红队复核修正：抹平阶梯只值 ~0.4 ms（关键路径是最后一个 rank），真收益来自减少 host 工作本身 | 2026-07-29 |
+| **H4** | **host `bind.args` = ITL 的 23%**：归因 → bind-once / 跨 step 缓存 → 必要时改 overlap | **P0** | ⬜ | — | — | **ROI 上界 `6.12 ms`（≈ 9.9× 地板 0.616 ms），是当前单项最大、且不碰 device 语义/跨卡同步/`@pl.program` 结构**。R5 STRACE：`simpler_run` p50 `26.45 ms` = `bind.args 6.12` + `runner_run ≈20.3`，**加性串行**（对照臂 `5.87` 同量级）。★ **强怀疑 `bind.args ≡ H2`**（H2 根因的 `~92 make_tensor_arg`/`add_tensor` 就是参数绑定；每 step `8 rank × 183 = 1464` 次 Python 级操作）—— 若成立则已有现成设计。分步：**H4a** 从现有 STRACE 归因（**不占卡**：与 `active_batch`/`ctx` 无关 ⇒ per-arg 次数主导）→ **H4b** 核对 `host_orch.py` 调用数判 `≡H2` → **H4c** cheap gate：手改生成的 `host_orch.py` hoist loop-invariant 出 rank 循环（判据 `bind.args` 降 + `hidden_sha256` byte-exact）→ **H4d** 压不下去就 overlap bind(N+1)/device(N) → **H4e** 整机锁 A/B/A。⚠ 正式落地可能须走上游 codegen（H2 已判定 v4-flash 同形状）。设计见 [`09-swimlane-derived-next-optimizations.md`](09-swimlane-derived-next-optimizations.md) §5–§6 | 2026-08-21 |
+| **H5** | **`early_dispatch` task 的 swimlane 记录缺失**（观测性，是 device 侧一切结论的前置） | **P1** | ⬜ | — | A1 | 非性能项。K8 镜像轮 `analyze_five_layer_moe_dfx.py:1052` fail-closed 在 **rank0/1/3/6** 拒收：每 rank 各 5 个 `early_dispatch=true` 的 task 出现在 `deps.json` 却在 swimlane 记录里缺失（rank0 = `8589934741/743/744/745/747`，`block_num` 8/23/23/23/23）⇒ **8 卡里只有 rank2 可分析**，`rc=1`、整轮不能转 sealed publication。怀疑记录窗口开启早于 early-dispatch。与 H3 同族（该族问题曾把 `tp_all_reduce` 误判成 74.1% wall）。**阻塞**：§13.5 执行顺序第 1 步「E0–E7 全 rank instrumentation + authority harness」，以及任何 cross-rank 裁决 | 2026-08-21 |
 | H3 | DFX run 第一 barrier 假长条（观测性，非性能） | P2 | ⬜ | — | A1 | DFX run 里第一个 `tp_all_reduce` 被记成 115 ms(pmu)–379.9 ms(swim)，其余 89 次 39–366 µs，straggler 每次换人。**已排除 host 下发**（`_submit_chip` 在 DFX 下只多一次字符串拼接；clean run 下发等距 0.412 ms）。clean run 算术上界：非 device 时间共 5.7 ms → 380 ms 不可能存在。方向 = chip child 侧 collector 开销落在被 trace 区间内（注意 `orch._dfx_dispatch_idx` 每 request 重置，留下的是**最后一步**，非冷启动）。危害：曾使 `tp_all_reduce` 被误判成 74.1% wall | 2026-07-29 |
 
 ### Track I — Attention / Vec 收尾与 canonical 发布
@@ -374,13 +384,13 @@ immutable-image qualification，不再恢复旧 Ring、K5-C 或 K6b 路线。
 
 | 状态 | 数量 |
 |------|------|
-| ⬜ TODO | 12 |
+| ⬜ TODO | 14 |
 | 🟦 IN PROGRESS | 3 |
 | ✅ DONE | 22 |
 | ⏸ PAUSED / SUPERSEDED | 1 |
 | ❌ / ⛔ NO-GO | 5 |
 | ⛔ BLOCKED | 0 |
-| **合计** | **43** |
+| **合计** | **45** |
 
 **base 校正后关键路径**：A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/I1/I2/I3/I4/I5/I7/J2/K1/K6a/**K8/K11** 已 ✅；K6b 已降为被 K11 supersede 的历史中间方案。
 其中 **K8 是已通过整网 A/B/A + 精度门并发布 immutable image 的 host-reset 优化**
@@ -388,8 +398,12 @@ immutable-image qualification，不再恢复旧 Ring、K5-C 或 K6b 路线。
 K11 已完成源码 landing 与 source-overlay Whole A/B/A，尚待 immutable image；historical pull C2 仅作回归基线；C5、K2a、K5-C 与 **K9** 是四个实测否决的负结果（K9 整网
 `+1.72 ms/step`，符号与 bench 相反）。当前 performance 看板进行中的是
 **B3（KV resident/in-place 的连续多轮 row-diff/liveness 证据）**、**J1（formal DFX /
-publication / swimlane 收尾）**、**K2b（publisher release fence hoist，需上游 pypto 补丁）**；下一优先是
-**K10（去掉剩下那一次阻塞 host control round，上界 `0.45–0.53 ms/step`，K8 的直接后继）**。
+publication / swimlane 收尾）**、**K2b（publisher release fence hoist，需上游 pypto 补丁）**；
+**下一优先已于 2026-08-21 按 swimlane 重排为 `H4`（host `bind.args`，上界 `6.12 ms`
+≈ 9.9× 地板，当前单项最大）**，其观测性前置为 `H5`；`K10`（上界 `0.45–0.53 ms/step`，
+K8 的直接后继）降为 H4 之后 —— **注意 K10 的上界低于近期整网 bracket 地板
+`0.616 / 0.634 ms`，只有拿到紧 bracket（K8 曾达 `0.0195 ms`）才可判**。
+排序依据见 [`09-swimlane-derived-next-optimizations.md`](09-swimlane-derived-next-optimizations.md)。
 K5-C 已由设备实测判定 NO-GO，不再列为候选；K11 只剩 immutable-image qualification。
 历史 I1 Attention/Vec 与 TP all-reduce stability 已在 0162 release-qualified；
 I3/I4 的 `f9065261` 当前仅为 source-overlay GO；I6 的 `fa58b5cf` 为

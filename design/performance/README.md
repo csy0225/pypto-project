@@ -94,6 +94,7 @@ producer → 数学变换/quant/route-map → transport/window
 | [`04-attention-optimization.md`](04-attention-optimization.md) | 专项 | attention 单一设计入口：历史实验、负面结果、最终 workload-derived task/tile profile、Full/SWA/online-softmax/out-proj 与 release 边界 |
 | [`05-moe-optimization.md`](05-moe-optimization.md) | 专项 | L0–L4 focused MoE：五层/双 hidden 合同、gate/up critical path、combine wait 解释、最终 split tile、golden、0162 A/B/DFX/swimlane |
 | [`06-upstream-asks.md`](06-upstream-asks.md) | 专项 | 对 pypto / PTOAS 的**可直接提 issue** 的六条诉求（notify `PIPE_ALL` correctness 最高；每条给证据路径、解锁数字、有无本地绕路） |
+| [`09-swimlane-derived-next-optimizations.md`](09-swimlane-derived-next-optimizations.md) | 专项 | **当前候选排序的依据**：swimlane 关键路径读数 → 否决整个「派发/粒度」章（front-gap=0）→ 立 H4（host `bind.args` 23% ITL）+ H5（观测性前置）；含 5 层 profile 的层混比修正与 ROI-vs-地板对账 |
 | [`task-tracking.md`](task-tracking.md) | 跟踪 | 看板式任务跟踪记录（状态 / owner / 更新时间 / 阻塞） |
 | [`user_prompt.md`](user_prompt.md) | 提示词 | 复制即用的推进/回归提示词（以 skill + 本目录为单一入口） |
 
