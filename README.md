@@ -21,6 +21,7 @@ vLLM fork（见 [`design/00-context-and-goals.md`](design/00-context-and-goals.m
 | 层 | 唯一落点 | 放什么 | 预算 |
 |---|---|---|---|
 | **T0 必读教训** | [`postmortems/LESSONS.md`](postmortems/LESSONS.md) | 触发式索引：你正要做 X → 先记住 Y → 出处。**开工前必读** | ≤150 行 |
+| **T0′ 坑案例集** | [`postmortems/CASEBOOK.md`](postmortems/CASEBOOK.md) | 按**现象**查的单点坑档案（背景/现象/过程/处置）+ **仍在生效的绕路台账** | 每条 ≤14 行 |
 | **T1 当前真相** | [`STATUS.md`](STATUS.md) | 只写**此刻为真**，每条带 sha/digest/门结论 | ≤130 行 |
 | **T2 落地台账** | [`progress/landed.md`](progress/landed.md) | 已发布镜像 + 已合入源码 + 各自过了哪个门 + NO-GO 台账 | 每条 ≤3 行 |
 | **T3 开发流水** | [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) | 每 session 一条 + 完整 pin 时间线 | 每条 ≤40 行 |
@@ -37,7 +38,7 @@ vLLM fork（见 [`design/00-context-and-goals.md`](design/00-context-and-goals.m
 |------|--------|
 | [`design/`](design/) | **软件工程设计**：context + 两子系统的 系统设计(HLD) + 详细设计(LLD) |
 | [`planning/`](planning/) | roadmap + 活跃 phase（+ T6 handoff） |
-| [`postmortems/`](postmortems/) | **工程专项复盘**（16 篇，五段：背景/现象/根因/解决/弯路/避免）+ T0 索引 |
+| [`postmortems/`](postmortems/) | **工程专项复盘**（16 篇，五段：背景/现象/根因/解决/弯路/避免）+ T0 索引 + 坑案例集 |
 | [`deployment/`](deployment/) | **生产部署 runbook**：三剑合璧 / 机器恢复 / 版本矩阵 |
 | [`reference/`](reference/) | canonical 测试、4+1 视图、编程 API、约束、执行主机契约 |
 | [`archive/`](archive/) | 历史（追加式）：session 日志、原型摘要、已完成 phase、交付快照 |
@@ -52,6 +53,8 @@ vLLM fork（见 [`design/00-context-and-goals.md`](design/00-context-and-goals.m
 | 问题 | 路径 |
 |------|------|
 | **开工前该记住什么坑？** | [`postmortems/LESSONS.md`](postmortems/LESSONS.md) ← **必读** |
+| **已经撞上了某个现象，之前有人踩过吗？** | [`postmortems/CASEBOOK.md`](postmortems/CASEBOOK.md)（按现象查） |
+| **这段看着冗余的绕路能删吗？** | [`postmortems/CASEBOOK.md`](postmortems/CASEBOOK.md) §C 仍在生效的绕路（🩹 = 承重） |
 | **哪些是确定落地的？哪些方向已被否决？** | [`progress/landed.md`](progress/landed.md) |
 | 项目背景/目标？ | [`design/00-context-and-goals.md`](design/00-context-and-goals.md) |
 | step3p5 模型本身（config + 层结构）？ | [`design/step3p5-model-architecture.md`](design/step3p5-model-architecture.md) |

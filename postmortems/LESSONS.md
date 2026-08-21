@@ -6,6 +6,9 @@
 > 这一页是 `CLAUDE.md` **铁律 §0** 的强制必读项。它只收**已确立**的结论；
 > 复盘里标「未确立 / 已撤回」的一律不进这里。
 > 新增一行的条件：某条教训在**两次以上**开发里都能救回时间，或它是一个**可量化的否决门**。
+>
+> **本页按「你正要做什么」索引。已经撞上现象了 → 去 [`CASEBOOK.md`](CASEBOOK.md)
+> 按现象查**（单点坑档案，含仍在生效的绕路台账：删它之前先看它承重不承重）。
 
 ---
 
@@ -30,10 +33,10 @@
 | 把 step3p5 写得和 DeepSeek 不一样 | 先问「**为什么 DeepSeek 不爆**」。每个 divergence（addr-align / padding / shape / dtype / layout / static-vs-dynamic）都是潜在重复 bug；必须不一样就写清为什么 + 验证口径 | [12](12-integration-churn-meta.md) 根因 4、[10](10-gap5-attention-quant-scope.md) |
 | 在「明知临时」的地基上继续堆集成 | 停。先消地基（例：别在 BF16-dequant 上堆 live 集成，直接上 INT8-native） | [12](12-integration-churn-meta.md) 根因 3 |
 | 申请机器锁 | 只有 **A/B/A 计时门**要整机锁；compile / liveness / 精度门一律半机。错配会把分钟级任务变成要等两半都空 | [12](12-integration-churn-meta.md) |
-| 占卡前判断"卡是空的" | **非 root `fuser /dev/davinciN` 不可信**（曾在 8 个 `VLLMWorker_TP` 各占 54.7 GiB 时报 free）。必须 `sudo -n fuser` + `npu-smi info -t proc-mem` **双查、fail-closed** | [`../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md`](../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md) |
-| 逐个 kernel 试融合以求性能 | **先把单点收益对上检测地板**（bs=1 是 `0.634 ms`）。单个 small-op 融合几乎都低于地板 ⇒ 上 A/B/A 只会得到"统计不可区分"。要凑成 bundle 或换更大的项 | 同上 + [16](16-dispatch-fusion-orch-decouple.md) |
+| 占卡前判断"卡是空的" | **非 root `fuser /dev/davinciN` 不可信**（曾在 8 个 `VLLMWorker_TP` 各占 54.7 GiB 时报 free）。必须 `sudo -n fuser` + `npu-smi info -t proc-mem` **双查、fail-closed** | [`../reference/execution-host-contract.md`](../reference/execution-host-contract.md) |
+| 逐个 kernel 试融合以求性能 | **先把单点收益对上检测地板**（bs=1 是 `0.616 / 0.634 ms`）。单个 small-op 融合几乎都低于地板 ⇒ 上 A/B/A 只会得到"统计不可区分"。要凑成 bundle 或换更大的项 | [`../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md`](../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md) + [16](16-dispatch-fusion-orch-decouple.md) |
 | 遇到 `ptoas compilation failed` 且**错误正文为空** | 可能是 ptoas 瞬时崩溃。**不要 rotate 任何 knob** —— 在同 image / 同 NB / 同串行 codegen 下对 parent 与 candidate 各跑一次 compile-only；两边都 OK 就判 flake，整个 campaign 作废重跑 | 同上 |
-| 看 swimlane 里某个 collective 花了几十 ms | 那不是搬运时间。**collective spin-wait 会被记成 kernel compute**（曾见单个 AR `35,530.5 µs`、AR family 占 makespan `95.1%`，而 payload 只有 128 KB）⇒ AR 主要是吸收 rank skew 的 barrier，降 step 救不了它该等的最慢 rank | 同上 |
+| 看 swimlane 里某个 collective 花了几十 ms | 那不是搬运时间。**collective spin-wait 会被记成 kernel compute**（曾见单个 AR 记到 `35,530.5 µs`，而 payload 只有 128 KB）⇒ AR 主要是吸收 rank skew 的 barrier，降 step 救不了它该等的最慢 rank。⚠ 占比也要核：AR 的 makespan 份额曾被记成 `15%`，正确口径是 48 次 on-path、约 `8.5~9.7%` | 同上 + [`../archive/milestones-2026-Q2.md`](../archive/milestones-2026-Q2.md) |
 | 换底座（分支 / 机器 / 版本组合） | ready 状态**不自动迁移**，必须 re-derive | [12](12-integration-churn-meta.md) 根因 5 |
 | 发布一个镜像 / 记一组 pin | **pin 相同 ≠ 内容相同**。发布审计必须查工作树是否 dirty，否则记录的 pin 复现不出验证环境 | [14](14-image-dirty-worktree-unreproducible-pins.md) |
 | 遇到「镜像能跑但 pin 跑不通」 | **第一步导出 diff 存档**（补丁只活在镜像层里，镜像一删即失），不要先去改构建 | [14](14-image-dirty-worktree-unreproducible-pins.md) §5 |
@@ -103,6 +106,7 @@
 ## 相关
 
 - 复盘全文索引：[`README.md`](README.md)
+- **按现象查单点坑 + 仍在生效的绕路台账**：[`CASEBOOK.md`](CASEBOOK.md)
 - 当前活跃阻塞：[`../blockers.md`](../blockers.md)
 - 落地台账（哪些是**确定落地**的）：[`../progress/landed.md`](../progress/landed.md)
 - 开发流水（每 session 干了什么）：[`../archive/milestones-2026-Q2.md`](../archive/milestones-2026-Q2.md)

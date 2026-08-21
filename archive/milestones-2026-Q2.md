@@ -1,5 +1,39 @@
 # Milestones —— 2026 Q2
 
+## 2026-08-21 —— 仓库蒸馏：建立 T0–T6 分层 + 坑案例集 📚
+
+**动因**：每 session 必读路径已到 2018 行（`STATUS.md` 644 + `blockers.md` 690 +
+`planning/handoff.md` 684）—— 三份「当前真相」文件退化成追加式日志；16 份复盘的教训
+没人每次读 2526 行，事实上没在起作用（本周重犯了其中至少 3 条）。
+
+**产出（两次 commit）**：
+
+1. **分层规则 T0–T6** 写进 `CLAUDE.md`（含自查判据 + 硬预算 + 「超预算 = 有东西该下沉」）。
+   `STATUS.md` 644→129 · `blockers.md` 690→192 · `planning/handoff.md` 684→90 ·
+   本文件 1622→1277（pin 表扩成完整 31 行时间线）。**必读路径 2018→527 行（−74%）**。
+2. **新 `progress/landed.md`（T2）**：区分 **IMG**（镜像准出）vs **SRC**（source-overlay GO）——
+   这是「确定落地」的边界；含「已否决，不要重试」10 条 NO-GO 台账 + 台账缺口。
+3. **新 `postmortems/LESSONS.md`（T0）**：触发式必读索引，`CLAUDE.md` 铁律 §0 强制。
+4. **新 `postmortems/CASEBOOK.md`（T0′）**：23 条单点坑，按**现象**索引（LESSONS 按动作索引），
+   每条 背景/现象/过程/处置。处置分布 **13 ✅ 已修 / 7 🩹 已绕开（根因仍在）/ 2 ⏸ 未解**；
+   🩹⏸ 必写「移除代价 / 复发条件」—— 目的是**别让人把承重的绕路当冗余删掉**。
+5. **新复盘 `#16`**（dispatch 融合线定案）吸收 `blockers.md` 那条已定案的 378 行。
+
+**写案例集时发现并修正的三处台账问题**（副产品，不是本轮目标）：
+
+- ❌ **`AR family 占 makespan 95.1%` 全仓查不到出处**，且源文档恰恰是在纠正一个被夸大的
+  AR 占比（`15%` → 正确口径 48 次 on-path、约 `8.5~9.7%`）。已从 LESSONS + CASEBOOK 删除。
+- 🔧 `54.7 GiB` × 8 `VLLMWorker_TP`（非 root `fuser` 说谎那条）真出处是
+  `reference/execution-host-contract.md`，LESSONS 原先误引 p1a benchmark。已改，并修好被
+  打断的 `同上` 引用链（3 行）。
+- ⚠ **head_gate 处置口径冲突**：`blockers.md` 称 on-device 已恢复、`STATUS.md` §8 称仍在
+  worker 侧。判断是**两条路径**（整网 attention on-device 8-block logits vs live bridge
+  worker python 预算），已在 `STATUS.md` §8 与 CASEBOOK C1 标注；**上游小 N `matmul_acc`
+  是否已修未在本仓闭环**，动 head-gate 前须去 0162 核。
+
+**未做**：`design/performance/`（8324 行，`04-attention-optimization.md` 单文件 2138 行带 29 个
+历史/已撤回标记）—— 已批准分两轮，按 campaign 归档是下一轮。
+
 ## 2026-08-21 —— MoE dispatch 域小算子融合线**整体关闭**（负结论）⛔
 
 **定案 → 复盘**：[`../postmortems/16-dispatch-fusion-orch-decouple.md`](../postmortems/16-dispatch-fusion-orch-decouple.md)

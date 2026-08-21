@@ -23,7 +23,7 @@ code block 一律不译。
 3. **哪些是确定落地的 / 哪些方向已被否决**：[`progress/landed.md`](progress/landed.md)
 4. **被什么卡住**：[`blockers.md`](blockers.md)
 5. **接着干什么**：[`planning/handoff.md`](planning/handoff.md)
-6. **撞到已知坑**：[`postmortems/`](postmortems/README.md)
+6. **撞到已知坑**：先按**现象**查 [`postmortems/CASEBOOK.md`](postmortems/CASEBOOK.md)，再进 [`postmortems/`](postmortems/README.md) 全文
 7. **部署**：[`deployment/phase16-three-pillars.md`](deployment/phase16-three-pillars.md)
 
 ## 分层规则 ★（写东西前先对号入座）
@@ -34,6 +34,7 @@ code block 一律不译。
 | 层 | 唯一落点 | 唯一规则 | 预算 |
 |---|---|---|---|
 | **T0 必读教训** | [`postmortems/LESSONS.md`](postmortems/LESSONS.md) | 触发式：`你正要做 X → 先记住 Y → 出处`。只收**已确立**结论 | ≤150 行 |
+| **T0′ 坑案例集** | [`postmortems/CASEBOOK.md`](postmortems/CASEBOOK.md) | 按**现象**查：背景 / 现象 / 过程 / 处置（✅ 已修 · 🩹 已绕开 · ⏸ 未解）。🩹⏸ 必写「移除代价 / 复发条件」 | 每条 ≤14 行 |
 | **T1 当前真相** | [`STATUS.md`](STATUS.md) | 只写**此刻为真**，每条带 sha/digest/门结论。**禁止**历史快照、禁止"曾写…已撤回"、禁止 campaign 叙事 | ≤130 行 |
 | **T2 落地台账** | [`progress/landed.md`](progress/landed.md) | 追加式窄格：日期 / 一句话 / pin / 镜像 digest / 门证据 + NO-GO 台账。区分 **SRC**（source-overlay GO）与 **IMG**（immutable-image released） | 每条 ≤3 行 |
 | **T3 开发流水** | [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) | 每 session 一条，细节指向 `benchmark/` 或 0162。也是**完整 pin 时间线**的家 | 每条 ≤40 行 |
@@ -50,7 +51,7 @@ code block 一律不译。
 |------|--------|----------|
 | `design/` | HLD/LLD 设计（context→系统设计→详细设计） | 状态、日志、blocker |
 | `planning/` | roadmap（规划）、handoff（接力）、活跃 phase | 每日流水（去 archive） |
-| `postmortems/` | 已解/已定案问题的五段复盘 + T0 索引 | 活跃未分析的 blocker（去 blockers.md） |
+| `postmortems/` | 已解/已定案问题的五段复盘 + T0 教训索引 + T0′ 坑案例集 | 活跃未分析的 blocker（去 blockers.md） |
 | `deployment/` | 纯生产 runbook | troubleshooting 复盘（去 postmortems） |
 | `reference/` | canonical 测试、4+1 视图、编程 API、约束、执行主机契约 | 跨仓设计（去 design） |
 | `archive/` | session 日志、原型摘要、已完成 phase、交付 | 当前状态 |
@@ -71,7 +72,11 @@ code block 一律不译。
 | 组件 pin 移动（任意 fork push） | [`STATUS.md`](STATUS.md) §1/§2（当前值）+ [`progress/landed.md`](progress/landed.md)（门证据）+ [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) pin 时间线 |
 | 镜像发布（有 manifest digest） | [`progress/landed.md`](progress/landed.md) 表 A + [`STATUS.md`](STATUS.md) §2 + [`deployment/version-matrix.md`](deployment/version-matrix.md) |
 | 部署/版本变化 | [`deployment/`](deployment/) 对应 spec |
-| 新 dev workflow 坑 / kernel 限制 | **写 sub-repo** `pypto-lib/docs/dev-workflow-gotchas.md` 或 `known-pypto-pitfalls.md`，**不写本仓** |
+| 踩到一个**新坑**（不够大、不值得单独成篇） | [`postmortems/CASEBOOK.md`](postmortems/CASEBOOK.md) 加一条（≤14 行，打 ✅/🩹/⏸）+ §0 索引一行。**先查路由表它有没有别的家** |
+| 落了一个**绕路**（根因仍在，绕路承重） | 同上，标 🩹 并写清「移除代价 / 复发条件」—— **不写就会有人当冗余删掉** |
+| 一条坑值得**开工前就记住** | 再回填 [`postmortems/LESSONS.md`](postmortems/LESSONS.md) 一行触发式索引 |
+| 新 **dev workflow 坑 / kernel 硬限制** | **写 sub-repo** `pypto-lib/docs/dev-workflow-gotchas.md` 或 `known-pypto-pitfalls.md`，本仓只在 CASEBOOK 留指针 |
+| 新**部署失败** signature | [`deployment/machine-recovery.md`](deployment/machine-recovery.md)「常见部署失败」 |
 
 ### Commit + push（HTTP/1.1 是 0162 网络硬要求）
 
@@ -98,6 +103,9 @@ unset PAT
    最低要求：扫一遍左列"你正要做"，命中就读该行；命中"改 orchestration 构造"、
    "删看似多余的同步"、"下死锁结论"、"说某东西 ready"这四类时**必须**读完出处。
    收到新教训 → 提炼一行回填 LESSONS.md，别只写在 milestone 里。
+   **另外两个必查点**：① 撞上具体现象 → [`postmortems/CASEBOOK.md`](postmortems/CASEBOOK.md)
+   按现象查；② **要删一段看起来冗余的代码 / 同步 / 构造之前**，先查 CASEBOOK §C
+   「仍在生效的绕路」—— 🩹 标记的都是承重的，删了 bug 立刻回来。
 1. **单卡 ST/UT 保 TP=8 per-rank slice 宽度**：用 `apply_perrank_patch()`，不用 `apply_tp1_patch()`（unslice 只适合 Phase 15 e2e，chunk-follow-slice 的 kernel 会爆）。
 2. **Phase 16 三剑合璧**：多卡部署必须 driver 25.5.2 + firmware 7.8.0.7.220 + CANN 9.0.0-beta.1（NOT GA）。见 [`deployment/phase16-three-pillars.md`](deployment/phase16-three-pillars.md) + [`postmortems/01-multirank-ipc-507899-507018.md`](postmortems/01-multirank-ipc-507899-507018.md)。
 3. **monkey-patch 后 .pyc stale**：跑过 `apply_perrank_patch`/`cfg.X=Y` 后，下次 fresh run 前 `find <pypto-lib>/models/step3p5 -name "*.py" -exec touch {} +`。

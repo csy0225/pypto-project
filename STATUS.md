@@ -122,7 +122,7 @@ N=128 逐 token >=95%  (冻结 vanilla vLLM W8A8 greedy oracle, seed 6127, sha c
 | DEPLOY-REPRO | 已发布镜像内工作树曾 dirty，部分记录 pin 不可复现 | 🟡 | 镜像级可复现性审计 |
 | Phase 20 backend | production backend 未接入，真实 vLLM 请求未走 PyPTO runner | 🟡 功能 | live serving |
 | Prefill MoE L1 overflow | TASK-29 | 🟡 功能/性能 | 真实 PyPTO NPU prefill kernel |
-| head_gate 语义 | 历史 ×1 旁路已由 on-device gate 取代；小 N `matmul_acc` 上游未修，gate 仍在 worker 侧预算 | 🟡 精度 | 在线 backend L1 parity |
+| head_gate 语义 | 历史 ×1 旁路已由 on-device gate 取代；**live bridge worker** 路径仍是 host 侧 `gate_exp` 预算（整网 attention 已 on-device，两条路径处置不同 → [`postmortems/CASEBOOK.md`](postmortems/CASEBOOK.md) C1） | 🟡 精度 | 在线 backend L1 parity |
 | MTP 集成进 decode | — | 🟢 Deferred | speculative 吞吐 |
 
 **已定案转复盘**：MoE dispatch 域融合线（`ORCH-SCALAR-READ-VS-CROSSRANK-WAIT`）
