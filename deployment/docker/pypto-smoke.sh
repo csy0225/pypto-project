@@ -21,7 +21,7 @@ requirement = os.environ.get("PYPTO_REQUIRE_L2_SWIMLANE_REUSE_DEP_GEN")
 assert requirement in (None, "0", "1"), requirement
 names = {field.name for field in fields(RunConfig)}
 required = {
-    "enable_l2_swimlane",
+    "enable_chip_swimlane",
     "enable_dep_gen",
     "l2_swimlane_reuse_dep_gen",
 }
@@ -30,7 +30,7 @@ constructed = False
 if available:
     config = RunConfig(
         platform="a2a3",
-        enable_l2_swimlane=True,
+        enable_chip_swimlane=True,
         enable_dep_gen=False,
         l2_swimlane_reuse_dep_gen=True,
     )

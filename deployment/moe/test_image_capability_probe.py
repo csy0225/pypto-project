@@ -8,7 +8,7 @@ from image_capability_probe import inspect_reuse_capability
 @dataclass
 class ReuseCapableRunConfig:
     platform: str
-    enable_l2_swimlane: bool
+    enable_chip_swimlane: bool
     enable_dep_gen: bool
     l2_swimlane_reuse_dep_gen: bool
 
@@ -16,7 +16,7 @@ class ReuseCapableRunConfig:
 @dataclass
 class LegacyRunConfig:
     platform: str
-    enable_l2_swimlane: bool
+    enable_chip_swimlane: bool
     enable_dep_gen: bool
 
 

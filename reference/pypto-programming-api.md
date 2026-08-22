@@ -332,7 +332,7 @@ CLAUDE.md 顶部铁律表：
 
 **加速回测 knobs**：`compile_only=True`（只编译，smoke）、`runtime_dir=<build_output>`（复用已编译产物、跳 compile，改 `.cpp`/`.pto` 后 touch mtime 即重编）、`golden_data=<dir>`（从固定 `in/`+`out/` 加载，做确定性回归）。
 
-**`runtime_cfg` 关键字段**：`platform`(`a2a3`/`a2a3sim`/`a5`/`a5sim`)、`device_id`、DFX 四开关 `enable_l2_swimlane`/`enable_dump_tensor`/`enable_pmu`/`enable_dep_gen`（产物进 `dfx_outputs/`）。
+**`runtime_cfg` 关键字段**：`platform`(`a2a3`/`a2a3sim`/`a5`/`a5sim`)、`device_id`、DFX 四开关 `enable_chip_swimlane`/`enable_dump_tensor`/`enable_pmu`/`enable_dep_gen`（产物进 `dfx_outputs/`）。
 
 ---
 

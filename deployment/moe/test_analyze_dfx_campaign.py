@@ -275,7 +275,7 @@ def _write_dfx_raw_evidence(
                 "required": True,
                 "required_fields": [
                     "enable_dep_gen",
-                    "enable_l2_swimlane",
+                    "enable_chip_swimlane",
                     "l2_swimlane_reuse_dep_gen",
                 ],
                 "reuse_config_constructed": True,

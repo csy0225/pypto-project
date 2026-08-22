@@ -36,7 +36,7 @@ def inspect_reuse_capability(
 
     field_names = {field.name for field in fields(run_config_cls)}
     required_fields = {
-        "enable_l2_swimlane",
+        "enable_chip_swimlane",
         "enable_dep_gen",
         "l2_swimlane_reuse_dep_gen",
     }
@@ -45,7 +45,7 @@ def inspect_reuse_capability(
     if fields_available:
         config = run_config_cls(
             platform="a2a3",
-            enable_l2_swimlane=True,
+            enable_chip_swimlane=True,
             enable_dep_gen=False,
             l2_swimlane_reuse_dep_gen=True,
         )
