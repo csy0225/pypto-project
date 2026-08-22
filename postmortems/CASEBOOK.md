@@ -1,7 +1,7 @@
 # 踩坑案例集（CASEBOOK）
 
 > **按现象查的单点坑档案。** 每条写清 背景 / 现象 / 过程 / 处置（解决还是绕开）。
-> 最后更新：2026-08-21。**真正的约束是每条 ≤14 行 + 索引一行一条**（全文 ≤400 行）——
+> 最后更新：2026-08-23。**真正的约束是每条 ≤14 行 + 索引一行一条**（全文 ≤400 行）——
 > 一条写到像复盘那么长，说明它该独立成 `NN-*.md`。
 
 ## 这一页和别的页什么关系
@@ -35,10 +35,13 @@
 | [A8](#a8) | 概率性 liveness 缺陷「跑了 5 轮都没复现」 | ✅ 口径 |
 | [A9](#a9) | 149 个 AIV 函数 Vec 用量加起来 24.8× 超 UB 限额，却编译通过 | ✅ 认知 |
 | [A10](#a10) | 同一组 pin 重新构建的镜像跑不通，老镜像能跑 | ✅ 主路径 |
+| [A11](#a11) | 升级后 compile gate 报 rc=1 / `status: NO-GO`，可日志里明明有 `[holder] compile OK` | ✅ 判据 |
 | [B1](#b1) | `ptoas compilation failed`，但错误正文是空的 | ✅ 判 flake |
 | [B2](#b2) | 按 runtime 打印的 env 名去设，完全不起作用 | 🩹 |
 | [B3](#b3) | 设了 `ASCEND_PROCESS_LOG_PATH`，目录建了、文件是空的 | ✅ |
 | [B4](#b4) | agent 侧：Bash 工具报 `ENOSPC`，清了 `/tmp` 也没用 | ✅ |
+| [B5](#b5) | 36 个 kernel 被 ptoas 拒：`'pto.tcvt' op requires explicit tmp … when PlanMemory is skipped` | ✅ 纪律 |
+| [B6](#b6) | 构建期每个 `git clone` 挂 `130832 ms` 后 `Failed to connect to github.com port 443` | ✅ 判据 |
 | [C1](#c1) | head-gate `gate_logits` ~20× 偏小 → 整层乱码 | 🩹 |
 | [C2](#c2) | full-attn ctx>1 乱码，`rot_q_hi` 列 32..63 损坏 | 🩹 |
 | [C3](#c3) | INT8-native routed MoE `bad_ratio≈0.9847`、`max diff ~254`、**无 device fault** | 🩹 |
@@ -48,6 +51,7 @@
 | [C7](#c7) | 单卡 ST 报 L1/UB overflow（`sh_mlp` 1.66 MB > 512 KB） | ✅ 认知 |
 | [C8](#c8) | `fatal error: error in backend: not support bf16 type cast` | 🩹 |
 | [C9](#c9) | canonical structural analyzer 恒 `FAIL_CLOSED` | ⏸ |
+| [C10](#c10) | 构建期 `sed` 掉 onboard `a5`，编完再 `git checkout --` 还原 | 🩹 |
 
 ---
 
@@ -168,6 +172,21 @@
   连带铁律：**source-overlay 数据不得写成 immutable-image 结果**。
 - **出处**：[`14`](14-image-dirty-worktree-unreproducible-pins.md)、[`../progress/landed.md`](../progress/landed.md)
 
+<a id="a11"></a>
+### A11. 门的 rc 里 AND 了与本次改动无关的前置检查 ✅
+
+- **背景**：升级后跑 compile gate，判 codegen 有没有回归。
+- **现象**：`rc=1` / `status: NO-GO`，可日志里明明有 `[holder] compile OK`、零 ptoas 拒绝。
+- **过程**：probe 把一个 **source-level structural contract** 和编译结果 AND 进同一个 exit code。
+  用 `git show <rev>:models/step3p5/decode_fwd.py` 对 `69ad31e4` / `7545c454` / `49816493`
+  三个版本跑纯文本 contract（不 import pypto），三个都 `pass=False`、同一条
+  `canonical_512b_stacked_reused_control_scope`（slot `moe_sh_signal_stack`：
+  `alloc_pass=True binding_pass=False`）—— **升级前就这样，不是本次引入**。
+- **处置**：✅ 判据：门只断言它要测的那件事（`[holder] compile OK` 出现 **且** 无
+  `ptoas compilation failed`），**不拿 probe 的 rc 当门**。用 rc 之前先问「这个 rc 里还
+  AND 了什么」，并对 parent 跑同一检查，证明失败项是不是新的。
+- **出处**：`upgrade-20260821/PATCH-AUDIT.md` Appendix D、0162 `compile-gate-20260822-232050`
+
 ---
 
 ## B. 环境 / 工具链 / 运行环境
@@ -218,6 +237,37 @@
   会报 `402 Budget pool quota has been exhausted`，此时对抗式 review 由主 agent 自己承担
   （需用户授权），**不要静默跳过 review**。
 - **出处**：本仓 session 记录（2026-08-21）
+
+<a id="b5"></a>
+### B5. 外部工具链 pin 要读上游声明，不能挑「最新」✅
+
+- **背景**：全栈升级时给 ptoas / pto-isa 选版本。
+- **现象**：36 个 kernel 被 ptoas 拒：
+  `'pto.tcvt' op requires explicit tmp … when PlanMemory is skipped`。
+- **过程**：按「各自最新」取了 ptoas v0.59 + pto-isa `3186c381`。声明其实在上游仓里：
+  `pypto/toolchain/versions.env` 的 `PTOAS_VERSION` = v0.57、
+  `pypto/runtime/pto_isa.pin` = `cd4a3d3f`。`PTOMaterializeImplicitTmp.cpp`
+  在 tag v0.57 **根本不存在**，v0.59 有 12 处硬报错；生产走 `MemoryPlanner.PYPTO`
+  （即 ptoas 的 PlanMemory 被跳过）正好命中那条分支，而 pypto 没有给这些 op 传 tmp 的通路。
+- **处置**：✅ 纪律：pin 一律读上游声明文件。换回 v0.57 + `cd4a3d3f` 后 codegen 零拒绝。
+  **「升级 = 取最新」对外部工具链是错的**——它要配对的是 pypto 声明的那个版本。
+- **出处**：`upgrade-20260821/PATCH-AUDIT.md` Appendix C、`deployment/docker/builds/stepfun-upgrade-20260822.env`
+
+<a id="b6"></a>
+### B6. 130s 连接超时是 TCP 层，与 HTTP version 无关 ✅
+
+- **背景**：想把镜像构建放 0162（192 核），因为本地只有 5 核 / `/` 剩 12 GB。
+- **现象**：构建第 4 步每个 `git clone` 挂 `130832 ms` 后
+  `Failed to connect to github.com port 443`。曾据此判「HTTP/2 的毛病，换 HTTP/1.1」。
+- **过程**：**误判**。宿主实测直连 github 就失败、两个代理主机名**连 DNS 都解析不了**
+  —— 0162 没有公网出口，130s 是 TCP connect 超时，换任何 HTTP version 都一样。
+  内网 `hub`(401) / `gitlab`(302) 可达，断的只有 github 这条路。
+- **处置**：✅ 源码改为 **bare mirror 打进 build context**（`build.sh` 生成 `src-pins.tgz`），
+  构建期完全不碰 github，`GIT_HTTP_VERSION` 旋钮随之删除。可复现性不降：git 对象名就是
+  内容哈希，`rev-parse` 断言照旧成立。**本地路径 clone 会连撞两个 git 守卫**：root `tar`
+  还原归档 uid → `dubious ownership`（`--no-same-owner`）；CVE-2022-39253 起 submodule
+  禁用本地 transport（`-c protocol.file.allow=always`，只加在那一条命令上）。
+- **出处**：本仓 session 记录（2026-08-23）、`deployment/docker/{Dockerfile,build.sh}`
 
 ---
 
@@ -347,6 +397,22 @@
 - **处置**：⏸ 未解。补它 = 性能线的 `H5`（P1）。在解决之前**继续 fail-closed**，
   不得用 host 独立检查覆盖 canonical structural 的 fail-closed 结论。
 - **出处**：[`../STATUS.md`](../STATUS.md) §5 / §6
+
+<a id="c10"></a>
+### C10. 构建期 sed 掉 onboard `a5` 🩹
+
+- **背景**：升级后 simpler 的 `src/a5/` 在钉死的 CANN 9.0.0-beta.1 上编不过（`halGetDeviceInfo`
+  / `MODULE_TYPE_AICPU` 未声明、`__gm__ LocalContext` object-parameter、offsetof `static_assert`）。
+- **现象**：镜像构建里 `pip install -e pypto/runtime` 必然连 a5 一起编 → 构建失败。
+- **过程**：`detect_buildable_platforms()` 恒返回 `a2a3+a5`（理由是「同工具链、产物相同」），
+  而 CMake 的 `build_runtimes ALL` target **没有平台过滤** —— 从调用侧挡不住。
+- **处置**：🩹 Dockerfile 构建期 `sed` 把 `platforms.extend(["a2a3", "a5"])` 改成只留 `a2a3`，
+  编完 `git checkout --` 还原并 `diff --exit-code` 断言镜像里源码干净。
+  a2a3/a2a3sim/a5sim 都编得过，本项目也从不发 a5。
+- **移除代价 / 复发条件**：**移除 = 换 CANN**，而 CANN 被 Phase 16 三剑合璧钉死
+  （见 [`../deployment/phase16-three-pillars.md`](../deployment/phase16-three-pillars.md)）。
+  每次升 simpler 都要重验那几条 `grep -Fq` 前置断言是否还命中，不命中会**静默不生效**。
+- **出处**：[`../deployment/docker/Dockerfile`](../deployment/docker/Dockerfile)、`builds/stepfun-upgrade-20260822.env`
 
 ---
 

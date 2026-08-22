@@ -5,15 +5,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 
+# 0162 has no docker -- it runs containerd + nerdctl. Same subcommands, so the
+# caller only has to name the CLI.
+_CLI = shlex.split(os.environ.get("CONTAINER_CLI", "docker"))
+
 
 def docker_output(*args: str) -> bytes:
     return subprocess.check_output(
-        ["docker", *args], stderr=subprocess.STDOUT
+        [*_CLI, *args], stderr=subprocess.STDOUT
     )
 
 

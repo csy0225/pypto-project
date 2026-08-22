@@ -34,76 +34,116 @@ ENV PIP="/usr/local/python3.11.14/bin/python3 -m pip"
 RUN rm -rf /usr/local/Ascend/cann-8.5.1 && \
     ln -sfn /usr/local/Ascend/cann-9.0.0-beta.1 /usr/local/Ascend/cann
 
-# Clone the complete stack and checkout immutable pins. pypto-lib and
-# vllm-pypto intentionally point at the same current replacement commit.
-# Scrub every credential-bearing clone URL before this layer is committed.
-# The pypto submodule is NAMED "simpler" while its path is "runtime", so the
-# credential override must key on the name -- keying on the path silently does
-# nothing and the build then falls back to an unauthenticated upstream clone.
-# The two 3rdparty submodules are seeded here as well: pypto's CMake would
-# otherwise init them during the compile layer, where no credential is mounted,
-# and unauthenticated github.com clones get a 401 through the build proxy.
-# `-c url.<token>@github.com/.insteadOf` keeps the token to this one command, so
-# nothing credential-bearing survives into the committed layer.
+# Check out the complete stack at its immutable pins. pypto-lib and vllm-pypto
+# intentionally point at the same current replacement commit.
+#
+# The seven repos arrive as bare mirrors in the build context (`src-pins.tgz`,
+# assembled by build.sh) rather than being cloned from github here. The only
+# host with enough cores to compile simpler is 0162, and 0162 has NO github
+# egress at all: a direct connect dies in a ~130s TCP timeout and the proxy
+# hostnames do not even resolve. Mirrors are not a reproducibility downgrade --
+# a git object's name IS its content hash, so a mirror carrying commit <sha>
+# carries exactly github's <sha>, and the rev-parse asserts below still prove
+# which commit landed. This layer therefore needs no credential at all.
+#
+# Submodule url overrides key on the submodule NAME, not its path: pypto's
+# submodule is named "simpler" while its path is "runtime", and keying on the
+# path silently does nothing. The two 3rdparty submodules are seeded here as
+# well, because pypto's CMake would otherwise try to init them during the
+# compile layer, which has no source to init from.
+#
 # simpler owns a SECOND, independent pto-isa checkout: `build_runtimes.py` calls
 # `ensure_pto_isa_root()`, which requires runtime/build/pto-isa to be a clean tree
-# at runtime/pto_isa.pin (NOT the same commit as PTO_ISA_COMMIT, and PTO_ISA_ROOT
-# does not override it). Upstream reuses a pre-seeded pristine checkout with no
-# network hop, so seed it here at the pin instead of letting the compile layer
-# attempt an unauthenticated clone.
+# at runtime/pto_isa.pin (NOT necessarily the same commit as PTO_ISA_COMMIT, and
+# PTO_ISA_ROOT does not override it). Upstream reuses a pre-seeded pristine
+# checkout, so seed it here at the pin.
+#
+# Every origin is rewritten to its public github URL and /tmp/gitsrc is removed,
+# so no path-local remote and no mirror payload survive into the image.
+# `--no-same-owner` matters: root tar restores the archive's uid, which is the
+# build host's unprivileged user, and git then refuses the clone with "detected
+# dubious ownership" rather than reading a repo it does not own.
+# `protocol.file.allow=always` is scoped to the submodule command: since
+# CVE-2022-39253 git refuses local-path transport for submodules specifically,
+# while top-level clones from a path are still allowed.
+COPY src-pins.tgz /tmp/src-pins.tgz
 WORKDIR ${WS}
-RUN --mount=type=secret,id=gh_token \
-    export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
-    GH="$(cat /run/secrets/gh_token)" && \
+RUN mkdir -p /tmp/gitsrc && \
+    tar xzf /tmp/src-pins.tgz --no-same-owner -C /tmp/gitsrc && \
+    rm -f /tmp/src-pins.tgz && \
     for r in pypto pypto-lib pto-isa PTOAS; do \
-      git -c http.version=HTTP/1.1 clone "https://${GH}@github.com/csy0225/${r}.git" "${WS}/${r}"; \
+      git clone -q "/tmp/gitsrc/${r}.git" "${WS}/${r}"; \
     done && \
-    cd ${WS}/pypto && git checkout ${PYPTO_COMMIT} && \
-      git config submodule.simpler.url "https://${GH}@github.com/csy0225/simpler.git" && \
-      git submodule update --init runtime && \
-      ( cd runtime && git fetch -q origin ${SIMPLER_COMMIT} && git checkout ${SIMPLER_COMMIT} ) && \
-      git -c "url.https://${GH}@github.com/.insteadOf=https://github.com/" \
-        submodule update --init 3rdparty/libbacktrace 3rdparty/msgpack-c && \
+    cd ${WS}/pypto && git checkout -q ${PYPTO_COMMIT} && \
+      git config submodule.simpler.url /tmp/gitsrc/simpler.git && \
+      git config submodule.3rdparty/libbacktrace.url /tmp/gitsrc/libbacktrace.git && \
+      git config submodule.3rdparty/msgpack-c.url /tmp/gitsrc/msgpack-c.git && \
+      git -c protocol.file.allow=always \
+        submodule update --init runtime 3rdparty/libbacktrace 3rdparty/msgpack-c && \
+      ( cd runtime && git checkout -q ${SIMPLER_COMMIT} ) && \
     ( pin="$(cat ${WS}/pypto/runtime/pto_isa.pin)" && \
-      git -c http.version=HTTP/1.1 clone -q \
-        "https://${GH}@github.com/csy0225/pto-isa.git" \
-        "${WS}/pypto/runtime/build/pto-isa" && \
+      git clone -q /tmp/gitsrc/pto-isa.git "${WS}/pypto/runtime/build/pto-isa" && \
       git -C "${WS}/pypto/runtime/build/pto-isa" checkout -q "${pin}" ) && \
-    cd ${WS}/pypto-lib && git fetch -q "https://${GH}@github.com/csy0225/pypto-lib.git" ${PYPTO_LIB_COMMIT} && git checkout ${PYPTO_LIB_COMMIT} && \
-    cd ${WS}/pto-isa && git fetch -q "https://${GH}@github.com/csy0225/pto-isa.git" ${PTO_ISA_COMMIT} && git checkout ${PTO_ISA_COMMIT} && \
-    cd ${WS}/PTOAS && git fetch -q "https://${GH}@github.com/csy0225/PTOAS.git" ${PTOAS_COMMIT} && git checkout ${PTOAS_COMMIT} && \
+    cd ${WS}/pypto-lib && git checkout -q ${PYPTO_LIB_COMMIT} && \
+    cd ${WS}/pto-isa && git checkout -q ${PTO_ISA_COMMIT} && \
+    cd ${WS}/PTOAS && git checkout -q ${PTOAS_COMMIT} && \
     ln -sfn ${WS}/pypto-lib ${WS}/vllm-pypto && \
     git -C ${WS}/pypto config --local submodule.simpler.url "https://github.com/csy0225/simpler.git" && \
+    git -C ${WS}/pypto config --local submodule.3rdparty/libbacktrace.url \
+      "https://github.com/ianlancetaylor/libbacktrace.git" && \
+    git -C ${WS}/pypto config --local submodule.3rdparty/msgpack-c.url \
+      "https://github.com/msgpack/msgpack-c.git" && \
     git -C ${WS}/pypto remote set-url origin "https://github.com/csy0225/pypto.git" && \
     git -C ${WS}/pypto/runtime remote set-url origin "https://github.com/csy0225/simpler.git" && \
+    git -C ${WS}/pypto/3rdparty/libbacktrace remote set-url origin \
+      "https://github.com/ianlancetaylor/libbacktrace.git" && \
+    git -C ${WS}/pypto/3rdparty/msgpack-c remote set-url origin \
+      "https://github.com/msgpack/msgpack-c.git" && \
     git -C ${WS}/pypto-lib remote set-url origin "https://github.com/csy0225/pypto-lib.git" && \
     git -C ${WS}/pto-isa remote set-url origin "https://github.com/csy0225/pto-isa.git" && \
     git -C ${WS}/PTOAS remote set-url origin "https://github.com/csy0225/PTOAS.git" && \
     git -C ${WS}/pypto/runtime/build/pto-isa remote set-url origin \
       "https://github.com/hw-native-sys/pto-isa.git" && \
+    test "$(git -C ${WS}/pypto rev-parse HEAD)" = "${PYPTO_COMMIT}" && \
     test "$(git -C ${WS}/pypto-lib rev-parse HEAD)" = "${PYPTO_LIB_COMMIT}" && \
+    test "$(git -C ${WS}/pto-isa rev-parse HEAD)" = "${PTO_ISA_COMMIT}" && \
+    test "$(git -C ${WS}/PTOAS rev-parse HEAD)" = "${PTOAS_COMMIT}" && \
     test "$(git -C ${WS}/pypto/runtime rev-parse HEAD)" = "${SIMPLER_COMMIT}" && \
     test "$(git -C ${WS}/pypto/runtime/build/pto-isa rev-parse HEAD)" = \
          "$(cat ${WS}/pypto/runtime/pto_isa.pin)" && \
     test -d ${WS}/pypto/runtime/build/pto-isa/include && \
-    test -z "$(git -C ${WS}/pypto/runtime/build/pto-isa status --porcelain)"
+    test -z "$(git -C ${WS}/pypto/runtime/build/pto-isa status --porcelain)" && \
+    rm -rf /tmp/gitsrc && \
+    ! grep -rIls "gitsrc" ${WS}/pypto/.git/config ${WS}/pypto-lib/.git/config \
+        ${WS}/pto-isa/.git/config ${WS}/PTOAS/.git/config
 
-# ptoas-bin is the v0.50 payload verified with the 0724 environment.
+# ptoas-bin payload. From v0.51 the release stopped being a single stripped ELF:
+# `bin/ptoas` is a Python script, `lib/` is empty, top-level `ptoas/` is a Python
+# PACKAGE DIRECTORY, and `.ptoas-python-version` hard-pins the interpreter --
+# missing that file makes the launcher SILENTLY skip the version check, which is
+# worse than failing. So assert the payload is whole, and run the check under an
+# explicit 3.11: no ENV PATH has been set yet at this point, so a bare `python3`
+# would be the base image's default and trip the launcher's version guard.
 COPY ptoas-bin.tgz /tmp/ptoas-bin.tgz
 RUN mkdir -p ${WS}/ptoas-bin && \
     tar xzf /tmp/ptoas-bin.tgz -C ${WS}/ptoas-bin && rm -f /tmp/ptoas-bin.tgz && \
-    LD_LIBRARY_PATH=${WS}/ptoas-bin/lib ${WS}/ptoas-bin/bin/ptoas --version
+    test -x ${WS}/ptoas-bin/bin/ptoas && \
+    test -f ${WS}/ptoas-bin/.ptoas-python-version && \
+    test -d ${WS}/ptoas-bin/ptodsl && \
+    PATH=/usr/local/python3.11.14/bin:${PATH} \
+      LD_LIBRARY_PATH=${WS}/ptoas-bin/lib ${WS}/ptoas-bin/bin/ptoas --version
 
 # Build pypto and simpler runtime with the pinned CANN/toolchain.
 ENV PTO_ISA_ROOT=${WS}/pto-isa
 ENV PTOAS_ROOT=${WS}/ptoas-bin
 ENV LD_LIBRARY_PATH=${WS}/ptoas-bin/lib:${LD_LIBRARY_PATH}
-ENV PATH=${WS}/ptoas-bin/bin:${PATH}
+# python3.11 must precede the base image's default python3: `bin/ptoas` is a
+# `#!/usr/bin/env python3` script that exits if the interpreter is not 3.11.
+ENV PATH=${WS}/ptoas-bin/bin:/usr/local/python3.11.14/bin:${PATH}
 ENV CMAKE_BUILD_PARALLEL_LEVEL=${BUILD_JOBS}
 ENV MAX_JOBS=${BUILD_JOBS}
 RUN source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
     export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
-    git config --global http.version HTTP/1.1 && \
     git config --global --add safe.directory '*' && \
     export PTO_ISA_ROOT=${WS}/pto-isa && \
     ${PIP} install --no-cache-dir "cmake==3.31.6" \
@@ -113,12 +153,22 @@ RUN source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
 # aicore targets, and each target's cmake build. Bridge all three to the
 # release build setting only while compiling, then restore the pinned source
 # so the image stays clean.
+# The fourth sed drops onboard `a5`. `detect_buildable_platforms()` always
+# returns a2a3+a5 ("same toolchain, identical artifacts"), and the CMake
+# `build_runtimes ALL` target has no platform filter, so `pip install -e
+# pypto/runtime` necessarily builds a5 too -- and new simpler's src/a5/ needs a
+# newer toolchain than the pinned CANN 9.0.0-beta.1 (halGetDeviceInfo /
+# MODULE_TYPE_AICPU undeclared, __gm__ LocalContext object-parameter error,
+# PTO2DispatchPayload offsetof static_assert). a2a3/a2a3sim/a5sim all build
+# clean, and this project never ships a5. CANN cannot move (Phase 16 three
+# pillars), so removing this needs a CANN change, not a source fix.
 RUN runtime_compiler=${WS}/pypto/runtime/simpler_setup/runtime_compiler.py && \
     build_runtimes=${WS}/pypto/runtime/simpler_setup/build_runtimes.py && \
     runtime_builder=${WS}/pypto/runtime/simpler_setup/runtime_builder.py && \
     grep -Fq 'str(min(multiprocessing.cpu_count(), 32)),' "${runtime_compiler}" && \
     grep -Fq 'ThreadPoolExecutor(max_workers=len(tasks) or 1)' "${build_runtimes}" && \
     grep -Fq 'ThreadPoolExecutor(max_workers=4)' "${runtime_builder}" && \
+    grep -Fq 'platforms.extend(["a2a3", "a5"])' "${build_runtimes}" && \
     sed -i \
       's#str(min(multiprocessing.cpu_count(), 32)),#os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", str(min(multiprocessing.cpu_count(), 32))),#' \
       "${runtime_compiler}" && \
@@ -128,9 +178,11 @@ RUN runtime_compiler=${WS}/pypto/runtime/simpler_setup/runtime_compiler.py && \
     sed -i \
       's#ThreadPoolExecutor(max_workers=4)#ThreadPoolExecutor(max_workers=min(4, int(os.environ.get("MAX_JOBS", "4"))))#' \
       "${runtime_builder}" && \
+    sed -i \
+      's#platforms.extend(\["a2a3", "a5"\])#platforms.extend(["a2a3"])#' \
+      "${build_runtimes}" && \
     source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh && \
     export https_proxy=${GH_PROXY} http_proxy=${GH_PROXY} no_proxy=${NO_PROXY_HOSTS} && \
-    git config --global http.version HTTP/1.1 && \
     git config --global --add safe.directory '*' && \
     export PTO_ISA_ROOT=${WS}/pto-isa && \
     ${PIP} install --no-cache-dir --no-build-isolation -e ${WS}/pypto/runtime && \
@@ -199,8 +251,7 @@ RUN for name in \
       PYPTO_STEP3P5_FULL_ATTN_ONLINE_SOFTMAX_REDUCE_UNIFORM_O1; do \
       test -z "${!name+x}"; \
     done
-RUN ln -sfn bin/ptoas ${WS}/ptoas-bin/ptoas && \
-    sed -i 's#/usr/local/Ascend/cann-8.5.1#/usr/local/Ascend/cann-9.0.0-beta.1#g' /etc/profile 2>/dev/null || true; \
+RUN sed -i 's#/usr/local/Ascend/cann-8.5.1#/usr/local/Ascend/cann-9.0.0-beta.1#g' /etc/profile 2>/dev/null || true; \
     printf '%s\n' \
   'source /usr/local/Ascend/cann-9.0.0-beta.1/set_env.sh' \
   'export WS=/workspace' \
