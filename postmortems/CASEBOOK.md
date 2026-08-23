@@ -42,6 +42,8 @@
 | [B4](#b4) | agent 侧：Bash 工具报 `ENOSPC`，清了 `/tmp` 也没用 | ✅ |
 | [B5](#b5) | 36 个 kernel 被 ptoas 拒：`'pto.tcvt' op requires explicit tmp … when PlanMemory is skipped` | ✅ 纪律 |
 | [B6](#b6) | 构建期每个 `git clone` 挂 `130832 ms` 后 `Failed to connect to github.com port 443` | ✅ 判据 |
+| [B7](#b7) | `nerdctl exec` fatal：`chdir to cwd ("/workspace") … no such file or directory`，可目录明明在 | ✅ |
+| [B8](#b8) | 同一脚本里前一个容器起得来、后一个报 `apparmor_parser resolves to executable in current directory` | ✅ |
 | [C1](#c1) | head-gate `gate_logits` ~20× 偏小 → 整层乱码 | 🩹 |
 | [C2](#c2) | full-attn ctx>1 乱码，`rot_q_hi` 列 32..63 损坏 | 🩹 |
 | [C3](#c3) | INT8-native routed MoE `bad_ratio≈0.9847`、`max diff ~254`、**无 device fault** | 🩹 |
@@ -268,6 +270,34 @@
   还原归档 uid → `dubious ownership`（`--no-same-owner`）；CVE-2022-39253 起 submodule
   禁用本地 transport（`-c protocol.file.allow=always`，只加在那一条命令上）。
 - **出处**：本仓 session 记录（2026-08-23）、`deployment/docker/{Dockerfile,build.sh}`
+
+<a id="b7"></a>
+### B7. `nerdctl exec` 进不去镜像声明的 WorkingDir ✅
+
+- **背景**：精度门 stage A 要在已经起来的 vanilla oracle 容器里跑 `gen_vanilla_oracle.py`。
+- **现象**：`nerdctl exec` 直接 fatal：
+  `chdir to cwd ("/workspace") set in config.json failed: no such file or directory`。
+- **过程**：`/workspace` **确实存在**（`run` 进去 `ls -ld /workspace` 正常，
+  `/workspace/vllm-pypto -> /workspace/pypto-lib`）。同一镜像 `run` 一路好用、只有 `exec` 挂
+  —— 是 containerd exec 路径自己解析镜像 `Config.WorkingDir` 的问题，不是镜像缺目录。
+  别顺着「镜像坏了」查。
+- **处置**：✅ 不用 `exec`。把客户端侧工作放到**另一个短命 `run --rm --net host` 容器**：
+  `verify-checkpoint` / `gen_vanilla_oracle` 都是纯 CPU + HTTP 到 `127.0.0.1:8000`，
+  不需要 `--device`，所以既绕开了 exec 又不会扰动 oracle 占的卡。
+- **出处**：`deployment/docker/run_precision_gate.sh`（stage A `CLIENT`）
+
+<a id="b8"></a>
+### B8. 漏一个 `--security-opt apparmor=unconfined` 就 fatal ✅
+
+- **背景**：0162 上一切容器都走 `nerdctl`。
+- **现象**：`get apparmor_parser version: apparmor_parser resolves to executable in
+  current directory (./apparmor_parser)`。同一个脚本里前一个容器起得来、后一个挂。
+- **过程**：差别不是 cwd，是**那一个容器漏了 `--security-opt apparmor=unconfined`**。
+  带了这个 flag 就不去解析 profile；不带就要调 `apparmor_parser`，而 nerdctl 相对 cwd
+  解析它 → fatal。所以这个 flag 是**每个容器**都要，不是脚本级设置一次。
+- **处置**：✅ 脚本顶部 `cd /tmp` + 定义 `SEC="--security-opt apparmor=unconfined"`
+  并在**每一个** `run` 上带；新增容器时一起加。
+- **出处**：`deployment/docker/run_{precision,itl,swimlane}_gate.sh`
 
 ---
 

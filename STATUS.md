@@ -9,7 +9,7 @@
 > - 未决 → [`blockers.md`](blockers.md)　接力 → [`planning/handoff.md`](planning/handoff.md)
 > - **开工前必读**教训索引 → [`postmortems/LESSONS.md`](postmortems/LESSONS.md)
 >
-> **最后更新：2026-08-21。预算 ≤130 行 —— 超了就是有东西该下沉。**
+> **最后更新：2026-08-23。预算 ≤130 行 —— 超了就是有东西该下沉。**
 
 ## 0. Agent 判定当前状态的强制顺序
 
@@ -46,6 +46,7 @@ fallback；ownership 固定 `HIDDEN // TP_WORLD_SIZE`，与 transfer chunk 解�
 |---|---|---|---|
 | **完整 release-qualified 回退基线** | `…:stepfun-develop-20260803-attn-final-wave5` | `4acc77cdce…67b32` | 仅对 0162 完整准出。64K p50 `49.796 ms` |
 | **最新镜像**（部分准出） | `…:stepfun-develop-20260811-k8-selective` | `076af8a167…c47f3` | pypto-lib=`cb96747e`，**不含** tip `69ad31e4`。64K bs1 p50 `32.14 ms`。⚠ Main batch16 / MTP batch1+16 / 六档独立 64K golden-A/B / formal matched-source DFX **未重跑** ⇒ 不是完整 production release-qualified |
+| **全栈升级候选**（**不可发布**） | `…:stepfun-upgrade-20260822` | `cafbc4d9399b…b509c` | 升级 pin（pypto `143ea205` / pypto-lib `26977738` / simpler `85a82c45` / ptoas-bin `v0.57`）。`IMAGE_VERIFY=PASS`、liveness `PASS` 201.376s、**N=128 精度 `127/128 = 99.2%` PASS**。⛔ 但 64K p50 `47.99 ms`（对 K8 **+49.3%**）且前五层 swimlane `rc=1` ⇒ 见 §8 两条 🔴。三门明细：[`benchmark/2026-08-23-upgrade-image-release-gates.md`](benchmark/2026-08-23-upgrade-image-release-gates.md) |
 
 其余镜像（含 pre-fix evidence 与其 digest）全部在 [`progress/landed.md`](progress/landed.md) 表 A。
 **不得**把旧镜像的 golden / 性能 / DFX 升级为当前 tip 的准出结论。
@@ -97,13 +98,11 @@ N=128 逐 token >=95%  (冻结 vanilla vLLM W8A8 greedy oracle, seed 6127, sha c
 5. 用 `pypto-image-verify` + `pypto-perf-regression` 对最终 image 执行标准回归；若提升为完整
    production release，按 Wave5 同口径补 Main N=128×3、Main batch16、MTP batch1/16。
    BS16×每请求 64K 必须先过 runtime-memory 容量门禁（不能把 OOM 或两层数据写成整网性能）。
-6. ★★ **新性能主线 `H4`（P0）**：host `bind.args` = `6.12 ms` ≈ **ITL 的 23%**（纯 host 侧参数
-   绑定，与 `runner_run` 加性），上界 ≈ **9.9× 地板** —— 比 dispatch 域任何 small-op 融合大
-   一到两个数量级。★ 强怀疑 `bind.args ≡ H2`（未证实）。配套 `H5`（P1）= 补 `early_dispatch`
-   的 swim record（现在 8 卡只有 rank2 可分析，是一切 device 侧 cross-rank 结论的前置）；
-   `K10` 降到 H4 之后（上界 `0.45–0.53 ms` 低于近期 bracket 地板，须紧 bracket 才可判）。
-   排序 + 实施顺序 + 可复用否决判据：[`design/performance/09-swimlane-derived-next-optimizations.md`](design/performance/09-swimlane-derived-next-optimizations.md)；
-   看板：[`design/performance/task-tracking.md`](design/performance/task-tracking.md)。
+6. ★★ **新性能主线 `H4`（P0）**：host `bind.args` = `5.8–6.9 ms` ≈ **ITL 的 20%+**，三个 base 上都稳定
+   存在；升级基座又叠了每步 `node.graph_build` `8.33 ms`（§8 `UPGRADE-ITL-NODE-GRAPH`）。两项同源
+   = 每步重做 step-invariant 的参数/图工作 ⇒ **H4 比立项时更值钱**。配套 `H5`（P1）= 补
+   `early_dispatch` 的 swim record（现在 8 卡只有 rank2 可分析，是一切 device 侧 cross-rank 结论的
+   前置）；`K10` 排在 H4 之后。排序 + 否决判据：[`design/performance/09-swimlane-derived-next-optimizations.md`](design/performance/09-swimlane-derived-next-optimizations.md)、[`design/performance/task-tracking.md`](design/performance/task-tracking.md)。
 
 ## 7. 机器状态口径
 
@@ -116,6 +115,8 @@ N=128 逐 token >=95%  (冻结 vanilla vLLM W8A8 greedy oracle, seed 6127, sha c
 ## 8. Blocker 摘要（一条一行，详见 [`blockers.md`](blockers.md)）
 | # | Blocker | 严重度 | gate 什么 |
 |---|---|---|---|
+| UPGRADE-ITL-NODE-GRAPH | 升级基座 ctx-64K p50 `47.99 ms` vs K8 镜像 `32.14`（**+49.3%**）。span 对照：device 与 `bind.args` 都没回退，回退全在**新增 parent 侧 `node.graph_build` 8.33 ms/步** | 🔴 性能 | 升级栈推 `stepfun/develop` |
+| UPGRADE-IPC-PROV | A/B/C 三缺口已修（镜像 `cafbc4d9…` 整网 liveness + N=128 `127/128` 都过），但只覆盖整网 holder；`five_layer_moe{,_route}_holder` / `mtp_layer_holder` 三处裸指针未改 ⇒ 前五层 swimlane 门 `rc=1`，**MTP 整网未验证**（liveness 走 `--skip-mtp`） | 🔴 功能/观测性 | 五层 DFX、MTP 整网 |
 | UPSTREAM-NOTIFY-FENCE | pypto `MakeNotifyCodegenPTO` 把 `dcci`(invalidate-only) 排在 payload drain 之前；最小修复 = 一条 pre-CMO `pipe_barrier(PIPE_ALL)`（device 已证），Wave2 单点代价 `0.405 µs/call` | 🔴 correctness | 一切"把 payload store 与它自己的 credit 拉近"的 AR 优化 |
 | N1-S-0234 | 0234 同步 pypto-lib 后 whole-net stall（对象未确认，未独立复核） | 🔴 | 取得 SSH 后核对三仓/runtime/环境重跑 canonical |
 | N1-L | Phase 28 live：per-layer KV + 3-way HBM + live token-exact A/B | 🔴 | live single-handoff |

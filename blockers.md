@@ -50,6 +50,50 @@ SINGLE_CHIP_HIDDEN_CI=FAIL  stage=main_hidden_8step rc=1  (200.675s)
 base ⇒ A、B、C 一并解决，且 `_child_prov_check_dispatch` 无需改动（精确查找即命中），与上游零分歧。
 `region_bytes` 已在三处调用点传入，**不是**缺 `region_bytes`。
 
+**已修完（镜像 `sha256:cafbc4d9…`，A/B/C 三缺口）**：simpler `85a82c45`
+`imported_region_buffer()` + pypto `143ea205` `imported_tensor()` / `reshape` 保 buffer +
+pypto-lib `26977738` `device_tensor_slice()`。整网 liveness 与 N=128 精度门（`127/128 = 99.2%`）都过。
+
+**仍 open —— 只覆盖了整网 holder，另有三处 holder 未改（2026-08-23 实测）**：
+`five_layer_moe_holder.py:320`、`five_layer_moe_route_holder.py:377`（都是
+`device_tensor(key)[start:stop]`，修法同 `whole_decode_holder.py:328`）、
+`mtp_layer_holder.py:320`（`DeviceTensor(source.data_ptr, shape, dtype)` reshape 丢 buffer）。
+前五层 swimlane 门因此 `rc=1`、零 `l2_swimlane_records.json`。
+⚠ `mtp_layer_holder` 在名单里，而整网 liveness 是 `--skip-mtp` 跑的 ⇒ **MTP 整网在新 base 上未验证**。
+证据：[`benchmark/2026-08-23-upgrade-image-release-gates.md`](benchmark/2026-08-23-upgrade-image-release-gates.md) §3
+
+---
+
+## 🔴 ACTIVE — UPGRADE-ITL-NODE-GRAPH：升级基座每步多花 8.3 ms 重建 node graph
+
+**症状**：升级候选镜像 ctx-64K BS1 p50 `47.993 ms`（iters=1000），对上一个镜像 K8
+`076af8a1` 的 `32.14 ms` 是 **+15.85 ms / +49.3%**。context 曲线**完全平**
+（1024→65536：`48.293 → 47.963`，`−0.33 ms`），而 attention 工作量必然随 context 涨
+⇒ 回退全在一个**与 context 无关的固定开销**里。
+
+**根因（span 级已定位，未定案）**：三份日志同脚本聚合（`inv>=20` p50，升级把
+`simpler_run.*` 改名成 `chip.run.*`）：
+
+| span | K8 32.14 | R5 26.33 | 候选 47.99 |
+|---|---:|---:|---:|
+| 每 rank run | 29.261 | 24.122 | **26.974** |
+| `…bind.args` | 6.862 | 6.267 | **5.843** |
+| **`node.graph_build`** | — | — | **8.326** |
+
+**device 侧和 `bind.args` 都没回退**（run 比 K8 还快、`bind.args` 三者最低）。回退是**新增的
+parent 侧 `node.*` 层**：`node.graph_build` 991 样本 / 991 步 ⇒ **每步重建一次**，而
+`chip.run.bind.prebuilt` 只要 `0.003 ms`（prebuilt 快路径存在但 node 层没用上）。
+最可疑 = 上游 pypto #2273 address-free wire ABI 把 descriptor 改成每次 dispatch
+由 `arg.buffer.tensor()` 导出。**H4 针对的正是这一项。**
+
+**已证伪**：不是「新 base 默认开 host STRACE 导致日志放大」—— 旧 base `e2efebcb` 同样
+`#define SIMPLER_HOST_STRACE 1`，两个基线日志各有 8325 / 8532 条 `[STRACE]`，之前 grep
+不到只因 span 改名。
+
+**解除条件**：让 node graph 在 step 之间复用（或证明 8.3 ms 是必需的），把 ctx-64K p50 拉回
+`≤32.14 ms` 量级；顺带复测 H4。
+证据：[`benchmark/2026-08-23-upgrade-image-release-gates.md`](benchmark/2026-08-23-upgrade-image-release-gates.md) §2.2
+
 ---
 
 ## 🔴 ACTIVE — UPSTREAM-NOTIFY-FENCE：notify 的 cache-invalidate 排在 payload drain 之前
