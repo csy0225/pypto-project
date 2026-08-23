@@ -131,7 +131,15 @@ echo "[build] profile: attention=$ATTN_TASK_PROFILE build-jobs=$BUILD_JOBS l2-sw
 # 3rdparty 两个 submodule 要的 sha 直接从 pypto 的 tree 读,不另设 pin。
 SRC_PINS_DIR=${SRC_PINS_DIR:-}
 src_pypto=${SRC_PYPTO:-$SRC_PINS_DIR/pypto}
-if [ ! -f src-pins.tgz ]; then
+# 复用条件是 **sha 集一致**,不是"文件存在"。按存在性复用会把上一轮的源码静默打进
+# 新镜像,于是记录的 pin 与实际构建内容不符 —— 和 postmortems/14 同一类事故。
+# （已犯过一次：pin 前进后复用了昨天的 tarball,构建期报
+#   `fatal: reference is not a tree: <新 pypto sha>`。）
+src_pins_want="pypto=$PYPTO_COMMIT pypto-lib=$PYPTO_LIB_COMMIT pto-isa=$PTO_ISA_COMMIT PTOAS=$PTOAS_COMMIT simpler=$SIMPLER_COMMIT"
+if [ -f src-pins.tgz ] && [ "$(cat src-pins.shas 2>/dev/null)" = "$src_pins_want" ]; then
+  echo "[build] 复用 src-pins.tgz (sha 集一致)"
+else
+  rm -f src-pins.tgz src-pins.shas
   [ -n "$SRC_PINS_DIR" ] || [ -n "${SRC_PYPTO:-}" ] || {
     echo "缺 src-pins.tgz;设 SRC_PINS_DIR 指向含五仓 checkout 的目录 (可用 SRC_<仓> 单独覆盖)"
     exit 1
@@ -166,6 +174,7 @@ if [ ! -f src-pins.tgz ]; then
   }
   tar czf src-pins.tgz -C "$src_stage" .
   rm -rf "$src_stage"; trap - EXIT
+  printf '%s' "$src_pins_want" > src-pins.shas
   echo "[build] src-pins.tgz = $(du -h src-pins.tgz | cut -f1)"
 fi
 

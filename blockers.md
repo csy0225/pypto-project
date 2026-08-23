@@ -9,7 +9,46 @@
 五段复盘（模板 [`postmortems/TEMPLATE.md`](postmortems/TEMPLATE.md)）+ 更新
 [`STATUS.md`](STATUS.md) §8 摘要。**已解 / 已定案的东西不留在本文件** —— 包括"负结论"。
 
-**最后检视：2026-08-21。**
+**最后检视：2026-08-23。**
+
+---
+
+## 🔴 ACTIVE — UPGRADE-IPC-PROV：升级基座上 IPC interior 指针无法 dispatch
+
+**症状**：升级候选镜像 `sha256:43fafc02…`（门全绿）跑整网 liveness，54 个 resident arg
+构造完成后 dispatch 即失败：
+
+```
+TypeError: Parameter 'input_rms__ssa_v0' shard 0: a raw-pointer DeviceTensor cannot be
+           dispatched by DistributedWorker; use this same DistributedWorker.alloc_tensor()
+SINGLE_CHIP_HIDDEN_CI=FAIL  stage=main_hidden_8step rc=1  (200.675s)
+```
+
+**根因 = 两个独立缺口**（`DeviceTensor(peer_base + offset)` 是零拷贝 IPC 池的 interior 指针）：
+
+- **A（上游新增，pypto #2273 `8662deb9` 2026-08-18）**：dispatch 改成 **address-free wire ABI**，
+  descriptor 由 `arg.buffer.tensor(...)` 导出 ⇒ `buffer is None` 的裸指针 DeviceTensor 被
+  `_require_owned_resident_tensor`（`runtime_base.py`）+ `make_tensor_arg`（`tensor_arg.py`）双重拒绝。
+  且 `DeviceTensor.__init__` 强制 `buffer.base == data_ptr`，**整池 Buffer 无法覆盖 interior 切片**。
+  旧 pypto tip `1c048a74` 无此 guard（走带地址的 `child_memory=True` ChipTensor）。
+- **B（我方 port 回退，[`postmortems/14`](postmortems/14-image-dirty-worktree-unreproducible-pins.md) 同一份 span-aware 补丁）**：
+  旧 simpler `e2efebcb` 的 `_child_prov_check_dispatch` 有
+  `_child_ptr_in_ipc_region` / `_child_ptr_in_domain_range` 两个 range 逃生门；我把
+  `import_ipc_all` 移植到 `53a50463` 时只保留了 `region_bytes` 登记（走上游按 base 精确键的
+  `_child_prov_record_domain`），**dispatch 侧的 interior 接受被丢掉**。
+  上游只吸收了 `copy_to` 那一半（`_child_prov_require_live_range` 明确接受 interior range）。
+
+- **C（上游新增，与 A 同源）**：`DeviceTensor.__getitem__` / `.reshape` 都**不带 buffer**。
+  `__getitem__` 无法带（子视图地址不等于父 `buffer.base`，需各自铸 Buffer）；`.reshape` 是**纯缺陷**
+  （地址/dtype/字节数都不变，父 Buffer 精确命名该区域）。`Buffer.tensor()` 其实支持 `byte_offset`，
+  但 `make_tensor_arg` 没传 ⇒ 现阶段"带 offset 的 provenance 视图"上游不支持。
+  我方 `Wsub`（4-bucket leading-dim 切片）正好走 `__getitem__`，所以补完 A/B 后失败点从
+  `input_rms__ssa_v0` 前移到 `moe_full_wq__ssa_v0`。
+
+**解除条件**：为每个 IPC 切片（含 `Wsub` 子视图）铸**独立 VMM_WINDOW Buffer**（`base` = 切片 VA、
+不被 `worker.free` 回收、按 `(worker_id, ptr, nbytes)` 缓存以保证 identity 稳定）并同时登记该切片
+base ⇒ A、B、C 一并解决，且 `_child_prov_check_dispatch` 无需改动（精确查找即命中），与上游零分歧。
+`region_bytes` 已在三处调用点传入，**不是**缺 `region_bytes`。
 
 ---
 
