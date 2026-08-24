@@ -1,6 +1,6 @@
-# PyPTO vs vLLM-Ascend 逐阶段时间对比表（2026-08-21，v2 已修正分类）
+# PyPTO vs vLLM-Ascend 逐阶段时间对比表（2026-08-24 r9 overlay；保留 2026-08-21 历史对照）
 
-> **一句话**：PyPTO 单层 wall 与 vLLM-Ascend 同类层同量级（full-MoE `458.82` vs
+> **历史基线一句话（2026-08-21 R5）**：PyPTO 单层 wall 与 vLLM-Ascend 同类层同量级（full-MoE `458.82` vs
 > `408.50 us`，**1.12×**）。差距**不在 expert 计算**（`routed_gmm1` `41.72` vs `42.52 us`
 > 已打平），而集中在 **EP combine 跨卡通信**（独占 `55.95 us`，vLLM 无对应物）与
 > **每 task 边界约 4 us 的固定调度开销**（MoE 层 32 task ⇒ `~125 us`，占整层 27%）。
@@ -15,13 +15,130 @@
 
 ---
 
+## 0. 2026-08-24 current r9 overlay（**不是**旧表的同口径替换）
+
+本节把当前 immutable r9 的前五层 observed critical path 叠加到本表，供
+MoE 阶段定位和 decoder 逻辑阶段对齐使用；`§1–§9` 仍保留 2026-08-21 的
+**R5 PyPTO / vLLM-Ascend trace** 历史 kernel/major-stage 审计。新主表按
+E0–E7 语义 endpoint 对齐，不要求 kernel 名称一致；不要把两种统计口径混算。
+
+### 0.1 Current r9 provenance and run contract
+
+| 项 | current r9 |
+|---|---|
+| 镜像 | `hub.i.basemind.com/stepcast/vllm-pypto@sha256:b637f00c66d4dc976c053c617d2e19e6d6d66f68f4bef30250984da7a71690f6` |
+| Config | `sha256:f6c8f72eecad0a9d40d0c4ea55afaab09dd4e2f5fe54d6a091e332465e421dae` |
+| 主机 / 输入 | `gpu-a910x-0162`；`FiveLayerMoe_20260824_071710`，8 ranks，`chip_swimlane_records.json` |
+| workload | BS1，ctx `65536`，active batch `1`，`num_blocks=512`，TP8/EP8 |
+| H4 合同 | `PYPTO_H4_RESIDENT=all`（与发布性能合同一致；镜像 Config 未 bake） |
+| LOW-WAIT 参考 | `rank2/d0`：makespan `1.867 ms`；static CPM / observed compute `1.544 ms`；data-wait `0.323 ms`；80 observed-path tasks |
+| DFX 报告 | `.../outer-swimlane-r9-h4-20260824-151416/runtime/dfx_analysis/moe_critical_path_report.md`（sha256 `22e76217…f21f18af`） |
+| rank2 报告 | `.../runtime/build_output/FiveLayerMoe_20260824_071710/dfx_outputs/rank2/d0/critical_path_report.md`（sha256 `f856c196…4c31f9ac`） |
+| merged swimlane | `.../runtime/build_output/FiveLayerMoe_20260824_071710/dfx_outputs/rank2/d0/merged_swimlane_20260824_071753.json`（sha256 `dcce013d…190f9794`） |
+
+发布与 H4 双合同的完整 provenance 见
+[`2026-08-24-upgrade-r9-release.md`](2026-08-24-upgrade-r9-release.md)。
+
+### 0.2 Decoder 逻辑阶段对齐（E0–E7；本节为主比较）
+
+本节按 **decoder dataflow endpoint** 对齐，不要求两侧 kernel 名称或 kernel
+数量一致。统一边界沿用 MoE 阶段合同：
+
+| 逻辑阶段 | 语义边界 | r9 对应工作 | vLLM 对应工作 |
+|---|---|---|---|
+| `E0→E2` input + router | FFN 输入 ready → route decision ready | `norm_quant_moe_input` + `gate_topk` | RMSNorm/Cast + TopK/Index/route metadata |
+| `E2→E3` route organization / dispatch | route decision → expert input globally ready | ownership metadata、EP push/wait/gather | local permutation + Cumsum/route organization |
+| `E3→E4` GMM1 + activation + requant | expert input ready → routed activation ready | `expert_gate_up` + activation + `routed_h_quant` | `GroupedMatmulSwigluQuant` 或等价 special path |
+| `E4→E5` routed down | routed activation ready → routed down ready | `expert_down` physical slices / zero-work ack | down projection + routed postprocess |
+| `E5→E6` return / restore / global merge | routed down ready → token-ownership FFN delta ready | 完整 endpoint 应含 EP combine、shared branch、stable reduce、TP AR/fence；当前只捕获 routed combine 子路径 | unpermute、shared/global merge、TP AR/fence |
+| `E6→E7` residual | FFN delta ready → 下一层可消费 | residual writer 完成且无尾部工作 | residual Add 完成 |
+| `E0→E7` complete MoE | 完整 FFN 语义闭包 | 当前报告未保存全局 E0/E7 endpoint | 完整 semantic-stage reference |
+
+下面的数值是 **phase-aligned descriptive comparison**。主比较列使用
+`rank2/d0` 每个逻辑阶段全部 physical tasks 的
+`min(start)→max(end)` **semantic envelope**；另列 observed critical-path
+贡献作诊断。vLLM 列为历史 E0–E7 semantic-stage p50（regular L3–L42，阶段合同与数值见
+[`2026-08-12-vllm-ascend-decode-moe-trace-gap.md`](2026-08-12-vllm-ascend-decode-moe-trace-gap.md)
+§14.1；对应 `vllm_semantic_stage_stats.json` / `comparable_phase_table.json`
+证据）。这些是 semantic-endpoint 统计，不是旧 §4 的 kernel-major sum。
+因此阶段语义可对齐，但仍不能把它们当成同 workload 的 release ratio。
+
+| 逻辑阶段 | r9 semantic envelope（L3 / L4） | r9 observed-CP 诊断贡献（L3 / L4） | 历史 vLLM semantic p50 | 描述性差值（非同 workload） | 读法 |
+|---|---:|---:|---:|---:|---|
+| `E0→E2` input + router | `43.54 / 44.72 us` | `44.3 / 44.5 us` | `42.00 us` | `+1.54 / +2.72 us` | 逻辑输入/路由阶段接近；CP 列含 data-wait |
+| `E2→E3` route organization / dispatch | `49.40 / 48.66 us` | `52.0 / 50.5 us` | `42.50 us` | `+6.90 / +6.16 us` | EP ownership transfer 相对 local route plan 多出跨卡等待 |
+| `E3→E4` GMM1 + activation + requant | `85.42 / 79.34 us` | `87.8 / 82.0 us` | `45.25 us` | `+40.17 / +34.09 us` | **这是逻辑阶段差异，不是 kernel-name 差异**；r9 三个 task 聚合后与 vLLM 一个语义阶段对齐 |
+| `E4→E5` routed down | `35.48 / 25.14 us` | `40.1 / 26.9 us` | `34.50 us` | `+0.98 / −9.36 us` | L3 接近、L4 方向偏快；仍受 BS/context 与 route 分布影响 |
+| `E5→E6` return / restore / merge | `59.30* / 52.66* us` | `31.8* / 43.6* us` | `57.50 us` | n/a | `*` 当前只闭合 routed combine envelope，未闭合 shared + TP AR + global E6 |
+| `E6→E7` residual | `15.72 / 14.64 us` | `10.0 / 11.3 us` | `4.50 us` | `+11.22 / +10.14 us` | residual/output-ready 方向上 r9 仍有余量 |
+| **`E0→E7` complete MoE** | **n/a / n/a** | **n/a** | **`229.25 us`** | **n/a** | 当前 r9 没有 shared + TP AR + global fence 闭合的完整 endpoint |
+
+并行 shared branch 的 envelope 为 L3 `48.4 us`、L4 `47.6 us`；它属于
+`E5→E6` 的并行输入，**不能再加到上表阶段值或构造完整 E0→E7**。
+当前 r9 全 rank 的 combine tail 最大为 `145.2 us`（L3）/
+`148.5 us`（L4），这是 remote-producer completion tail，不是单独的
+restore 算术时间。
+
+> semantic envelope 的阶段之间存在 overlap，不能逐行相加重建 E0→E7。
+> r9 的 observed-CP 贡献 `266.0 us (L3) / 258.8 us (L4)` 仍保留为诊断值；
+> 它们不是完整层 wall，也不能替代上表的 endpoint envelope。
+> 作为附加诊断，rank2 routed-subgraph 的 `norm_quant→moe_residual_add`
+> local envelope 为 `263.84 us (L3) / 258.26 us (L4)`；这两个数不包含
+> 完整 E5→E6 的 shared/TP-AR/global completion，不能与 vLLM `E0→E7`
+> 直接作差。
+
+> **术语澄清**：r9 不是“完全没有 fusion”，而是采用
+> `staged_fused_gate_up`：AIC 侧保留 gate/up 阶段融合，AIV 侧的
+> `expert_gate_up_act` 与 `routed_h_quant` 仍分开。由于本节按
+> `E3→E4` 逻辑阶段对齐，这三个 task 仍应合并与 vLLM 的
+> `GMM1 + activation + requant` 阶段比较。镜像没有采用 vLLM 式单 kernel；
+> 完整 fusion 候选在 R5/R8 门禁中分别因 whole-net A/B/A 回退、32B Vec row
+> 合同及 fixed-image compile/descriptor 问题被 NO-GO，未进入 r9。
+
+### 0.3 当前 r9 与 vLLM 的阶段差异
+
+1. **当前观测中最大的候选差异是 `E3→E4` 逻辑阶段，而不是某个同名 kernel。**
+   r9 L3/L4 的阶段贡献为 `87.8/82.0 us`，历史 vLLM semantic p50
+   为 `45.25 us`；这是按 decoder 逻辑闭包聚合后的描述性差异，是否为当前
+   第一优先级仍需同 workload paired measurement。
+2. **`E2→E3` 的差异主要来自 ownership topology。**
+   vLLM 是 local route organization，PyPTO 是 EP8 dispatch；因此应优化
+   dispatch 的 route/overlap/remote completion，而不是机械寻找同名 vLLM kernel。
+3. **`E5→E6` 当前只能报告 routed combine 子路径。**
+   `combine_scatter → combine_wait → combine_reduce` 已在 observed path，
+   但 shared branch、TP AR 和 global fence 没有在当前 rank2 报告中形成完整
+   E6 endpoint；完整阶段应记 `n/a`，不能从 partial sum 推导全阶段比值。
+4. **R5 的 `~4 us/task` gap 仍只属于历史 stage-exclusive capture。**
+   当前 r9 LOW-WAIT rank2 的 stall `0.323 ms` 全部是 data-wait，没有
+   `core-wait` 或 `front-gap`，不能把历史 gap 直接搬到 r9。
+5. **H4 的 whole-net 收益与阶段表分开。**
+   `PYPTO_H4_RESIDENT=all` 的 64K/1000 p50 为 `22.253 ms`，默认 `none`
+   为 `27.812 ms`；它不是 E0–E7 stage measurement。
+
+### 0.4 本轮可以下的结论 / 不能下的结论
+
+| 结论 | 状态 |
+|---|---|
+| kernel 不同但 decoder 逻辑阶段可按 E0–E7 对齐 | ✅ 本节已统一边界 |
+| r9 的 `E3→E4` 应与 vLLM 的 GMM1+activation+requant 作为同一逻辑阶段比较 | ✅ 可做方向性阶段比较 |
+| r9 当前完整 `E0→E7` 已经比 vLLM 快/慢多少 | ❌ 当前报告没有全局 E0/E7 closure，且 workload/statistics 不同 |
+| EP combine 是 `E5→E6` 的主要结构性差异 | ✅ 方向性支持；完整 E6 仍需全 rank endpoint |
+| 旧表 `routed_gmm1` kernel parity 是否等于 r9 phase parity | ❌ 两者不是同一层次；以本节 E3→E4 为准 |
+
+---
+
 ## 1. Provenance
+
+> **历史附录边界**：从本节开始的 `§1–§9` 保留 2026-08-21 R5
+> stage-exclusive / major-stage sum / kernel audit 原表。它们与上方
+> `§0.2` 的 current-r9 E0–E7 descriptive table **不可混用**；旧表中的
+> `1.05×/1.12×` 仍是历史对照，不是 current r9 release ratio。
 
 | 项 | 值 |
 |---|---|
 | 执行主机 | `gpu-a910x-0162`（全部解析就地执行，未占卡、未重采） |
 | 工作目录 | `/mnt/persist/chensiyu/workspace/perf-2026q3/vllm-pypto-stage-table-20260821/` |
-| **PyPTO 输入** | R5 生产基线 packed-NZ 五层 DFX：`.../moe-routed-packed-fusion-20260815/dfx-packed-nz-architecture-20260817-213730/out/runtime/build_output/FiveLayerMoe_20260817_134105/dfx_outputs/rank{0..7}/d0/merged_swimlane_20260817_1342*.json` |
+| **PyPTO 输入** | 2026-08-21 R5 **历史 source-overlay** packed-NZ 五层 DFX（升级前 MoE 基线）：`.../moe-routed-packed-fusion-20260815/dfx-packed-nz-architecture-20260817-213730/out/runtime/build_output/FiveLayerMoe_20260817_134105/dfx_outputs/rank{0..7}/d0/merged_swimlane_20260817_1342*.json` |
 | PyPTO 配置 | `PYPTO_STEP3P5_MAX_SEQ=65536` `ROPE_SEQ=65536` `STORAGE_BATCH_CAPACITY=16`，TP8/EP8，**BS1**，8 rank 各 1 次 invocation |
 | rank2 swimlane sha256 | `f9ef1dbe51d9867d9f981b6bf6da9b5b1d5446ca08fbdfcfccaa8c513efdf013` |
 | **vLLM 输入** | `/mnt/persist/chensiyu/workspace/develop/trace_view (3).json`，sha256 `ddba08673aa3787147c261403223995b2b345219911317c9f50c05215d65abf2` |
@@ -82,7 +199,7 @@ PyPTO 是 DAG，**执行时刻 ≠ 数据流位置**。例：L4 的 `head_gate` 
 
 | # | v1 的错 | 证据 | v2 改成 | 影响 |
 |---|---|---|---|---|
-| 1 | `attn_residual_hold` 和 `resid_snapshot` 都塞进 `post_attn/residual_hold` | L4 `attn_residual_hold` 在 `t=0.28`（层首）；L3 `resid_snapshot` 在 `t=130.84`（AR 之后）。**是两个不同的东西** | 前者 → `pre_attn/residual_snapshot`（快照层输入）；后者 → `pre_ffn/residual_snapshot`（快照 FFN 残差） | ★★★ 这是 v1 最大的错。L3 的 post_attn union 被撑成 `0.02→136.54`，把中间所有阶段都"遮住" ⇒ **v1 报的 "SWA 层 pre-attn / attn 独占 = 0.00" 是假的**，真值 `27.24` / `5.58`；**gap 也从假的 47.8% 回到 32.7%** |
+| 1 | `attn_residual_hold` 和 `resid_snapshot` 都塞进 `post_attn/residual_hold` | L4 `attn_residual_hold` 在 `t=0.28`（层首）；L3 `resid_snapshot` 在 `t=130.84`（AR 之后）。**是两个不同的东西** | 前者 → `pre_attn/residual_snapshot`（快照层输入）；后者 → `pre_ffn/residual_snapshot`（快照 FFN 残差） | ★★★ 这是 v1 最大的错。L3 的 post_attn union 被撑成 `0.02→136.54`，把中间所有阶段都"遮住" ⇒ **v1 报的 "SWA 层 pre-attn / attn 独占 = 0.00" 是假的**，真值 `27.24` / `5.58`；**gap 也从假的 47.8% 回到 32.5%** |
 | 2 | 残差 add 归到 `8_combine` | dense 层根本没有 combine，但 `dense_residual_add_tp` 却被算进 "combine" | 新增 `9_epilogue/merge_residual`，收 PyPTO `moe_residual_add`/`dense_residual_add_tp` 与 vLLM 尾部 `Add` | combine 大项从 `72.33` → `57.44`（L4），变成纯跨卡 EP + unpermute；dense 层不再出现空的 combine 桶 |
 | 3 | `7_ffn` 把 shared 与 routed 混成一桶 | shared 独占 `8.10`、routed `48.21`，ROI 差 6× 却看不出来 | 拆 `7a_shared` / `7b_routed`（dense 层保留 `7_ffn/dense_mlp`） | 直接暴露 "shared 免费、routed_gmm1 才是钱" |
 | 4 | dispatch 子项两侧**功能错位** | vLLM `MoeInitRoutingCustom`(10.80) 是本卡 permute、`Cumsum`(31.32) 是算 offset；PyPTO 的 permute 是 `dispatch_gather_spmd`，却被归进 `ep_dispatch_comm` | 按功能对齐三子项：`route_offsets`（vLLM Cumsum ↔ PyPTO count_publish+meta）、`permute`（vLLM MoeInitRouting ↔ PyPTO gather）、`ep_transfer`（PyPTO push/wait，vLLM n/a） | dispatch 内部终于可比：PyPTO permute `7.02` vs vLLM `11.02`，PyPTO offset `28.05` vs vLLM Cumsum `31.60`（且 vLLM 那个跑在 **AI_CPU** 上） |
@@ -204,7 +321,7 @@ PyPTO layer wall = **`277.41 us`**；vLLM = **`194.75 us`** ⇒ **PyPTO 1.42×**
 ★ dense 层**没有 MoE 的可重叠 lane，所以一切都在关键路径上**：`dense_mlp` 1.57×
 （**v1 报 1.90× 是把 span 当独占**，见 §2.2）、两次 AR 1.85×、pre-FFN norm 4.88×。
 **只有 3 层，全网权重低（4%）**，但它是"PyPTO 在无 overlap 可用时的裸速度"的干净读数
-—— 说明**当前优势主要来自 overlap，不是来自单 kernel 更快**。
+—— 说明**该 R5 artifact 的优势主要来自 overlap，不是来自单 kernel 更快**。
 
 ### 4.4 ★ 调度 gap 的真实性质：每 task 边界约 4 us 的固定开销
 
@@ -275,7 +392,7 @@ PyPTO layer wall = **`277.41 us`**；vLLM = **`194.75 us`** ⇒ **PyPTO 1.42×**
 与 permute、route_offsets）**对 ITL 基本免费** —— 它们几乎 100% 藏在别的阶段背后。
 优化它们的 ROI ≈ 0。真正付钱的是 `attn_core 70.90`、`ep_combine 55.95`、
 `routed_gmm1 41.72`、`o_proj 28.17`、`AR(attn) 25.30`、`AR(ffn) 16.78`、
-`softmax_reduce 13.19`、`epilogue 12.55`，外加**不属于任何阶段的 `gap 120.41`**。
+`softmax_reduce 13.19`、`epilogue 12.55`，外加**不属于任何阶段的 `gap 124.77`**。
 
 vLLM 侧对应结构是**一条直线**（单 stream 串行），唯一的并发是 AR：
 计算流 `CAPTURE_WAIT` 停顿 `29.79 us` 而 comm 流 `hcom_allReduce` 是 `26.37 us`
@@ -415,7 +532,8 @@ PyPTO 列为**子项独占 = ROI 天花板**（§2.2，**不可加**，只读单
    读结构占比，不能读比值。
 2. **PyPTO 是 5 层 synthetic harness，不是整网。** 层间流水、weight prefetch、
    LM head、MTP3 都不在里面。**不要把 §7.4 的加权推估当整网预测。**
-   整网口径是 R5 的 ITL p50 `27.757 ms` @ITERS=100。
+   历史 R5 source-overlay 的整网旁证是 ITL p50 `27.757 ms` @ITERS=100；
+   它不替代 current r9 的默认 `none=27.812 ms` 或发布合同 `all=22.253 ms`。
 3. **PyPTO 每 rank 只有 1 次 invocation ⇒ 无法给 p50/p95**，本表 PyPTO 数字是
    **8 个 rank 的 median**，离散度用 min/max 看（层 wall 跨 rank 只差 ±1%，很稳；
    §7.3 的 L1/L2 同构层复现性 < 0.5%）。vLLM 数字是跨 `68×层数` 个实例的 p50。
@@ -437,11 +555,16 @@ PyPTO 列为**子项独占 = ROI 天花板**（§2.2，**不可加**，只读单
 
 ---
 
-## 9. 结论与下一步候选（按 ROI 排序，均未立项）
+## 9. 2026-08-21 历史结论与下一步候选（当时均未立项）
+
+> 本节只描述 R5/source-overlay + 2026-08-21 vLLM trace 的历史候选。
+> 当前 r9 的 observed-path 证据不能由本节的 gap/task 或 ROI 天花板直接推出；
+> 当前 roadmap 以 `design/performance/09-swimlane-derived-next-optimizations.md`
+> 和 `design/performance/task-tracking.md` 为准。
 
 | # | 候选 | 依据 | 天花板（单层） | 全网权重 |
 |---|---|---|---:|---|
-| 1 | **减少 MoE 层 task 数** | gap = `4 us × task 数`（§4.4，四层实测 `3.90–4.26`，稳定）。MoE 层 32 task ⇒ `~125 us` gap | `~4 us × 消除的 task 数` | **40 层 (91%)** |
+| 1 | **减少 MoE 层 task 数** | **历史 R5** gap = `4 us × task 数`（§4.4，四层实测 `3.90–4.26`，稳定）。MoE 层 32 task ⇒ `~125 us` gap | `~4 us × 消除的 task 数` | **40 层 (91%)** |
 | 2 | **EP combine 通信 overlap** | `8_combine/ep_transfer` 独占 `55.95`(L4)/`59.79`(L3)，但 busy 仅 `49.93 core-µs`、span `63.05` ⇒ 含跨卡等待 | `~30 us` | 40 层 |
 | 3 | **`o_proj` 复核** | 慢 vLLM 2.0× 且**全额独占**；busy `1588 core-µs` vs 同量级 FLOPs 的 `qkv_proj` `276` ⇒ 差 5.8×，疑 tile/chunk 配置 | `~14 us` | 45 层 |
 | 4 | **`AR(attn)` overlap** | 独占 `25.30` 全额在关键路径，且 `busy` 仅 `25.02 core-µs` ⇒ 几乎纯等待 | `~15 us` | 45 层 |
@@ -449,12 +572,12 @@ PyPTO 列为**子项独占 = ROI 天花板**（§2.2，**不可加**，只读单
 | 6 | `softmax_reduce` 融进 attn_core | 独占 `13.19`，vLLM 已融合 ⇒ 存在性证明 | `~13 us` | **仅 12 full 层** |
 | 7 | dense 层裸速度 | `dense_mlp` 1.57×、AR 1.85×、pre-FFN norm 4.88×，无 overlap 可藏 | — | 仅 3 层 (3.8%) |
 
-**已确认没有空间的方向**（不要再立项）：
+**在该历史 R5 对照中已确认没有空间的方向**（不要据此覆盖 r9 结论）：
 `routed_gmm1`（已打平 `41.72` vs `42.52`）、`shared_expert`（独占 `8.10`，藏在 dispatch 后）、
 `head_gate` / `residual_snapshot` / `dispatch` 全部子项（独占 ≈ `0.00`，对 ITL 免费）、
 `input_norm`（虽慢 2.8× 但独占 `0.01`）。
 
-**优化排序的第一性原则**（§7.2）：`moe_swa` 一类占 decode step 的 **66.6%**。
+**历史优化排序的第一性原则**（§7.2）：`moe_swa` 一类占 decode step 的 **66.6%**。
 候选 1/2 直接命中它；候选 6 只作用于 12 个 full 层，全网权重上限 24.4%；
 候选 7 上限 3.8%。
 
