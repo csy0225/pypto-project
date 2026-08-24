@@ -1,5 +1,9 @@
 # 2026-08-23 · 全栈升级候选镜像三门实测（精度 / ITL / 前五层 swimlane）
 
+> **历史受阻候选，已由 2026-08-24 r9 最终发布取代。** 当前结论、最终 pins、
+> registry digest、H4 `all/none` 性能口径及前五层正式 admission 见
+> [`2026-08-24-upgrade-r9-release.md`](2026-08-24-upgrade-r9-release.md)。
+
 | 字段 | 值 |
 |------|----|
 | **镜像** | `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260822`，manifest `sha256:cafbc4d9399b14da3fa75370f0097d6032a41bc69ee7b3b5838745b9e62b509c`、config `sha256:2907eab75dfd889d5d5fce07e3c01d52e4317809fa5a7ddeed0b15ec3a2085f6` |
@@ -105,7 +109,7 @@ artifacts：`0162:/mnt/persist/chensiyu/workspace/upgrade-20260821/precision-202
 |---|---:|---:|
 | **本候选镜像** | **47.993** | — |
 | K8 镜像 `076af8a1`（上一个镜像） | 32.14 | **+15.85 ms / +49.3%** |
-| R5 source-overlay（当前 MoE 生产基线） | 26.329 | +21.66 ms / +82.3% |
+| R5 source-overlay（升级前的历史 MoE 基线） | 26.329 | +21.66 ms / +82.3% |
 | Wave5 镜像（完整准出回退基线） | 49.796 | −1.80 ms |
 
 **context 曲线完全平**：1024 → 65536 只从 `48.293` 走到 `47.963`（`−0.33 ms`，噪声内）。

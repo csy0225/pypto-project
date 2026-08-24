@@ -3,7 +3,14 @@
 > 每个子任务一张卡片：current-source问题实证 / producer-to-lifetime链路 / 五类差异归属 / capacity与layout / 如何生效 / 参考 / 改法 / 验证 / 落地边界。shape只用于容量和layout说明，不得单独用于架构判断。
 > HLD 见 [`01-system-design.md`](01-system-design.md)，状态见 [`task-tracking.md`](task-tracking.md)。
 >
-> **2026-08-08 current-source override（优先于下方历史正文）**：`P/` 当前必须读
+> **2026-08-24 current override（优先于下方历史正文）**：`P/` 当前必须读
+> `pypto-lib@bf3ff440`，配套 pypto 为 `519b588a`。upgrade r9 manifest
+> `sha256:b637f00c…a71690f6` 已完成 precision、Main/MTP liveness、L3/L4 exact 与
+> 8/8 chip swimlane admission；H4 性能必须绑定
+> `PYPTO_H4_RESIDENT=all`。完整证据见
+> [`../../benchmark/2026-08-24-upgrade-r9-release.md`](../../benchmark/2026-08-24-upgrade-r9-release.md)。
+>
+> **历史：2026-08-08 current-source 快照**：`P/` 当时读取
 > `pypto-lib stepfun/develop@491267c45875e9b1e0071eed224e2e73526799e2`；
 > 配套 PyPTO 为
 > `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。
@@ -12,7 +19,7 @@
 > rollback selector、自定义 Main module/name 参数和旧 opt compatibility
 > package/aliases 已删除。历史 `c9af5790` image manifest
 > `sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479`
-> 已通过 0162 BS1×64K Attention/ITL/DFX partial gate；当前 `491267c4`
+> 已通过 0162 BS1×64K Attention/ITL/DFX partial gate；当时 `491267c4`
 > 尚无 immutable image。Wave5 保留为最后一个完整
 > production release-qualified 回退基线，历史 R1/R2 已 supersede。
 > 下方基于旧 unroll/generator 的内容

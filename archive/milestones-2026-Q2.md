@@ -1,5 +1,36 @@
 # Milestones —— 2026 Q2
 
+## 2026-08-24 —— 五仓全栈升级 r9 发布、H4 准出与远端同步 ✅
+
+**镜像**：`hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260824-r9`，
+manifest `sha256:b637f00c66d4dc976c053c617d2e19e6d6d66f68f4bef30250984da7a71690f6`、
+config `sha256:f6c8f72eecad0a9d40d0c4ea55afaab09dd4e2f5fe54d6a091e332465e421dae`。
+Registry push、raw manifest/config、fresh pull 全部验证通过。
+
+**最终 pins / `stepfun/develop`**：pypto `519b588a`、pypto-lib `bf3ff440`、
+pto-isa `cd4a3d3f`、PTOAS `307d0484`、simpler `85a82c45`、ptoas-bin `v0.57`。
+五仓用 `force-with-lease` 推送并远端复核；simpler 非 FF，旧 `e2efebcb` 原子备份到
+`backup/stepfun-develop-pre-upgrade-20260824-e2efebcb`。
+
+**门结论**：
+
+- precision `127/128 = 99.21875%`（唯一 mismatch step 94；不是 128/128）；
+- Main 8-step、MTP single、MTP batch16 全部 PASS；
+- immutable digest combined gate：L3/L4 `torch.equal=true`，8/8 rank
+  `chip_swimlane_records.json`，DFX analyzer `pass=true/blockers=[]`，recv_meta ready；
+- 前五层 `L0_full_dense / L1_swa_dense / L2_swa_dense / L3_swa_moe / L4_full_moe`；
+- 最终 release contract `pass=true`。
+
+**ITL 口径纠正**：同一 r9 digest 默认 unset=`none` 的 64K/1000 p50 是
+`27.812 ms`；显式 `PYPTO_H4_RESIDENT=all` 后为 `22.253 ms`。H4 令
+`bind.args` p50 `6.461 → 0.063 ms`，代价 `99.64 MiB/rank`。镜像未 bake 该 env，
+所以 `22.253 ms` 必须写成“r9 + H4 all”，正式 deployment 仍需接线。
+
+权威报告：
+[`../benchmark/2026-08-24-upgrade-r9-release.md`](../benchmark/2026-08-24-upgrade-r9-release.md)；
+最终合同：`0162:…/r9-release-admission-20260824-151848/release_contract.json`
+（SHA256 `1cd646e3…a08a6`）。
+
 ## 2026-08-21 —— 仓库蒸馏：建立 T0–T6 分层 + 坑案例集 📚
 
 **动因**：每 session 必读路径已到 2018 行（`STATUS.md` 644 + `blockers.md` 690 +
@@ -1244,6 +1275,7 @@ max|value|=0`（dummy zero weight 期望零输出）。Run time 6.69s。
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------|-----------|
+| 2026-08-24 | **五仓全栈升级 r9 发布 + 同步（IMG `b637f00c…`）** | `519b588a` | `bf3ff440` | `cd4a3d3f` | `307d0484` | `85a82c45` | `v0.57` |
 | 2026-08-12 | TP all-reduce single-row selector 合入（SRC） | `1c048a74` | **`69ad31e4`** | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
 | 2026-08-12 | RMS→QKV critical prestage I7（SRC） | `1c048a74` | `e5e26f9f` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
 | 2026-08-12 | `fa58b5cf` post-merge 性能验收 **NO-GO**（ITL `+4.233%`、五层 39/40） | `1c048a74` | `fa58b5cf` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |

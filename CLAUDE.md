@@ -51,7 +51,7 @@ code block 一律不译。
 |------|--------|----------|
 | `design/` | HLD/LLD 设计（context→系统设计→详细设计） | 状态、日志、blocker |
 | `planning/` | roadmap（规划）、handoff（接力）、活跃 phase | 每日流水（去 archive） |
-| `postmortems/` | 已解/已定案问题的五段复盘 + T0 教训索引 + T0′ 坑案例集 | 活跃未分析的 blocker（去 blockers.md） |
+| `postmortems/` | 已解/已定案问题的六段复盘 + T0 教训索引 + T0′ 坑案例集 | 活跃未分析的 blocker（去 blockers.md） |
 | `deployment/` | 纯生产 runbook | troubleshooting 复盘（去 postmortems） |
 | `reference/` | canonical 测试、4+1 视图、编程 API、约束、执行主机契约 | 跨仓设计（去 design） |
 | `archive/` | session 日志、原型摘要、已完成 phase、交付 | 当前状态 |
@@ -66,7 +66,7 @@ code block 一律不译。
 | phase 状态变化 | [`planning/phases/NN-*.md`](planning/phases/) 的 Status 段 + [`planning/roadmap.md`](planning/roadmap.md) 表 + [`STATUS.md`](STATUS.md) Phase 表 |
 | session 末尾 milestone | 追加到 [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)（**每日流水 SSOT，不写 STATUS/roadmap**） |
 | 新 blocker 发现 | [`blockers.md`](blockers.md)（≤25 行）+ [`STATUS.md`](STATUS.md) §8 摘要一行 |
-| blocker **解决或定案**（含负结论） | 从 [`blockers.md`](blockers.md) 删掉 → 新建/更新 [`postmortems/NN-*.md`](postmortems/README.md)（五段模板 [`postmortems/TEMPLATE.md`](postmortems/TEMPLATE.md)）+ 在 `postmortems/README.md` 加一行 + 把可复用教训提炼进 [`postmortems/LESSONS.md`](postmortems/LESSONS.md) + 更 STATUS 摘要 |
+| blocker **解决或定案**（含负结论） | 从 [`blockers.md`](blockers.md) 删掉 → 新建/更新 [`postmortems/NN-*.md`](postmortems/README.md)（六段模板 [`postmortems/TEMPLATE.md`](postmortems/TEMPLATE.md)）+ 在 `postmortems/README.md` 加一行 + 把可复用教训提炼进 [`postmortems/LESSONS.md`](postmortems/LESSONS.md) + 更 STATUS 摘要 |
 | 一个方向被否决（NO-GO） | [`progress/landed.md`](progress/landed.md)「已否决，不要重试」加一行 —— **让下一位不重跑它** |
 | 设计变更（架构/接口/数据流） | 对应 [`design/`](design/) 的 HLD 或 LLD |
 | 组件 pin 移动（任意 fork push） | [`STATUS.md`](STATUS.md) §1/§2（当前值）+ [`progress/landed.md`](progress/landed.md)（门证据）+ [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) pin 时间线 |
@@ -96,7 +96,7 @@ unset PAT
 
 ## 铁律（每个 session 都适用）
 
-0. **★ 开工前必读 [`postmortems/LESSONS.md`](postmortems/LESSONS.md)。** 那一页是 16 份复盘
+0. **★ 开工前必读 [`postmortems/LESSONS.md`](postmortems/LESSONS.md)。** 那一页是全部复盘
    「如何避免」段的触发式索引（≤150 行），按 流程 → 整网 → 部署 → codegen 分段。
    **不读它就动手，等于自愿重犯已经付过学费的错**（本项目已有多次重犯记录，见
    [`postmortems/12-integration-churn-meta.md`](postmortems/12-integration-churn-meta.md)）。

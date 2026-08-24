@@ -38,7 +38,7 @@ vLLM fork（见 [`design/00-context-and-goals.md`](design/00-context-and-goals.m
 |------|--------|
 | [`design/`](design/) | **软件工程设计**：context + 两子系统的 系统设计(HLD) + 详细设计(LLD) |
 | [`planning/`](planning/) | roadmap + 活跃 phase（+ T6 handoff） |
-| [`postmortems/`](postmortems/) | **工程专项复盘**（16 篇，五段：背景/现象/根因/解决/弯路/避免）+ T0 索引 + 坑案例集 |
+| [`postmortems/`](postmortems/) | **工程专项复盘**（六段：背景/现象/根因/解决/弯路/避免）+ T0 索引 + 坑案例集 |
 | [`deployment/`](deployment/) | **生产部署 runbook**：三剑合璧 / 机器恢复 / 版本矩阵 |
 | [`reference/`](reference/) | canonical 测试、4+1 视图、编程 API、约束、执行主机契约 |
 | [`archive/`](archive/) | 历史（追加式）：session 日志、原型摘要、已完成 phase、交付快照 |

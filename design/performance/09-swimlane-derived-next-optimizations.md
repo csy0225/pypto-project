@@ -1,5 +1,13 @@
 # 由 swimlane 推导的下一批优化（2026-08-21）
 
+> **2026-08-24 结果更新（优先于下方立项时快照）**：H4 已以
+> `PYPTO_H4_RESIDENT=all` 落地并进入 upgrade r9，`bind.args`
+> `6.461 → 0.063 ms`、64K/1000 ITL `27.812 → 22.253 ms`；H5 已恢复
+> 8/8 rank chip swimlane，L3/L4 exact、analyzer/outer admission PASS。
+> 镜像未 bake H4 env，正式 deployment 接线仍 open。证据见
+> [`../../benchmark/2026-08-24-upgrade-r9-release.md`](../../benchmark/2026-08-24-upgrade-r9-release.md)。
+> 下文保留 2026-08-21 的立项推导与当时尚未验证的假设，不能覆盖该结果。
+>
 > **触发**：R6-R9 dispatch 域小算子融合线整体关闭后，重新用 swimlane 定方向。
 > **方法论基准**：上游 `pypto:docs/zh/user/performance/`（`origin/main@5b15048e8`，
 > 8 篇：`index / 00-swimlane / 01-task-granularity / 02-runtime-overhead /
@@ -12,8 +20,8 @@
 
 | # | 候选 | ROI 上界 | vs 地板 `0.616 ms` | 状态 |
 |---|------|---------:|---:|------|
-| **1** | **H4 host `bind.args`**（先归因，再 bind-once / hoist；疑与 **H2** 同一件事） | **6.12 ms** | **9.9×** | ⬜ 新立项 |
-| **2** | **观测性修复**：`early_dispatch` swimlane 记录缺失 → 恢复 8/8 rank 可分析 | 非性能项，是 3/4 的前置 | — | ⬜ 新立项 |
+| **1** | **H4 step-invariant constants resident** | 实测 `5.559 ms` | **9.0×** | ✅ r9 落地；deployment env 待接 |
+| **2** | **观测性修复**：恢复 8/8 rank chip swimlane + outer admission | 非性能项，是 3/4 的前置 | — | ✅ r9 收口 |
 | **3** | K10 去掉剩余一次阻塞 host control round | `0.45–0.53 ms` | `0.73–0.86×` ⚠ 需紧 bracket | ⬜ 已登记 |
 | **4** | MoE 阶段预算（`E0→E7` 269 → <200 µs） | `2.90–3.02 ms` | `4.7–4.9×` | ⛔ gated（见 §4） |
 
@@ -195,6 +203,10 @@ H2 = `submit` 阶段 `3.49 ms`（2026-07-29，bs=16 / ITL 65 ms era）；
 
 ## 6. H4 的实施顺序（每步都有独立可判的产出）
 
+> **结果**：最终没有走“手改生成 `host_orch.py` hoist”路线，而是通过 holder 把
+> 4 个 RoPE 表 + 4 个 gate-R 常量一次上传并重绑为 device-resident tensor。
+> 下表是立项时的历史分解；正式落地与门以本文顶部 2026-08-24 更新为准。
+
 > 纪律：**先穷举现有 artifact，再考虑占卡**（见
 > [`../../postmortems/12-integration-churn-meta.md`](../../postmortems/12-integration-churn-meta.md) 根因 11：
 > "为了拿一个数去写新候选，而那个数已经躺在失败 run 的日志里"）。
@@ -231,7 +243,8 @@ H2 = `submit` 阶段 `3.49 ms`（2026-07-29，bs=16 / ITL 65 ms era）；
 
 ## 8. 明确未确立（不要当结论引用）
 
-1. `bind.args ≡ H2` 是**强怀疑，未证实**（§5.3）。H4a/H4b 就是去证它。
+1. 历史假设 `bind.args ≡ H2` 没有成为最终落地机制；r9 实测确认主要可回收项是
+   8 个静态大参数的每步 H2D/bind，最终用 resident constants 解决。
 2. §3 的 `×21` 整网外推是**层混比量级估计**，不是 release 统计量；插桩 run 的绝对
    时间按纪律不可当干净延迟。
 3. `front-gap` 是分析器自有术语；本文按"派发侧分量"解读。即使换解读，

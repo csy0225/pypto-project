@@ -1,7 +1,7 @@
 # 踩坑案例集（CASEBOOK）
 
 > **按现象查的单点坑档案。** 每条写清 背景 / 现象 / 过程 / 处置（解决还是绕开）。
-> 最后更新：2026-08-23。**真正的约束是每条 ≤14 行 + 索引一行一条**（全文 ≤400 行）——
+> 最后更新：2026-08-24。**真正的约束是每条 ≤14 行 + 索引一行一条**——
 > 一条写到像复盘那么长，说明它该独立成 `NN-*.md`。
 
 ## 这一页和别的页什么关系
@@ -10,7 +10,7 @@
 |---|---|---|---|
 | [`LESSONS.md`](LESSONS.md) | **动作**（你正要做 X） | **开工前**扫一遍（铁律 §0 强制） | 一行 |
 | **本页 CASEBOOK** | **现象**（你看到了 X） | **撞上了**再查 | 一条 ≤14 行 |
-| [`NN-*.md`](README.md) 16 份复盘 | **error signature / 一类根因** | 要完整证据链、消融矩阵、弯路 | 一篇 |
+| [`NN-*.md`](README.md) 复盘 | **error signature / 一类根因** | 要完整证据链、消融矩阵、弯路 | 一篇 |
 
 **只收本仓该管的坑**：项目级 / 环境级 / 运维级 / **测量与诊断方法论级**，以及
 **仍在生效的绕路台账**。kernel 硬限制与 dev-workflow 坑归 sub-repo（见文末路由表），
@@ -52,7 +52,7 @@
 | [C6](#c6) | `remote_store` 紧接 `notify`，接收方 payload 部分为 `0` | ⏸ |
 | [C7](#c7) | 单卡 ST 报 L1/UB overflow（`sh_mlp` 1.66 MB > 512 KB） | ✅ 认知 |
 | [C8](#c8) | `fatal error: error in backend: not support bf16 type cast` | 🩹 |
-| [C9](#c9) | canonical structural analyzer 恒 `FAIL_CLOSED` | ⏸ |
+| [C9](#c9) | structural analyzer PASS，但仍报 `PENDING_EXTERNAL_GATE` | ✅ |
 | [C10](#c10) | 构建期 `sed` 掉 onboard `a5`，编完再 `git checkout --` 还原 | 🩹 |
 
 ---
@@ -418,15 +418,16 @@
 - **出处**：上层 `CLAUDE.md` 2026-06-17 记录
 
 <a id="c9"></a>
-### C9. canonical structural analyzer 恒 `FAIL_CLOSED` ⏸
+### C9. structural analyzer PASS，但仍报 `PENDING_EXTERNAL_GATE` ✅
 
-- **背景**：canonical 验收里的 structural analyzer。
-- **现象**：恒 `FAIL_CLOSED` —— 零本地 routed-token 的 early-dispatch task **缺 AICore swim record**。
-- **过程**：既有限制，**不是**某轮回归引入的。后果被低估过：8 卡里只有 rank2 可分析，
-  **一切 device 侧 cross-rank 结论都以它为前置**。
-- **处置**：⏸ 未解。补它 = 性能线的 `H5`（P1）。在解决之前**继续 fail-closed**，
-  不得用 host 独立检查覆盖 canonical structural 的 fail-closed 结论。
-- **出处**：[`../STATUS.md`](../STATUS.md) §5 / §6
+- **背景**：r9 前五层 combined focused gate。
+- **现象**：8/8 rank 的 chip swimlane 与 analyzer `pass=true`、`blockers=[]` 都齐，
+  报告却仍是 `PENDING_EXTERNAL_GATE/publication_allowed=false`。
+- **过程**：这不是 structural 回归；analyzer 按职责不消费 L3/L4 hidden golden，必须
+  fail-closed 等 outer admission。旧的“缺 early-dispatch record、只有 rank2 可分析”已由 r9 修复。
+- **处置**：✅ 保留 analyzer 原报告，不手改；由 outer gate 做 `torch.equal`，再让最终
+  release contract 汇总。r9 outer admission 与 release contract 均 `pass=true`。
+- **出处**：[`../benchmark/2026-08-24-upgrade-r9-release.md`](../benchmark/2026-08-24-upgrade-r9-release.md) §4
 
 <a id="c10"></a>
 ### C10. 构建期 sed 掉 onboard `a5` 🩹
@@ -454,7 +455,7 @@
 | dev workflow（stale `.pyc`、三件套激活、HTTP/2 push 超时、netboot 丢 SSH key、`gh` 不可用） | sub-repo `pypto-lib/docs/dev-workflow-gotchas.md` |
 | 部署失败（`507899`、simpler init `507018`、driver upgrade device busy、`-Werror` buffer_elems、netboot 丢 cmake / libstdc++-12-dev、containerd 重建） | [`../deployment/machine-recovery.md`](../deployment/machine-recovery.md)「常见部署失败」 |
 | 三件套版本绑定为什么是硬的 | [`../deployment/phase16-three-pillars.md`](../deployment/phase16-three-pillars.md) |
-| 一个 error signature 的完整证据链 / 消融矩阵 / 走过的弯路 | [`README.md`](README.md) 16 份复盘 |
+| 一个 error signature 的完整证据链 / 消融矩阵 / 走过的弯路 | [`README.md`](README.md) 复盘 |
 | 已被否决、不要重试的方向 | [`../progress/landed.md`](../progress/landed.md)「已否决，不要重试」 |
 
 ## 怎么加一条

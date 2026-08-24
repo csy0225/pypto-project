@@ -5,6 +5,46 @@
 
 ## 已验证组合
 
+### 当前 upgrade r9 release admission（2026-08-24）
+
+> **0162 immutable-image admission：PASS。** Registry push、raw manifest/config、
+> fresh pull、precision、Main/MTP liveness、前五层 hidden/swimlane/DFX 与五仓同步均闭环。
+> ⚠ 性能准出依赖运行合同 `PYPTO_H4_RESIDENT=all`；镜像 Config Env 没有内置该值，
+> 未设置时代码默认 `none`。
+
+```text
+tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260824-r9
+manifest: sha256:b637f00c66d4dc976c053c617d2e19e6d6d66f68f4bef30250984da7a71690f6
+config:   sha256:f6c8f72eecad0a9d40d0c4ea55afaab09dd4e2f5fe54d6a091e332465e421dae
+runtime:  PYPTO_H4_RESIDENT=all
+```
+
+| 槽位 | Pin | 备注 |
+|------|-----|------|
+| Driver | `25.5.2` | 0162 device verified |
+| Firmware | `7.8.0.7.220` | 与 driver 成对 |
+| CANN | `9.0.0-beta.1` | NOT GA |
+| pypto | `519b588a7a6461cac0e443e853accf29479c1d15` | `stepfun/develop` 远端已复核 |
+| pypto-lib / vllm-pypto | `bf3ff4400082f74b35fbdb5b3e0f5f4bf51ce373` | H4 resident constants + r9 holders/DFX |
+| pto-isa | `cd4a3d3f7a1a27fcfe536f617e9bca3008929664` | 上游声明 pin |
+| PTOAS | `307d0484a9e7d5e36f01b253d2bebe4d2f45fe81` | source pin |
+| simpler | `85a82c454074c069315ed6485033c3c2b136e562` | `stepfun/develop`；旧 tip 有 backup ref |
+| ptoas-bin | `v0.57` | 与当前 pypto 声明配对 |
+| vLLM patch | `1b3e538c35999e62b6d24e0651b3a85b7d16c826` | immutable checkout |
+
+验证结论：
+
+- 64K/1000：默认 `none` p50 `27.812 ms`；`all` p50 `22.253 ms`；
+- precision `127/128 = 99.21875%`，`all/none` 输出 parity；
+- Main 8-step、MTP single、MTP batch16 PASS；
+- L3/L4 `torch.equal=true`，8/8 rank `chip_swimlane_records.json`；
+- final contract：
+  `0162:…/r9-release-admission-20260824-151848/release_contract.json`，`pass=true`。
+
+完整记录：
+[`../benchmark/2026-08-24-upgrade-r9-release.md`](../benchmark/2026-08-24-upgrade-r9-release.md)。
+该组合不自动声明 Phase 28 live serving 已完成；正式 launcher 仍需接入 H4 env。
+
 ### K8 immutable image（精度 + ITL gate PASS，2026-08-11）
 
 > **audit/smoke + 双精度门 + clean ITL：PASS ON 0162（digest-only，无 overlay）。**
@@ -44,7 +84,7 @@ config:   sha256:a9d111880883cea0b02e425fdfeaccc2b14bb1d1174c0b73488d8ee6d8004d3
 | Firmware | `7.8.0.7.220` | 与 driver 成对 |
 | CANN | `9.0.0-beta.1` | image config/runtime audit PASS |
 | pypto | `8e92b46808f9f7c09b6431ad4691503f09c12ee5` | prepared-worker immutable swimlane dep-gen reuse |
-| pypto-lib / vllm-pypto | `c9af5790d5fe450e14fd43c88099b87539089d17` | 历史 image pin；不包含当前 `491267c4` |
+| pypto-lib / vllm-pypto | `c9af5790d5fe450e14fd43c88099b87539089d17` | 历史 image pin；不包含当时 pending 的 `491267c4` |
 | pto-isa | `ecb6c303f797749f811a494742c3c08156aacabb` | immutable pin |
 | PTOAS | `fc8c6caee561914b4fb991dfc8427bb63194269e` | immutable pin |
 | simpler | `e2efebcbd190302609c0775d2984f409f5f42c76` | pypto runtime gitlink |
@@ -64,7 +104,7 @@ BS1×每请求64K 整网 50 次 min/mean/p50/p99/max =
 完整记录：
 [`../benchmark/2026-08-06-attention-taskmajor-canonical.md`](../benchmark/2026-08-06-attention-taskmajor-canonical.md)。
 
-### 当前 pending latest-source MoE spec（未构建）
+### 历史 pending latest-source MoE spec（未构建，已由 r9 supersede）
 
 | 槽位 | Pin | 备注 |
 |------|-----|------|
@@ -78,7 +118,7 @@ BS1×每请求64K 整网 50 次 min/mean/p50/p99/max =
 构建 spec：
 [`docker/builds/stepfun-develop-20260808-moe-opt-latest-source.env`](docker/builds/stepfun-develop-20260808-moe-opt-latest-source.env)。
 
-### 最后一个完整 release-qualified 回退基线：Wave5（2026-08-03）
+### 历史完整 production-matrix 回退基线：Wave5（2026-08-03）
 
 > **发布状态：RELEASE-QUALIFIED ON 0162。** 其它机器/架构未由本轮独立证明。
 
@@ -115,8 +155,10 @@ Wave3/Wave4 为历史中间版本；Wave4 的 TP-spread blocker 已由 Wave5 关
 | image | manifest `sha256:fb613c2d5a74592f248c6d923e3ada6582edbe40349ada530017e622ca735b23` | 从未发布 |
 | 最终状态 | REVOKED：prepared-swimlane 接口缺失 | NEVER PUBLISHED / SUPERSEDED |
 
-R1 不得用于交付；R2 不得恢复。二者只作为失败过程记录；当前源码和 pending
-构建对象以本页 2026-08-08 spec 为准，最后一个完整 release 仍是 Wave5。详见
+R1 不得用于交付；R2 不得恢复。二者只作为失败过程记录；在该历史阶段，源码和 pending
+构建对象以本页 2026-08-08 spec 为准，当时最后一个完整 production-matrix release
+仍是 Wave5。本段的源码/pending 目标已由本页顶部 r9 pins 取代；r9 是升级任务
+release admission，不取代 Wave5 的历史完整 production-matrix 回退口径。详见
 [`../benchmark/2026-08-05-attention-canonical-r1-r2.md`](../benchmark/2026-08-05-attention-canonical-r1-r2.md)。
 
 ### 历史 clean canonical candidate（2026-08-02）
@@ -210,8 +252,8 @@ R1 不得用于交付；R2 不得恢复。二者只作为失败过程记录；�
 - 已发布 0726 镜像的 N=256 raw `240/256=93.75%`；与既有 canonical N=256 artifact
   token/hidden `256/256` exact、`max_abs_diff=0`、TP spread `0.0`，
   step127/128/255 全通过；
-- 当前只证明 canonical-only Main replacement，不等价于完整 production Main+MTP serving
-  已无条件平替；
+- 该 0726/0729 历史证据只证明 canonical-only Main replacement，不等价于当时已证明
+  完整 production Main+MTP serving 可无条件平替；
 - 0728 阶段的 C/D/G 结论（BS1/2/16、N=256、Main 8-step）产自工作树 dirty 的本地 candidate，
   需在 `8459d60f` 基线上复核，跟踪见 [`../blockers.md`](../blockers.md) 与
   [`../postmortems/14-image-dirty-worktree-unreproducible-pins.md`](../postmortems/14-image-dirty-worktree-unreproducible-pins.md)。
@@ -259,10 +301,10 @@ simpler 是 pypto 的 git submodule，在 `pypto/runtime/`。`pypto` 仓的
 pin 决定编哪个 simpler commit。更新 simpler 时必须
 `git submodule update` 并 commit pypto 侧的 submodule pin。
 
-当前 latest-source canonical image 与 Wave5 回退基线的 simpler pin 都是
-`e2efebcbd190302609c0775d2984f409f5f42c76`，并由 pypto
-各自 pin 的 `runtime` gitlink 固定；Wave5 已在 0162 通过 TP-spread 稳定性
-release gate。2026-07-29 历史发布组合使用的是 simpler
+当前 r9 组合使用 simpler `85a82c454074c069315ed6485033c3c2b136e562` 与
+pypto `519b588a7a6461cac0e443e853accf29479c1d15`；两者的最终组合已在 0162
+完成 immutable admission。K8 与 Wave5 历史组合使用 simpler
+`e2efebcbd190302609c0775d2984f409f5f42c76`。2026-07-29 历史发布组合使用的是 simpler
 `8459d60f04b64b74322e965e0dd038ab26165124`，由 pypto `6933b1aa` 固定。
 **Dockerfile 里的显式 checkout 不算**——`pip install -e pypto` 期间的
 `git submodule update` 会把它切回 gitlink，所以换 simpler 必须同时 bump pypto。

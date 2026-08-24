@@ -15,17 +15,22 @@
 | **IMG** immutable-image released | 有 manifest digest，在 0162 上 **digest-only、无 source/runtime overlay** 验证过 | 这是生产可部署的形态 | 除非注明"完整"，否则不代表全矩阵准出 |
 | **SRC** source-overlay GO | 代码已合入 `stepfun/develop`，在**固定 immutable 镜像**上通过只读 `/candidate` overlay 验证 | 实现 + 该门的结论成立 | ❌ 不代表镜像已包含它；❌ 不能当镜像级准出数据 |
 
-**canonical pin 集**（下表 `偏离` 列为 `—` 即等于这一组）：
-`pto-isa ecb6c303` / `PTOAS(src) fc8c6cae` / `simpler e2efebcb` / `ptoas-bin v0.50`。
+**当前 r9 pin 集**：
+`pto-isa cd4a3d3f` / `PTOAS(src) 307d0484` / `simpler 85a82c45` / `ptoas-bin v0.57`。
+2026-08-24 之前表格中的“canonical/偏离”均按**当时**的旧 pin 集解释，不反向改写历史。
 
 ---
 
-## 当前生产真相（2026-08-21）
+## 当前生产真相（2026-08-24）
 
-- **最新完整 release-qualified 回退基线** = Wave5（`4acc77cd…`），64K p50 `49.796 ms`。
-- **最新 IMG** = K8 selective（`076af8a1…`），64K bs1 p50 `32.14 ms`；**部分准出**（batch16 / MTP / 六档未重跑）。
-- **最新 SRC tip** = pypto-lib `69ad31e4`（TP all-reduce selector）；**MoE 生产路径 = R5**（见下表末行）。
-- **权威精度门**：`hidden_sha256 = 567b206bb03d89f84020e1dddd61098a8f79f32f81b8f4fcf56443113e27f03e`、tail token `14371`、N=128 逐 token `>=95%`。
+- **最新 IMG** = upgrade r9（manifest `b637f00c…90f6`），registry fresh pull 与最终
+  release contract `pass=true`；64K/1000 p50 在默认 `none` 为 `27.812 ms`，
+  在发布合同 `PYPTO_H4_RESIDENT=all` 为 `22.253 ms`。
+- **当前 SRC tips** = pypto `519b588a` / pypto-lib `bf3ff440` / pto-isa `cd4a3d3f` /
+  PTOAS `307d0484` / simpler `85a82c45`，五仓远端 `stepfun/develop` 已复核。
+- **当前精度门**：r9 accepted oracle `127/128 = 99.21875%`（唯一 mismatch step 94）；
+  Main 8-step、MTP single/batch16 与前五层 L3/L4 exact 均 PASS。
+- ⚠ `22.253 ms` 不是镜像默认值；正式部署必须显式设置 `PYPTO_H4_RESIDENT=all`。
 
 ---
 
@@ -33,6 +38,7 @@
 
 | 日期 | 镜像 / 落地了什么 | manifest digest | pypto | pypto-lib | 偏离 canonical pin | 准出范围 | 证据 |
 |---|---|---|---|---|---|---|---|
+| 2026-08-24 | `…:stepfun-upgrade-20260824-r9` —— 五仓全栈升级 + H4 resident constants | `b637f00c66…a71690f6`（config `f6c8f72e…e421dae`） | `519b588a` | `bf3ff440` | pto-isa `cd4a3d3f` / PTOAS `307d0484` / simpler `85a82c45` / ptoas-bin `v0.57` | **升级任务准出**：registry/fresh pull、precision `127/128`、Main+MTP liveness、L3/L4 exact、8/8 chip swimlane；64K p50 `22.253 ms` **仅在 `PYPTO_H4_RESIDENT=all`**，默认 `none=27.812 ms` | [`2026-08-24-upgrade-r9-release.md`](../benchmark/2026-08-24-upgrade-r9-release.md) |
 | 2026-08-11 | `…:stepfun-develop-20260811-k8-selective` —— K8 persistent-window 选择性清零 | `076af8a167…c47f3` | `1c048a74` | `cb96747e` | — | **部分**：64K bs1 p50 `32.14 ms`（−5.02% vs pre-K8）、hidden byte-exact、N=128 `123/128`。batch16 / MTP / 六档 64K 未重跑 | [`2026-08-11-k8-selective-window-zeroing-image.md`](../benchmark/2026-08-11-k8-selective-window-zeroing-image.md) |
 | 2026-08-06 | `…-20260806-attn-taskmajor-canonical` —— task-major Attention | `3eb694e045…25479` | `8e92b468` | `c9af5790` | — | **pre-fix evidence**（不含 SWA mask 修复 `63814d4a`）：64K p50 `39.612 ms` | [`2026-08-06-attention-taskmajor-canonical.md`](../benchmark/2026-08-06-attention-taskmajor-canonical.md) |
 | 2026-08-06 | L0–L4 MoE formal 镜像（六档 focused A/B） | `cab8966816…9d88c` | `8e92b468` | `c9af5790` | — | **pre-fix evidence**：BS `1/2/4/7/8/16` × 3 轮 36/36，L3/L4 hash exact | seal `875804db…c531` |
@@ -45,11 +51,12 @@
 | 2026-07-26 | canonical-only Step3p5 release（删兼容 package/alias） | 未记录 | `ca21ab5f` | `53eb7212` | simpler `216e7632` | 与清理前镜像 N=256 token/hidden `256/256` exact | milestones 2026-07-26 |
 | 2026-07-24 | `vllm-pypto:stepfun-develop-20260724` —— IPC 权重 interior 指针 provenance 修复 | 未记录 | `ca21ab5f` | `fd26b1be` | simpler `216e7632` | 冒烟 PASS + 整网 8 步与 live vanilla 逐 token 一致 | milestones 2026-07-24 |
 
-## 表 B —— SRC（代码已合入 `stepfun/develop`，尚无包含它的 IMG）
+## 表 B —— SRC（代码已合入 `stepfun/develop`；可能已被后续 IMG 收录）
 
 | 日期 | 落地了什么 | pypto | pypto-lib | 门结论 | 证据 |
 |---|---|---|---|---|---|
-| 2026-08-15~19 | **MoE `moe-routed-packed-fusion` R5 —— 当前 MoE 生产基线** | 未移动 | `decode_fwd.py` sha `67b73589…`（⚠ commit 未记录，见「台账缺口」） | ctx-64K BS1 p50 `27.757 ms`@ITERS=100 / `26.329 ms`@ITERS=1000；`hidden_sha256=567b206b…`、tail token `14371`；`ITERS=1000` 一轮长跑 0 liveness 事件 | [`16`](../postmortems/16-dispatch-fusion-orch-decouple.md)、`0162:…/moe-routed-packed-fusion-20260815/` |
+| 2026-08-24 | 五仓升级目标同步到远端 `stepfun/develop` | `519b588a` | `bf3ff440` | pto-isa `cd4a3d3f` / PTOAS `307d0484` / simpler `85a82c45`；五仓 `force-with-lease` 后远端 SHA 逐项复核。simpler 旧 tip 备份为 `backup/stepfun-develop-pre-upgrade-20260824-e2efebcb` | [`2026-08-24-upgrade-r9-release.md`](../benchmark/2026-08-24-upgrade-r9-release.md) §5 |
+| 2026-08-15~19 | **MoE `moe-routed-packed-fusion` R5 —— 升级前的历史 source-overlay MoE 基线** | 未移动 | `decode_fwd.py` sha `67b73589…`（⚠ commit 未记录，见「台账缺口」） | ctx-64K BS1 p50 `27.757 ms`@ITERS=100 / `26.329 ms`@ITERS=1000；`hidden_sha256=567b206b…`、tail token `14371`；`ITERS=1000` 一轮长跑 0 liveness 事件 | [`16`](../postmortems/16-dispatch-fusion-orch-decouple.md)、`0162:…/moe-routed-packed-fusion-20260815/` |
 | 2026-08-12 | TP all-reduce **small-message selector**（单行 8 KiB 走静态两波 one-shot mesh，其余走三波 fallback；ownership 与 transfer chunk 解耦） | `1c048a74` | **`69ad31e4`** | unit `365 passed, 7 skipped`；Main/MTP compile + 8 卡 rows `1/3/16` PASS；Whole A/B/A `31.065/29.912/30.999 ms` = **`−1.120 ms / −3.609%`**，三臂 precision PASS。`ABA_RESULT.json` sha `383caa23…` | [`03-tp-allreduce-algorithm-comparison.md`](../design/performance/03-tp-allreduce-algorithm-comparison.md) |
 | 2026-08-12 | RMS→QKV critical prestage（I7：RMS producer 开 early resolve + 非关键 head-gate 隔离出 speculative fanout） | `1c048a74` | `e5e26f9f` | QKV Worker gap p50 `+4.77 → −1.78 µs`；raw-kernel residual p50/max `5.00/5.48 → 2.64/3.16 µs`；A/B/A `WITHIN_BASELINE_BRACKET` | [`2026-08-12-step3p5-rms-qkv-dispatch-gap.md`](../benchmark/2026-08-12-step3p5-rms-qkv-dispatch-gap.md) |
 | 2026-08-10 | P1a gate 解耦（`gate_expert_fanout` 只存 raw FP32 logits，尾巴搬进 `gate_topk`） | 未移动 | `d13b2ca6` | bs1 `36.494 → 33.849 ms`（+7.25%）、bs8 `97.528 → 91.722 ms`（+5.95%）；两档三臂 hidden byte-exact | [`2026-08-10-step3p5-p1a-gate-decouple.md`](../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md) |
@@ -85,5 +92,7 @@
    下一次碰 MoE 生产路径时，从 0162 `…/moe-routed-packed-fusion-20260815/` 反查并补进表 B。
 2. **2026-07-24 / 07-26 / 07-28 三个镜像的 manifest digest 未记录**，只有 tag。
    按 `CLAUDE.md` 判定顺序第 4 条，无 digest 的镜像不能作为发布依据。
-3. 表 A 除 Wave5 外**没有任何一行是"完整 release-qualified"**；提升到完整 production
-   需按 Wave5 同口径补 Main N=128×3、Main batch16、MTP batch1/16、六档 64K golden/A/B。
+3. r9 已按**本次五仓升级任务合同** release-admitted；Wave5 则是历史上完成
+   **完整 production matrix** 的回退基线，两种准出范围不得混写。若要把 r9 提升到
+   Wave5 同口径，还需补 Main N=128×3、Main batch16、MTP batch1/16 完整矩阵，以及
+   六档 64K golden/A/B。

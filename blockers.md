@@ -6,93 +6,29 @@
 [`benchmark/`](benchmark/) 或 0162，本文件只给指针。
 
 **协议**：blocker **定案或解决**即从本文件删掉 → 到 [`postmortems/`](postmortems/README.md) 建一篇
-五段复盘（模板 [`postmortems/TEMPLATE.md`](postmortems/TEMPLATE.md)）+ 更新
+六段复盘（模板 [`postmortems/TEMPLATE.md`](postmortems/TEMPLATE.md)）+ 更新
 [`STATUS.md`](STATUS.md) §8 摘要。**已解 / 已定案的东西不留在本文件** —— 包括"负结论"。
 
-**最后检视：2026-08-23。**
+**最后检视：2026-08-24。**
 
 ---
 
-## 🔴 ACTIVE — UPGRADE-IPC-PROV：升级基座上 IPC interior 指针无法 dispatch
+## 🔴 ACTIVE — R9-H4-DEPLOY-CONTRACT：发布性能依赖未内置的运行时 env
 
-**症状**：升级候选镜像 `sha256:43fafc02…`（门全绿）跑整网 liveness，54 个 resident arg
-构造完成后 dispatch 即失败：
+**症状**：同一 r9 manifest `b637f00c…`、同一 64K/1000 口径，默认启动（unset=`none`）
+p50 `27.812 ms`；显式 `PYPTO_H4_RESIDENT=all` 后 p50 `22.253 ms`。后者达到发布目标，
+但镜像 Config Env 没有 bake 该变量，代码默认值也是 `none`。
 
-```
-TypeError: Parameter 'input_rms__ssa_v0' shard 0: a raw-pointer DeviceTensor cannot be
-           dispatched by DistributedWorker; use this same DistributedWorker.alloc_tensor()
-SINGLE_CHIP_HIDDEN_CI=FAIL  stage=main_hidden_8step rc=1  (200.675s)
-```
+**根因**：H4 把 4 个 RoPE 表 + 4 个 gate-R 常量一次上传并常驻（`99.64 MiB/rank`），
+使 `bind.args` p50 `6.461 → 0.063 ms`；它是**部署运行合同**，不是 digest 自带属性。当前只在
+ITL/precision/swimlane gate 脚本显式注入 `all`，尚未在正式 serving launcher / manifest 中找到配置。
 
-**根因 = 两个独立缺口**（`DeviceTensor(peer_base + offset)` 是零拷贝 IPC 池的 interior 指针）：
+**解除条件**：① 正式 launcher / manifest 显式设置 `PYPTO_H4_RESIDENT=all`，并在 exact deployment
+上重跑 startup contract + 64K ITL；或 ② 修改代码/镜像默认值为 `all`，重新构建、发布并跑完整门。
+在此之前，文档必须写“r9 + H4 all = 22.253 ms”，不得写“镜像默认 = 22.253 ms”。
 
-- **A（上游新增，pypto #2273 `8662deb9` 2026-08-18）**：dispatch 改成 **address-free wire ABI**，
-  descriptor 由 `arg.buffer.tensor(...)` 导出 ⇒ `buffer is None` 的裸指针 DeviceTensor 被
-  `_require_owned_resident_tensor`（`runtime_base.py`）+ `make_tensor_arg`（`tensor_arg.py`）双重拒绝。
-  且 `DeviceTensor.__init__` 强制 `buffer.base == data_ptr`，**整池 Buffer 无法覆盖 interior 切片**。
-  旧 pypto tip `1c048a74` 无此 guard（走带地址的 `child_memory=True` ChipTensor）。
-- **B（我方 port 回退，[`postmortems/14`](postmortems/14-image-dirty-worktree-unreproducible-pins.md) 同一份 span-aware 补丁）**：
-  旧 simpler `e2efebcb` 的 `_child_prov_check_dispatch` 有
-  `_child_ptr_in_ipc_region` / `_child_ptr_in_domain_range` 两个 range 逃生门；我把
-  `import_ipc_all` 移植到 `53a50463` 时只保留了 `region_bytes` 登记（走上游按 base 精确键的
-  `_child_prov_record_domain`），**dispatch 侧的 interior 接受被丢掉**。
-  上游只吸收了 `copy_to` 那一半（`_child_prov_require_live_range` 明确接受 interior range）。
-
-- **C（上游新增，与 A 同源）**：`DeviceTensor.__getitem__` / `.reshape` 都**不带 buffer**。
-  `__getitem__` 无法带（子视图地址不等于父 `buffer.base`，需各自铸 Buffer）；`.reshape` 是**纯缺陷**
-  （地址/dtype/字节数都不变，父 Buffer 精确命名该区域）。`Buffer.tensor()` 其实支持 `byte_offset`，
-  但 `make_tensor_arg` 没传 ⇒ 现阶段"带 offset 的 provenance 视图"上游不支持。
-  我方 `Wsub`（4-bucket leading-dim 切片）正好走 `__getitem__`，所以补完 A/B 后失败点从
-  `input_rms__ssa_v0` 前移到 `moe_full_wq__ssa_v0`。
-
-**解除条件**：为每个 IPC 切片（含 `Wsub` 子视图）铸**独立 VMM_WINDOW Buffer**（`base` = 切片 VA、
-不被 `worker.free` 回收、按 `(worker_id, ptr, nbytes)` 缓存以保证 identity 稳定）并同时登记该切片
-base ⇒ A、B、C 一并解决，且 `_child_prov_check_dispatch` 无需改动（精确查找即命中），与上游零分歧。
-`region_bytes` 已在三处调用点传入，**不是**缺 `region_bytes`。
-
-**已修完（镜像 `sha256:cafbc4d9…`，A/B/C 三缺口）**：simpler `85a82c45`
-`imported_region_buffer()` + pypto `143ea205` `imported_tensor()` / `reshape` 保 buffer +
-pypto-lib `26977738` `device_tensor_slice()`。整网 liveness 与 N=128 精度门（`127/128 = 99.2%`）都过。
-
-**仍 open —— 只覆盖了整网 holder，另有三处 holder 未改（2026-08-23 实测）**：
-`five_layer_moe_holder.py:320`、`five_layer_moe_route_holder.py:377`（都是
-`device_tensor(key)[start:stop]`，修法同 `whole_decode_holder.py:328`）、
-`mtp_layer_holder.py:320`（`DeviceTensor(source.data_ptr, shape, dtype)` reshape 丢 buffer）。
-前五层 swimlane 门因此 `rc=1`、零 `l2_swimlane_records.json`。
-⚠ `mtp_layer_holder` 在名单里，而整网 liveness 是 `--skip-mtp` 跑的 ⇒ **MTP 整网在新 base 上未验证**。
-证据：[`benchmark/2026-08-23-upgrade-image-release-gates.md`](benchmark/2026-08-23-upgrade-image-release-gates.md) §3
-
----
-
-## 🔴 ACTIVE — UPGRADE-ITL-NODE-GRAPH：升级基座每步多花 8.3 ms 重建 node graph
-
-**症状**：升级候选镜像 ctx-64K BS1 p50 `47.993 ms`（iters=1000），对上一个镜像 K8
-`076af8a1` 的 `32.14 ms` 是 **+15.85 ms / +49.3%**。context 曲线**完全平**
-（1024→65536：`48.293 → 47.963`，`−0.33 ms`），而 attention 工作量必然随 context 涨
-⇒ 回退全在一个**与 context 无关的固定开销**里。
-
-**根因（span 级已定位，未定案）**：三份日志同脚本聚合（`inv>=20` p50，升级把
-`simpler_run.*` 改名成 `chip.run.*`）：
-
-| span | K8 32.14 | R5 26.33 | 候选 47.99 |
-|---|---:|---:|---:|
-| 每 rank run | 29.261 | 24.122 | **26.974** |
-| `…bind.args` | 6.862 | 6.267 | **5.843** |
-| **`node.graph_build`** | — | — | **8.326** |
-
-**device 侧和 `bind.args` 都没回退**（run 比 K8 还快、`bind.args` 三者最低）。回退是**新增的
-parent 侧 `node.*` 层**：`node.graph_build` 991 样本 / 991 步 ⇒ **每步重建一次**，而
-`chip.run.bind.prebuilt` 只要 `0.003 ms`（prebuilt 快路径存在但 node 层没用上）。
-最可疑 = 上游 pypto #2273 address-free wire ABI 把 descriptor 改成每次 dispatch
-由 `arg.buffer.tensor()` 导出。**H4 针对的正是这一项。**
-
-**已证伪**：不是「新 base 默认开 host STRACE 导致日志放大」—— 旧 base `e2efebcb` 同样
-`#define SIMPLER_HOST_STRACE 1`，两个基线日志各有 8325 / 8532 条 `[STRACE]`，之前 grep
-不到只因 span 改名。
-
-**解除条件**：让 node graph 在 step 之间复用（或证明 8.3 ms 是必需的），把 ctx-64K p50 拉回
-`≤32.14 ms` 量级；顺带复测 H4。
-证据：[`benchmark/2026-08-23-upgrade-image-release-gates.md`](benchmark/2026-08-23-upgrade-image-release-gates.md) §2.2
+**证据**：[`benchmark/2026-08-24-upgrade-r9-release.md`](benchmark/2026-08-24-upgrade-r9-release.md) §2；
+[`postmortems/18`](postmortems/18-upgrade-itl-fixed-cost-runtime-contract.md)。
 
 ---
 

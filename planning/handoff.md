@@ -1,90 +1,88 @@
 # 接力上下文（Handoff）
 
-> **T6 = 纯指针 + "现在接什么"。最后更新：2026-08-21。预算 ≤90 行。**
+> **T6 = 纯指针 + “现在接什么”。最后更新：2026-08-24。预算 ≤90 行。**
 >
-> 开工前必读 → [`../postmortems/LESSONS.md`](../postmortems/LESSONS.md)　当前真相 → [`../STATUS.md`](../STATUS.md)
-> 落地台账 → [`../progress/landed.md`](../progress/landed.md)　未决 → [`../blockers.md`](../blockers.md)　流水 → [`../archive/milestones-2026-Q2.md`](../archive/milestones-2026-Q2.md)
->
-> ⚠ 历史 `fa58b5cf` NO-GO 与 `e5e26f9f` 中间态**不要复制回当前结论**。
+> 当前真相 → [`../STATUS.md`](../STATUS.md)　落地台账 →
+> [`../progress/landed.md`](../progress/landed.md)　未决 →
+> [`../blockers.md`](../blockers.md)　完整 r9 证据 →
+> [`../benchmark/2026-08-24-upgrade-r9-release.md`](../benchmark/2026-08-24-upgrade-r9-release.md)
+
+## 已完成的交付基线
+
+```text
+image:
+  hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260824-r9
+  manifest sha256:b637f00c66d4dc976c053c617d2e19e6d6d66f68f4bef30250984da7a71690f6
+  config   sha256:f6c8f72eecad0a9d40d0c4ea55afaab09dd4e2f5fe54d6a091e332465e421dae
+
+stepfun/develop:
+  pypto      519b588a7a6461cac0e443e853accf29479c1d15
+  pypto-lib  bf3ff4400082f74b35fbdb5b3e0f5f4bf51ce373
+  pto-isa    cd4a3d3f7a1a27fcfe536f617e9bca3008929664
+  PTOAS      307d0484a9e7d5e36f01b253d2bebe4d2f45fe81
+  simpler    85a82c454074c069315ed6485033c3c2b136e562
+```
+
+最终合同：
+
+```text
+0162:/mnt/persist/chensiyu/workspace/upgrade-20260821/
+  r9-release-admission-20260824-151848/release_contract.json
+```
+
+`pass=true`：registry fresh pull、precision `127/128`、Main/MTP liveness、
+L3/L4 exact、8/8 chip swimlane 与五仓远端同步均已闭环。
 
 ## 现在接什么（按优先级，只有三条）
 
-### 1. 基于 `pypto-lib@69ad31e4` 构建 immutable candidate image ← 最高优先
+### 1. 把 H4 运行合同接入正式 deployment ← 最高优先
 
-TP all-reduce single-row selector 的**代码与 source-overlay 门都已完成**，
-这个专题只剩镜像级 qualification。做法与准出清单见 [`../STATUS.md`](../STATUS.md) §6 第 1–5 条。
-**分账铁律**：source-overlay 与 image gate 不得混写；新镜像闭环前不得写
-production / release-qualified。
+同一 r9 digest：
 
-### 2. ★★ 新性能主线：H4 host `bind.args` = `6.12 ms` ≈ ITL 的 23%
+```text
+unset/default none             64K/1000 p50 27.812 ms
+PYPTO_H4_RESIDENT=all          64K/1000 p50 22.253 ms
+```
 
-纯 host 侧参数绑定，与 `runner_run` 加性（对照臂 `5.87 ms`）——
-**ROI 上界 `6.12 ms` ≈ 9.9× 地板**，比 dispatch 域任何 small-op 融合大一到两个数量级。
-这是 dispatch 线关闭时从同一份 STRACE 里顺手捡到的副产品。
+镜像 Config Env 没有 bake `PYPTO_H4_RESIDENT`，代码默认 `none`。正式 serving
+launcher / manifest 必须显式设置：
 
-已按 swimlane 排序立项：**H4（P0）** + **H5（P1，`early_dispatch` swim record 缺失
-⇒ 8 卡里只有 rank2 可分析，是一切 device 侧 cross-rank 结论的前置）**；`K10` 降到 H4 之后。
-★ **强怀疑 `bind.args ≡ H2`**（未证实）—— H4a/H4b 就是去证它，**两步都不占卡**。
-实施顺序（H4a 归因 → H4b 判定 ≡H2 → H4c cheap gate 手改 `host_orch.py` hoist →
-H4d 改 overlap → H4e 整机锁 A/B/A）与风险说明：
-[`../design/performance/09-swimlane-derived-next-optimizations.md`](../design/performance/09-swimlane-derived-next-optimizations.md)。
-看板：[`../design/performance/task-tracking.md`](../design/performance/task-tracking.md)。
+```bash
+PYPTO_H4_RESIDENT=all
+```
 
-### 3. vLLM-Ascend MoE Trace 对齐 → P1 `routed_gmm1_swiglu_quant`
+接线后在 exact deployment 上重跑 startup contract + 64K ITL，并把 effective env
+写入产物。若选择改代码默认或 bake 镜像，必须重建、重新发布并重跑完整 r9 门。
+跟踪：[`../blockers.md`](../blockers.md) `R9-H4-DEPLOY-CONTRACT`。
 
-0162 clean worktree `…/develop-worktrees/vllm-moe-trace-align-20260812`（branch
-`perf/vllm-moe-trace-align-20260812`，HEAD `9ca01d24`）。K8 digest `076af8…` 上 source-overlay
-whole compile `COMPILE_OK 11.4s`（**只代表编译兼容**；该容器 PATH 无 `pytest`、`rc=127`，
-单测未运行 —— 不能据此推断镜像内无 pytest package）。
+### 2. 继续 Phase 28 live serving
 
-**P1 目标** = regular L3–L42 的 `routed_gmm1_swiglu_quant` primitive + `(expert, source-rank)`
-combine data-work bundle。约束：down 与 L43/L44 specialization 保持独立；completion 必须选
-per-expert aggregator 以保留 36 credits，或版本化 `N_COMPLETIONS` 并重验 epoch/wraparound；
-生成码必须证明 payload 后、credit 前有显式 `PIPE_ALL`/release seam（**不能假设 notify 自带
-release** —— 见 [`../blockers.md`](../blockers.md) UPSTREAM-NOTIFY-FENCE）。
-⚠ 捕获路径是 local routing + grouped experts + TP AllReduce，**不是** PyPTO 的 EP8
-dispatch/combine —— 不要照搬路由/通信拓扑。
-完整三列表与验收门：[`../benchmark/2026-08-12-vllm-ascend-decode-moe-trace-gap.md`](../benchmark/2026-08-12-vllm-ascend-decode-moe-trace-gap.md)。
+按顺序做：
 
----
+1. live prefill / KV-fill；
+2. vLLM paged-KV + dynamic batch；
+3. 消除 vLLM 权重 + exporter 权重 + runtime working set 的 3-way HBM；
+4. live token-exact A/B + Main→MTP absolute gate。
 
-## 已关闭：MoE dispatch 域小算子融合线（2026-08-21 收盘）
+入口：
+[`phases/28-live-integration.md`](phases/28-live-integration.md)、
+[`../design/vllm-pypto/02-detailed-design.md`](../design/vllm-pypto/02-detailed-design.md)。
 
-**不要重启这条线。** R6–R9 八个候选 + 结构修复候选全部 NO-GO；`orch` p50 降 74% 而
-`device_wall` 没降 ⇒ orchestrator 从不在关键路径 ⇒ 整类改动 ROI 上界 = 0。
-生产继续用 **R5**，`decode_fwd.py` 不做任何改动。
-完整复盘（11 条已撤回主张 + 9 条铁律）→ [`../postmortems/16-dispatch-fusion-orch-decouple.md`](../postmortems/16-dispatch-fusion-orch-decouple.md)。
+### 3. 收口 upstream notify fence
 
-## 已退休、不得恢复的分支
+`remote_store` 紧接自身 credit `notify` 时，pre-CMO 缺 `PIPE_ALL`。任何合并波次、
+按 peer 融合或拉近 payload/credit 的改动都必须先落 fence，再跑 A/B/A + precision。
+入口：
+[`../blockers.md`](../blockers.md) `UPSTREAM-NOTIFY-FENCE`、
+[`../design/performance/06-upstream-asks.md`](../design/performance/06-upstream-asks.md)。
 
-`a791071` attention-inline Ring（实质 A/A，未命中 production canonical）、`b4d45b3` K6b
-dynamic-valid-shape（dynamic publish 位于已知 notify-fence seam，无独立 rank-skew/zero-gap/
-多 epoch safety proof）。二者只作 focused 历史证据。
-其余 NO-GO 台账 → [`../progress/landed.md`](../progress/landed.md)「已否决，不要重试」。
+## 操作约束
 
-## 现有实现的正确性硬约束（改 TP all-reduce 前逐条核对）
-
-1. `active_rows` 必须在所有 TP rank 上一致，否则 selector 分叉**会死锁**。
-2. 固定 peer 顺序、单 FP32 accumulator、一次最终 BF16 cast —— 不得改变。
-3. 两波与三波**不能复用未清零的同一 signal slot**；exact two-layer mirror 必须继续与
-   canonical body AST 一致。
-4. `TP_ALL_REDUCE_OWNED_CHUNK = HIDDEN // TP_WORLD_SIZE = 512` 必须与 `TP_ALL_REDUCE_CHUNK`
-   的 staging/final-copy transfer grain **保持解耦**。
-5. **仓外**调用 `dense_mlp_body_tp`（含 `pl.inline(dense_mlp_body_tp._func)`）的代码，升级时
-   必须补 `mlp_layer_idx` 之后新增的 `num_tokens: pl.Scalar[pl.INT32]` 实参。
-6. 本实现**不等于**修复 notify fence；未来合并波次或把 payload store 与自己的 credit 拉近，
-   仍被 `UPSTREAM-NOTIFY-FENCE` 阻塞。
-
-设计入口：[`03-tp-allreduce-algorithm-comparison`](../design/performance/03-tp-allreduce-algorithm-comparison.md)、[`04-tp-allreduce-ring-refactor`](../design/vllm-pypto/04-tp-allreduce-ring-refactor.md)。
-
-## 机器与操作约束
-
-**每次启动前重新检查锁、container、`fuser` 与 NPU process**（非 root `fuser` 不可信 ——
-须 `sudo -n fuser` + `npu-smi info -t proc-mem` 双查、fail-closed），不能沿用旧 session 的空闲结论。
-锁与卡分配见 [`../STATUS.md`](../STATUS.md) §7。
-
-**禁止**：在本地项目仓创建或修改 pypto-lib 产品代码（0162 是唯一执行主机）· 用未持锁的
-device matrix 作性能数据 · 把 focused regular-call kernel-duration pooled mean
-（如 `38.325 → 22.667 µs/call`）当作 strict critical-tail 或完整源码 A/B/A ·
-用 host 独立检查覆盖 canonical structural fail-closed · 把 source-overlay 数据写成
-immutable-image 结果。
+- 性能数字必须同时绑定 manifest/config、完整命令与 effective env；digest 相同不代表运行合同相同。
+- r9 正式 DFX raw schema 是 `chip_swimlane_records.json`，不得伪造旧
+  `l2_swimlane_records.json`。
+- analyzer 的 `PENDING_EXTERNAL_GATE` 是职责边界，outer admission 才消费 hidden；
+  不得手改 analyzer 报告。
+- 每次占卡前重新查锁、`nerdctl ps`、`sudo -n fuser` 与 NPU process；禁止 reset NPU
+  或破坏性 kill。
+- 历史 MoE dispatch 候选 R9 NO-GO 与 upgrade image r9 不是同一对象；前者不得恢复。

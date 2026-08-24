@@ -1,27 +1,26 @@
 # Phase 28 — 单程序整网 → vLLM live 集成
 
-> **状态：🟡 进行中。最后更新：2026-08-08。**
+> **状态：🟡 进行中。最后更新：2026-08-24。**
 > 本文只保留当前 live 集成工作面；历史 N1 bring-up 已归档到
 > [`../../archive/completed-phases/27-single-program-whole-net-fusion.md`](../../archive/completed-phases/27-single-program-whole-net-fusion.md)。
 
 ## 1. 当前对象
 
 ```text
-current pypto-lib  491267c45875e9b1e0071eed224e2e73526799e2
-current pypto      8e92b46808f9f7c09b6431ad4691503f09c12ee5
+current pypto-lib  bf3ff4400082f74b35fbdb5b3e0f5f4bf51ce373
+current pypto      519b588a7a6461cac0e443e853accf29479c1d15
 current Main       models.step3p5.decode_fwd:whole_decode_step3p5
 vLLM overlay       1b3e538c35999e62b6d24e0651b3a85b7d16c826
-latest built image stepfun-develop-20260806-attn-taskmajor-canonical
-manifest           sha256:3eb694e0455749b370c2da441f04badb47f2752edb53f2cf4e6acb1fde125479
-current image      none for pypto-lib 491267c4
-pending spec       stepfun-develop-20260808-moe-opt-latest-source
-full-matrix fallback stepfun-develop-20260803-attn-final-wave5
+current image      stepfun-upgrade-20260824-r9
+manifest           sha256:b637f00c66d4dc976c053c617d2e19e6d6d66f68f4bef30250984da7a71690f6
+config             sha256:f6c8f72eecad0a9d40d0c4ea55afaab09dd4e2f5fe54d6a091e332465e421dae
+performance env    PYPTO_H4_RESIDENT=all
 ```
 
-`c9af5790` 历史 image 已通过 BS1×64K Attention/ITL/DFX partial gate；当前
-`491267c4` 尚无 immutable image。完整 Main/MTP production matrix 仍只由 Wave5
-证明。源码 tip、历史 partial gate 和 full release 三类对象必须分开报告，历史
-R1/R2 不得恢复。
+r9 已通过 registry fresh pull、precision `127/128`、Main 8-step、MTP
+single/batch16、L3/L4 exact 与 8/8 chip swimlane admission。该结论仍是
+standalone/sidecar admission，不等价于 live request 已接管。性能 `22.253 ms`
+必须与显式 H4 env 一起引用；镜像默认 unset=`none` 约 `27.812 ms`。
 
 ## 2. Goal
 
@@ -39,8 +38,8 @@ R1/R2 不得恢复。
 - 默认 Main 已统一为 `whole_decode_step3p5`，旧 unroll/opt/rollback 入口已删除。
 - standalone Main、batch16、MTP focused gate 和 Wave5 immutable release gate 已完成。
 - Attention/Vec、TP all-reduce source publication/lifetime 已在 Wave5 对 0162 准出。
-- 历史 `c9af5790` immutable image 已完成其源码层级的 BS1×64K 整网 ITL 与两层
-  DFX；当前 `491267c4` 尚待按 pending spec 构建和回归。
+- r9 immutable image 已完成 precision、Main/MTP liveness 与 BS1 前五层
+  hidden/swimlane/DFX admission；五仓 `stepfun/develop` 已同步。
 - sidecar/holder、权重 IPC、KV metadata schema 和 vLLM overlay 已有实现基础。
 
 这些证据只证明 standalone/sidecar 组件，不等价于真实 production request 已无条件平替。
@@ -89,8 +88,8 @@ MTP 输入必须来自本次 Main 的配对 hidden；禁止拿旧 N1 artifact �
 
 ## 6. 与 Attention 收口的关系
 
-Attention latest-source immutable gate 已完成，Phase 28 不再等待历史 R2。
-后续 live 工作必须使用明确的新 digest，并单独处理 paged-KV、3-way HBM 与
+upgrade r9 standalone admission 已完成，Phase 28 不再等待新的基础镜像。
+后续 live 工作必须使用该明确 digest，并单独处理 H4 deployment env、paged-KV、3-way HBM 与
 Main→MTP；不能把 BS1 standalone ITL/DFX 当作 live serving 准出。当前
 standalone bs16×每请求64K 还会在约 16 GiB static-arena 分配时 OOM，这与 live
 重复权重问题是两个容量口径，不能混写。下一步见 [`../handoff.md`](../handoff.md)。
@@ -100,4 +99,4 @@ standalone bs16×每请求64K 还会在约 16 GiB static-arena 分配时 OOM，�
 - 历史 N1 branch/pin/stable-env 不能作为当前 checkout。
 - 旧 `whole_decode_faithful_real*`、多 Main selector、`models/step3p5_opt` 不得恢复。
 - 首 token `argmax=303` 只能作为 smoke，不能代替多步 precision。
-- 旧 0234 stall 记录不再列为当前 active blocker。
+- 0234 stall 不能外推到 0162 或 r9；它仍由独立 `N1-S-0234` blocker 跟踪。

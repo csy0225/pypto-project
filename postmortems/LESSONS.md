@@ -1,6 +1,6 @@
 # 必读教训索引（开工前先读这一页）
 
-从本目录 16 份复盘的「§6 如何避免」提炼。**触发式**：先扫左列，命中就读中列，要细节再点右列。
+从本目录复盘的「§6 如何避免」提炼。**触发式**：先扫左列，命中就读中列，要细节再点右列。
 不是规则罗列 —— 罗列不会被应用。
 
 > 这一页是 `CLAUDE.md` **铁律 §0** 的强制必读项。它只收**已确立**的结论；
@@ -25,7 +25,8 @@
 | 下「死锁」结论 | 看门狗会把**慢**伪装成**死**。`S1` 先抬 `SIMPLER_SCHEDULER_TIMEOUT_MS`（env-only、零改码）分「慢 vs 死」。⚠ runtime 提示的 env 名不可信，一律 grep `getenv` 核对 | [12](12-integration-churn-meta.md) 根因 10、[16](16-dispatch-fusion-orch-decouple.md) §6.5 |
 | 「为了拿一个数」再跑一轮 device | **先穷举现有 artifact**。失败 run 在挂前跑了几百个 invocation，稳态 span 早就够统计 | [12](12-integration-churn-meta.md) 根因 11、[16](16-dispatch-fusion-orch-decouple.md) §5 |
 | 在旧日志里 grep 一个 span / 字段拿到 0 | **0 可能是名字改了，不是现象不存在**。先 grep 上层标记（如 `[STRACE]`）确认这类记录在不在，再枚举实际名字。升级把 `simpler_run.*` 改成了 `chip.run.*`，据「旧日志没这个 span」差点得出「新 base 才开始打点、日志放大了延迟」的错结论 | [`../benchmark/2026-08-23-upgrade-image-release-gates.md`](../benchmark/2026-08-23-upgrade-image-release-gates.md) §2.2 |
-| 把 carry-forward 补丁移植到新基座 | **审所有调用点，不只入口函数**。上游可能只吸收了一半（`copy_to` 收了、dispatch 没收）；我方也可能只改主路径 —— 整网 holder 修好了，`five_layer` / `mtp` 三处同样的裸指针没改，直接把观测性门和 MTP 路径留在坏状态 | [`../blockers.md`](../blockers.md) UPGRADE-IPC-PROV |
+| 把 carry-forward 补丁移植到新基座 | **审所有调用点，不只入口函数**。上游可能只吸收了一半；我方也可能只改主路径 —— Whole holder 修好不代表 five-layer / route / MTP 的 IPC slice 已保留 Buffer provenance | [17](17-upgrade-ipc-buffer-provenance.md) |
+| 比较同一 digest 的两组性能 / 发布一个 env 优化 | **digest 不等于运行合同**。先 diff 完整命令与 effective env；同时核对代码默认、镜像 Config Env、正式 launcher 三层。r9 的 `none/all` 仅一行 env 就差 `5.559 ms` | [18](18-upgrade-itl-fixed-cost-runtime-contract.md) |
 | 改任何 orchestration 级构造 | **先从现有日志读 `orch` 与 `device_wall` 的 p50**。若 `orch <= device_wall`，orchestrator 不在关键路径，**整类改动 ROI 上界 = 0**。这是可量化的否决门 | [16](16-dispatch-fusion-orch-decouple.md) §3 ★★ |
 | 立项"减少 task 粒度 / 降 runtime 开销"类优化 | 先看关键路径的 **`front-gap`** 与 stall 构成。若 `front-gap = 0.000 ms` 且 stall **100% 为 data-wait** ⇒ task-granularity 与 runtime-overhead 两类方法论的 ROI 上界 = 0。**这一条本可在 dispatch 融合线的 6 天 / 357 run 之前就否决它** | [`../design/performance/09-swimlane-derived-next-optimizations.md`](../design/performance/09-swimlane-derived-next-optimizations.md) ★★ |
 | 追概率性 liveness 缺陷 | 用「**一轮长跑**」（`ITERS` ×10，墙钟只多 ~25 s，曝光 ×10），不要「多跑几轮」。比较单位是 **invocation-until-failure**，不是「跑了几轮」 | [16](16-dispatch-fusion-orch-decouple.md) §5/§6.9 |

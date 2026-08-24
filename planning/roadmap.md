@@ -5,16 +5,15 @@
 > SSOT）；此刻状态在 [`../STATUS.md`](../STATUS.md)；接力上下文在
 > [`handoff.md`](handoff.md)。想讲进度给别人听 → 看本文。
 >
-> **2026-08-08 current-source override**：当前源码为
-> `pypto-lib stepfun/develop@491267c45875e9b1e0071eed224e2e73526799e2` 与
-> `pypto stepfun/develop@8e92b46808f9f7c09b6431ad4691503f09c12ee5`。
-> 历史 `c9af5790` image manifest `sha256:3eb694e…` 已通过其源码层级的 BS1×64K
-> Attention/ITL/DFX partial gate（整网 p50 `39.612 ms`）；当前 `491267c4`
-> 尚无 immutable image。Wave5 仍是最后一个完成
-> Main N=128×3、Main batch16、MTP batch1/16 等全量 matrix 的 production
-> release-qualified 回退基线。历史 R1/R2 已 supersede。
-> 其它机器/架构仍需独立 gate。下方 B2/Phase 28 的
-> 2026-07-26 状态保留为历史里程碑，当前准出以
+> **2026-08-24 current-source/image override**：当前源码为 pypto
+> `519b588a` / pypto-lib `bf3ff440` / pto-isa `cd4a3d3f` / PTOAS `307d0484` /
+> simpler `85a82c45`，五仓远端 `stepfun/develop` 已复核。upgrade r9 manifest
+> `sha256:b637f00c…a71690f6` 已发布并完成 registry fresh pull、precision
+> `127/128`、Main/MTP liveness、L3/L4 exact 与 8/8 chip swimlane admission。
+> 64K/1000 p50 在默认 `none` 为 `27.812 ms`，在发布合同
+> `PYPTO_H4_RESIDENT=all` 为 `22.253 ms`；镜像未 bake 该 env，正式 deployment
+> 接线是当前最高优先。其它机器/架构与 Phase 28 live serving 仍需独立 gate。
+> 下方 B2/Phase 28 的历史状态保留为里程碑，当前准出以
 > [`../STATUS.md`](../STATUS.md) 与 [`../blockers.md`](../blockers.md) 为准。
 
 ## 1. 一眼看清
@@ -43,7 +42,7 @@ graph TD
 | Phase 23 | 零拷贝 KV-IPC 验证（IPC 主卡点解除） | ✅ 2026-07-03 | [`../archive/completed-phases/23-zero-copy-kv-ipc-validation.md`](../archive/completed-phases/23-zero-copy-kv-ipc-validation.md) |
 | **Phase 27** | **单程序整网融合**（历史代号 N1） | ✅ 2026-07-18 | 历史 P42 20/20；仅作演进证据 |
 | **B2 release** | **45 层 loop-form Main replacement** | ✅ 2026-07-26 | `stepfun/develop@563fe62a` canonical-only 默认 `whole_decode_step3p5`；0162 历史发布镜像内清理前后 N=256 token/hidden 均 `256/256` exact |
-| **Phase 28** | **整网 → vLLM live 集成** | 🟡 进行中 | Main replacement、Attention/Vec 与 0162 Wave5 all-reduce release gate 已完成；live front、paged KV、同代 MTP absolute gate、HBM 待完成 |
+| **Phase 28** | **整网 → vLLM live 集成** | 🟡 进行中 | upgrade r9 standalone admission 与五仓同步已完成；H4 deployment env、live front、paged KV、同代 MTP absolute gate、HBM 待完成 |
 
 > Phase 20/21/22/24/25/26 的设计/中间态已归档到
 > [`../archive/completed-phases/`](../archive/completed-phases/)（被 27/28 取代或吸收）。
@@ -54,13 +53,11 @@ graph TD
 
 - **当前形态**：单个 `@pl.program`，45 层 loop-form Main，TP=8/EP=8，
   native W8A8；0724 hidden-only unroll baseline 仅作显式 rollback。
-- **已达成**：当前源码已前进到 `pypto-lib stepfun/develop@491267c4`；
-  正式路径仍为 `models.step3p5.decode_fwd:whole_decode_step3p5`；0162 的 0726 历史发布镜像内
-  N=256 清理前后 token/hidden `256/256` exact、`max_abs_diff=0`、
-  TP spread `0.0`。
-- **口径**：同一 vanilla oracle 的 raw canonical/baseline 都是
-  `240/256=93.75%`，低于历史 95% raw gate；这不是 opt regression，
-  但也不是 raw precision PASS。
+- **已达成**：当前源码已前进到 `pypto-lib@bf3ff440` / `pypto@519b588a`，
+  正式路径仍为 `models.step3p5.decode_fwd:whole_decode_step3p5`；r9 immutable
+  precision `127/128`、Main/MTP liveness、L3/L4 exact 与 8/8 chip swimlane PASS。
+- **性能口径**：同一 r9 digest 默认 `none=27.812 ms`，H4 `all=22.253 ms`；
+  后者必须绑定显式 deployment env。
 - **已收口**：C/D/G、H1、Attention/Vec I1、I2 TP all-reduce stability 与 BS1
   动态 batch correctness 已完成；**遗留**：B3 KV resident/in-place，以及 serving
   侧独立闭环。
@@ -91,10 +88,9 @@ graph TD
     class A,B,C,D g;
 ```
 
-1. Wave5 stability 已关闭；当前 clean immutable image 已通过 0162 的
-   `>=95%` 与 TP-spread gate。主线转回独立 live front、paged-KV/dynamic batch、
-   同代 Main→MTP absolute oracle 与 3-way HBM。
-2. 用通过 gate 的镜像/代码完成独立 live vLLM front 接管和 A/B。
+1. 把 `PYPTO_H4_RESIDENT=all` 接入正式 serving launcher / manifest，并在 exact
+   deployment 重跑 startup contract + 64K ITL。
+2. 用 r9 镜像/代码完成独立 live vLLM front 接管和 token-exact A/B。
 3. 接 live paged-KV bridge、dynamic batch metadata。
 4. 建 current Main→MTP 同代 absolute oracle。
 5. 收口 HBM/redundant weights，再继续 serving 侧 perf 调优。

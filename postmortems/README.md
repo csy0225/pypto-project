@@ -9,7 +9,7 @@ signature 或一类根因）。目标是沉淀——让后来者不重复踩坑�
 |---|---|---|
 | [`LESSONS.md`](LESSONS.md) | **动作**（你正要做 X → 先记住 Y） | **开工前**扫一遍 —— `CLAUDE.md` 铁律 §0 强制必读 |
 | [`CASEBOOK.md`](CASEBOOK.md) | **现象**（你看到了 X → 背景/过程/处置） | **撞上了**再查。含**仍在生效的绕路台账**（🩹 标记 + 移除代价）—— 删一段看似冗余的代码前先查它 |
-| 下表 16 份复盘 | **error signature / 一类根因** | 要完整证据链、消融矩阵、走过的弯路 |
+| 下表复盘 | **error signature / 一类根因** | 要完整证据链、消融矩阵、走过的弯路 |
 
 ## 复盘清单
 
@@ -31,18 +31,20 @@ signature 或一类根因）。目标是沉淀——让后来者不重复踩坑�
 | [`14`](14-image-dirty-worktree-unreproducible-pins.md) | 镜像 dirty worktree 导致 pin 不可复现 | 相同 pin、行为不同 | deployment | ✅ 已解（主路径） |
 | [`15`](15-tp-allreduce-source-publication-lifetime.md) | TP all-reduce source publication / lifetime 边界 | 间歇性 `hidden_tp_spread != 0` | whole-net | ✅ 已解（0162） |
 | [`16`](16-dispatch-fusion-orch-decouple.md) | MoE dispatch 域小算子融合整线 NO-GO（`orch` 阻塞读是承重节流；orchestrator 不在关键路径） | `orch_error=8 TENSOR_WAIT` / `orch_error=2 HEAP_RING_DEADLOCK` | whole-net / perf | ✅ 已定案（**负结论**） |
+| [`17`](17-upgrade-ipc-buffer-provenance.md) | 升级后 IPC interior slice 缺 Buffer provenance | `raw-pointer DeviceTensor cannot be dispatched` | whole-net / runtime | ✅ 已解 |
+| [`18`](18-upgrade-itl-fixed-cost-runtime-contract.md) | 升级 ITL 固定 host 开销与 H4 运行合同混写 | 同一工作点 `47.993 / 27.812 / 22.253 ms` | whole-net / perf / deployment | 🟡 发布门已解，deployment env 待接线 |
 
 ## 必读教训索引
 
-**开工前先读** [`LESSONS.md`](LESSONS.md) —— 从本目录 16 份复盘的「如何避免」段提炼的
+**开工前先读** [`LESSONS.md`](LESSONS.md) —— 从本目录复盘的「如何避免」段提炼的
 触发式索引（你正要做 X → 先记住 Y）。它是 `CLAUDE.md` 铁律 §0 的强制必读项。
 
 ## 模板与新增
 
-- **模板**：[`TEMPLATE.md`](TEMPLATE.md) —— 五段结构（背景 / 现象 / 根因 / 解决 /
+- **模板**：[`TEMPLATE.md`](TEMPLATE.md) —— 六段结构（背景 / 现象 / 根因 / 解决 /
   走过的弯路 / 如何避免）。
 - **新增一份复盘**：复制 `TEMPLATE.md` 为 `NN-<short-name>.md`（NN 接上一编号），
-  填完字段 + 五段，然后在上表加一行。每份复盘只对应一个 error signature 或一类根因，
+  填完字段 + 六段，然后在上表加一行。每份复盘只对应一个 error signature 或一类根因，
   不要合并多个不相关的事故。
 - **不够大、不值得单独成篇的单点坑** → 写进 [`CASEBOOK.md`](CASEBOOK.md)（每条 ≤14 行），
   不要为它新开一份复盘；也不要塞进已有复盘的正文。

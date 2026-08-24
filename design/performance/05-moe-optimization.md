@@ -1,8 +1,17 @@
 # 05 · MoE 优化专项：L0–L4 focused network
 
-> **状态（2026-08-08）**：L0–L4 focused MoE 产品实现 `7928a275` 已合入
-> 当前 `pypto-lib stepfun/develop@491267c45875e9b1e0071eed224e2e73526799e2`；
-> 当前 tip 还包含 active-route scheduling 与 route/precision release harness。
+> **2026-08-24 current override（优先于下方 2026-08-08 快照）**：产品实现已进入
+> `pypto-lib@bf3ff440`，upgrade r9 manifest `sha256:b637f00c…a71690f6` 的 BS1
+> combined gate 已完成：L3/L4 `torch.equal=true`、8/8 rank
+> `chip_swimlane_records.json`、analyzer `pass=true/blockers=[]`、recv_meta ready、
+> outer admission `pass=true`。LOW-WAIT `rank2/d0` makespan `1.867 ms`。
+> 若要把本专项提升为“最终六档 r9 campaign”，仍需对 BS `1/2/4/7/8/16`
+> 重跑同口径 golden/A/B；下方 `c9af5790` 六档只能作历史 evidence。
+> 详见 [`../../benchmark/2026-08-24-upgrade-r9-release.md`](../../benchmark/2026-08-24-upgrade-r9-release.md)。
+>
+> **历史状态（2026-08-08）**：L0–L4 focused MoE 产品实现 `7928a275` 已合入
+> 当时的 `pypto-lib stepfun/develop@491267c45875e9b1e0071eed224e2e73526799e2`；
+> 当时 tip 还包含 active-route scheduling 与 route/precision release harness。
 > 0162 上基于 `c9af5790` 的六档 BS=`1,2,4,7,8,16` formal normal campaign
 > 已完成 36/36 fresh
 > process run、完整 `hidden_l3/hidden_l4` golden、精度 finalize 和三轮
@@ -14,7 +23,7 @@
 > `127/128=99.21875%`、TP spread=0；唯一 miss 为
 > `step94 expected=478 actual=320`。
 >
-> **当前发布边界（NO-GO）**：matched-source whole-net 1-step×2、2-step×2
+> **历史 2026-08-08 发布边界（当时 NO-GO）**：matched-source whole-net 1-step×2、2-step×2
 > 已 8/8 sealed PASS，source-overlay N=128 也已过线；但没有 immutable image
 > 包含 `491267c4`。SWA/active-route 源码变化后，旧镜像的六档 golden 与性能不能自动
 > 升级为最终证据。按用户决定，镜像发布推迟到统一 release commit 确定后；
