@@ -50,9 +50,9 @@ E0–E7 语义 endpoint 对齐，不要求 kernel 名称一致；不要把两种
 | `E2→E3` route organization / dispatch | route decision → expert input globally ready | ownership metadata、EP push/wait/gather | local permutation + Cumsum/route organization |
 | `E3→E4` GMM1 + activation + requant | expert input ready → routed activation ready | `expert_gate_up` + activation + `routed_h_quant` | `GroupedMatmulSwigluQuant` 或等价 special path |
 | `E4→E5` routed down | routed activation ready → routed down ready | `expert_down` physical slices / zero-work ack | down projection + routed postprocess |
-| `E5→E6` return / restore / global merge | routed down ready → token-ownership FFN delta ready | 完整 endpoint 应含 EP combine、shared branch、stable reduce、TP AR/fence；当前只捕获 routed combine 子路径 | unpermute、shared/global merge、TP AR/fence |
+| `E5→E6` return / restore / global merge | routed down ready → token-ownership FFN delta ready | 完整 endpoint 应含 EP combine、shared branch、stable reduce、TP AR/fence；当前观测只捕获 routed combine 子路径，未形成统一 E6 endpoint | unpermute、shared/global merge、TP AR/fence |
 | `E6→E7` residual | FFN delta ready → 下一层可消费 | residual writer 完成且无尾部工作 | residual Add 完成 |
-| `E0→E7` complete MoE | 完整 FFN 语义闭包 | 当前报告未保存全局 E0/E7 endpoint | 完整 semantic-stage reference |
+| `E0→E7` complete MoE | 完整 FFN 语义闭包 | 当前报告未保存全局 E0/E7 endpoint（这是观测缺口，不是运行失败） | 完整 semantic-stage reference |
 
 下面的数值是 **phase-aligned descriptive comparison**。主比较列使用
 `rank2/d0` 每个逻辑阶段全部 physical tasks 的
@@ -69,9 +69,9 @@ E0–E7 语义 endpoint 对齐，不要求 kernel 名称一致；不要把两种
 | `E2→E3` route organization / dispatch | `49.40 / 48.66 us` | `52.0 / 50.5 us` | `42.50 us` | `+6.90 / +6.16 us` | EP ownership transfer 相对 local route plan 多出跨卡等待 |
 | `E3→E4` GMM1 + activation + requant | `85.42 / 79.34 us` | `87.8 / 82.0 us` | `45.25 us` | `+40.17 / +34.09 us` | **这是逻辑阶段差异，不是 kernel-name 差异**；r9 三个 task 聚合后与 vLLM 一个语义阶段对齐 |
 | `E4→E5` routed down | `35.48 / 25.14 us` | `40.1 / 26.9 us` | `34.50 us` | `+0.98 / −9.36 us` | L3 接近、L4 方向偏快；仍受 BS/context 与 route 分布影响 |
-| `E5→E6` return / restore / merge | `n/a / n/a` | `59.30* / 52.66* us` | `57.50 us` | n/a | 完整 r9 endpoint 尚未闭合；`*` 仅为 routed-combine partial diagnostic，不与 vLLM 完整阶段直比 |
+| `E5→E6` return / restore / merge | `n/a / n/a` | `59.30* / 52.66* us` | `57.50 us` | n/a | 完整 r9 endpoint 的观测缺失；`*` 仅为 routed-combine partial diagnostic，不与 vLLM 完整阶段直比 |
 | `E6→E7` residual | `15.72 / 14.64 us` | `10.0 / 11.3 us` | `4.50 us` | `+11.22 / +10.14 us` | residual/output-ready 方向上 r9 仍有余量 |
-| **`E0→E7` complete MoE** | **n/a / n/a** | **n/a** | **`229.25 us`** | **n/a** | 当前 r9 没有 shared + TP AR + global fence 闭合的完整 endpoint |
+| **`E0→E7` complete MoE** | **n/a / n/a** | **n/a** | **`229.25 us`** | **n/a** | 当前 r9 报告没有形成包含 shared + TP AR + global fence 的统一 E0/E7 endpoint |
 
 并行 shared branch 的 envelope 为 L3 `48.4 us`、L4 `47.6 us`；它属于
 `E5→E6` 的并行输入，**不能再加到上表阶段值或构造完整 E0→E7**。
@@ -106,7 +106,7 @@ restore 算术时间。
    dispatch 的 route/overlap/remote completion，而不是机械寻找同名 vLLM kernel。
 3. **`E5→E6` 当前只能报告 routed combine 子路径。**
    `combine_scatter → combine_wait → combine_reduce` 已在 observed path，
-   但 shared branch、TP AR 和 global fence 没有在当前 rank2 报告中形成完整
+   但 shared branch、TP AR 和 global fence 没有在当前 rank2 报告中形成统一
    E6 endpoint；完整阶段应记 `n/a`，不能从 partial sum 推导全阶段比值。
 4. **R5 的 `~4 us/task` gap 仍只属于历史 stage-exclusive capture。**
    当前 r9 LOW-WAIT rank2 的 stall `0.323 ms` 全部是 data-wait，没有
@@ -121,7 +121,7 @@ restore 算术时间。
 |---|---|
 | kernel 不同但 decoder 逻辑阶段可按 E0–E7 对齐 | ✅ 本节已统一边界 |
 | r9 的 `E3→E4` 应与 vLLM 的 GMM1+activation+requant 作为同一逻辑阶段比较 | ✅ 可做方向性阶段比较 |
-| r9 当前完整 `E0→E7` 已经比 vLLM 快/慢多少 | ❌ 当前报告没有全局 E0/E7 closure，且 workload/statistics 不同 |
+| r9 当前完整 `E0→E7` 已经比 vLLM 快/慢多少 | ❌ 当前报告没有全局 E0/E7 endpoint，且 workload/statistics 不同 |
 | EP combine 是 `E5→E6` 的主要结构性差异 | ✅ 方向性支持；完整 E6 仍需全 rank endpoint |
 | 旧表 `routed_gmm1` kernel parity 是否等于 r9 phase parity | ❌ 两者不是同一层次；以本节 E3→E4 为准 |
 
