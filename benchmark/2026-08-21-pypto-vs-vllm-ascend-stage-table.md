@@ -46,7 +46,7 @@ E0–E7 语义 endpoint 对齐，不要求 kernel 名称一致；不要把两种
 
 | 逻辑阶段 | 语义边界 | r9 对应工作 | vLLM 对应工作 |
 |---|---|---|---|
-| `E0→E2` input + router | FFN 输入 ready → route decision ready | `norm_quant_moe_input` + `gate_topk` | RMSNorm/Cast + TopK/Index/route metadata |
+| `E0→E2` input + router | FFN 输入 ready → route decision ready | `norm_quant_moe_input` + `gate_topk`（`gate_expert_fanout` 作为 TopK endpoint 的前置依赖纳入，不另拆阶段） | RMSNorm/Cast + TopK/Index/route metadata |
 | `E2→E3` route organization / dispatch | route decision → expert input globally ready | ownership metadata、EP push/wait/gather | local permutation + Cumsum/route organization |
 | `E3→E4` GMM1 + activation + requant | expert input ready → routed activation ready | `expert_gate_up` + activation + `routed_h_quant` | `GroupedMatmulSwigluQuant` 或等价 special path |
 | `E4→E5` routed down | routed activation ready → routed down ready | `expert_down` physical slices / zero-work ack | down projection + routed postprocess |
@@ -69,7 +69,7 @@ E0–E7 语义 endpoint 对齐，不要求 kernel 名称一致；不要把两种
 | `E2→E3` route organization / dispatch | `49.40 / 48.66 us` | `52.0 / 50.5 us` | `42.50 us` | `+6.90 / +6.16 us` | EP ownership transfer 相对 local route plan 多出跨卡等待 |
 | `E3→E4` GMM1 + activation + requant | `85.42 / 79.34 us` | `87.8 / 82.0 us` | `45.25 us` | `+40.17 / +34.09 us` | **这是逻辑阶段差异，不是 kernel-name 差异**；r9 三个 task 聚合后与 vLLM 一个语义阶段对齐 |
 | `E4→E5` routed down | `35.48 / 25.14 us` | `40.1 / 26.9 us` | `34.50 us` | `+0.98 / −9.36 us` | L3 接近、L4 方向偏快；仍受 BS/context 与 route 分布影响 |
-| `E5→E6` return / restore / merge | `59.30* / 52.66* us` | `31.8* / 43.6* us` | `57.50 us` | n/a | `*` 当前只闭合 routed combine envelope，未闭合 shared + TP AR + global E6 |
+| `E5→E6` return / restore / merge | `n/a / n/a` | `59.30* / 52.66* us` | `57.50 us` | n/a | 完整 r9 endpoint 尚未闭合；`*` 仅为 routed-combine partial diagnostic，不与 vLLM 完整阶段直比 |
 | `E6→E7` residual | `15.72 / 14.64 us` | `10.0 / 11.3 us` | `4.50 us` | `+11.22 / +10.14 us` | residual/output-ready 方向上 r9 仍有余量 |
 | **`E0→E7` complete MoE** | **n/a / n/a** | **n/a** | **`229.25 us`** | **n/a** | 当前 r9 没有 shared + TP AR + global fence 闭合的完整 endpoint |
 
