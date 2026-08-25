@@ -71,6 +71,7 @@ WORKDIR ${WS}
 RUN mkdir -p /tmp/gitsrc && \
     tar xzf /tmp/src-pins.tgz --no-same-owner -C /tmp/gitsrc && \
     rm -f /tmp/src-pins.tgz && \
+    rm -rf ${WS}/pypto ${WS}/pypto-lib ${WS}/pto-isa ${WS}/PTOAS ${WS}/vllm-pypto && \
     for r in pypto pypto-lib pto-isa PTOAS; do \
       git clone -q "/tmp/gitsrc/${r}.git" "${WS}/${r}"; \
     done && \

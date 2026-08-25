@@ -1,5 +1,47 @@
 # Milestones —— 2026 Q2
 
+## 2026-08-25 —— packed-NZ MoE fusion r10 正式准入与源码合入 ✅
+
+**镜像**：`hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260825-r10`，
+manifest `sha256:8510f30e1f2a2f2edcaa834c831165b349a4aca1212b655ca2a02ed6b3e9907b`、
+config `sha256:38ebba41d6aa0c49940c03e2e7c6fa42d85b61d631c143d38944683d0c657b5f`。
+镜像内 pypto-lib 为 `fe641929`（tree `5d8f7e64`）；远端
+`stepfun/develop` 已用 exact lease 从 `bf3ff440` fast-forward 到 `fe641929`。
+
+**已完成**：
+
+- source unit `162 passed`；image audit/smoke/external extension audit、whole compile、
+  registry push、isolated fresh pull 与 raw manifest/config 均 PASS；
+- Main 8-step、MTP single、MTP batch16 PASS；
+- accepted-oracle N=128：H4 all/none 均 `127/128`，唯一 mismatch `[94]`；
+  strict parity 为 output `128/128`、tensor pair `256/256` byte-exact、
+  finite `512/512`、TP spread `0`；
+- H4-all 64K/1000 p50 `21.742 ms`，相对 source matched midpoint
+  `−0.9195 ms / −4.0575%`，相对 r9 published `−0.511 ms / −2.2963%`；
+  ITL admission `pass=true`；
+- immutable r9/r10/r9 A/B/A p50 `22.524/21.821/22.580 ms`、mean
+  `22.862/21.937/22.633 ms`、p99 `28.542/28.338/24.208 ms`；baseline
+  midpoint `22.552 ms`、bracket `0.056 ms`，r10 为
+  `−0.731 ms / −3.241%`，三臂 hidden/token exact；verdict SHA256
+  `8d4224e0214b71bae01efe24393e5886375e04dff5481ffd34ba19e3821ddb0e`；
+- 六档 BS correctness `6/6` exact、`12/12` tensor health PASS；BS8/BS16
+  单次诊断分别回退 `+5.677/+0.551 ms`，未宣称多 BS 性能全面提升；
+- L3/L4 hidden exact，8/8 chip swimlane/DFX 完整；fused E3→E4 median
+  `44.97/41.62 us`，routed down `16.18/16.44 us`；
+- pypto-lib exact-lease 同步证据为 `git-sync-r10-20260825-144155/`；
+- final release contract schema `step3p5.r10-release-admission.v2`，
+  `71/71` checks、`pass=true`，SHA256
+  `bcdd0b11d346e450dca49b8434544de5566b7fc0ad1a38c715815a41958dafca`：
+  `0162:…/r10-release-admission-20260825-150350/release_contract.json`。
+
+**保留边界**：完整 `E5→E6` 仍无 shared + TP-AR + global-fence 统一 endpoint，
+继续记 `n/a`；六档单次 latency 仅为 warmup1/iters1 诊断，BS8/BS16 回退
+caveat 不因最终准入而撤销。
+
+权威报告：
+[`../benchmark/2026-08-25-moe-fusion-image-release.md`](../benchmark/2026-08-25-moe-fusion-image-release.md)；
+证据根目录：`0162:/mnt/persist/chensiyu/workspace/moe-fusion-release-20260825/`。
+
 ## 2026-08-24 —— 五仓全栈升级 r9 发布、H4 准出与远端同步 ✅
 
 **镜像**：`hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260824-r9`，
@@ -1275,6 +1317,7 @@ max|value|=0`（dummy zero weight 期望零输出）。Run time 6.69s。
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------|-----------|
+| 2026-08-25 | packed-NZ MoE fusion r10 正式准入 + SRC 同步（IMG `8510f30e…`） | `519b588a` | `fe641929` | `cd4a3d3f` | `307d0484` | `85a82c45` | `v0.57` |
 | 2026-08-24 | **五仓全栈升级 r9 发布 + 同步（IMG `b637f00c…`）** | `519b588a` | `bf3ff440` | `cd4a3d3f` | `307d0484` | `85a82c45` | `v0.57` |
 | 2026-08-12 | TP all-reduce single-row selector 合入（SRC） | `1c048a74` | **`69ad31e4`** | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |
 | 2026-08-12 | RMS→QKV critical prestage I7（SRC） | `1c048a74` | `e5e26f9f` | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |

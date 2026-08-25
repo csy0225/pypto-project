@@ -15,22 +15,26 @@
 | **IMG** immutable-image released | 有 manifest digest，在 0162 上 **digest-only、无 source/runtime overlay** 验证过 | 这是生产可部署的形态 | 除非注明"完整"，否则不代表全矩阵准出 |
 | **SRC** source-overlay GO | 代码已合入 `stepfun/develop`，在**固定 immutable 镜像**上通过只读 `/candidate` overlay 验证 | 实现 + 该门的结论成立 | ❌ 不代表镜像已包含它；❌ 不能当镜像级准出数据 |
 
-**当前 r9 pin 集**：
-`pto-isa cd4a3d3f` / `PTOAS(src) 307d0484` / `simpler 85a82c45` / `ptoas-bin v0.57`。
+**当前 r10 pin 集**：
+`pypto-lib fe641929` / `pto-isa cd4a3d3f` / `PTOAS(src) 307d0484` /
+`simpler 85a82c45` / `ptoas-bin v0.57`。
 2026-08-24 之前表格中的“canonical/偏离”均按**当时**的旧 pin 集解释，不反向改写历史。
 
 ---
 
-## 当前生产真相（2026-08-24）
+## 当前生产真相（2026-08-25）
 
-- **最新 IMG** = upgrade r9（manifest `b637f00c…90f6`），registry fresh pull 与最终
-  release contract `pass=true`；64K/1000 p50 在默认 `none` 为 `27.812 ms`，
-  在发布合同 `PYPTO_H4_RESIDENT=all` 为 `22.253 ms`。
-- **当前 SRC tips** = pypto `519b588a` / pypto-lib `bf3ff440` / pto-isa `cd4a3d3f` /
+- **最新 IMG** = packed-NZ MoE fusion r10（manifest `8510f30e…e9907b`）；
+  final contract `71/71 PASS`，SHA256 `bcdd0b11…8dafca`。
+- **性能门**：64K/1000 p50 `21.742 ms`；immutable A/B/A p50
+  `22.524/21.821/22.580 ms`，midpoint `22.552 ms`，收益 `−0.731 ms / −3.241%`；
+  三臂 hidden SHA `567b206b…e27f03e`、token `14371` exact。
+- **正确性/观测门**：N=128 `127/128`，六档 BS hidden exact `6/6`、health
+  `12/12`，L3/L4 exact，outer DFX 8/8 chip/merged swimlane PASS。
+- **当前 SRC tips** = pypto `519b588a` / pypto-lib `fe641929` / pto-isa `cd4a3d3f` /
   PTOAS `307d0484` / simpler `85a82c45`，五仓远端 `stepfun/develop` 已复核。
-- **当前精度门**：r9 accepted oracle `127/128 = 99.21875%`（唯一 mismatch step 94）；
-  Main 8-step、MTP single/batch16 与前五层 L3/L4 exact 均 PASS。
-- ⚠ `22.253 ms` 不是镜像默认值；正式部署必须显式设置 `PYPTO_H4_RESIDENT=all`。
+- ⚠ 发布性能仍要求显式 `PYPTO_H4_RESIDENT=all`。六档 timing 是单次诊断：
+  BS8 `35.124→40.801 ms`、BS16 `51.317→51.868 ms` 回退，不能写成多 BS 性能全赢。
 
 ---
 
@@ -38,6 +42,7 @@
 
 | 日期 | 镜像 / 落地了什么 | manifest digest | pypto | pypto-lib | 偏离 canonical pin | 准出范围 | 证据 |
 |---|---|---|---|---|---|---|---|
+| 2026-08-25 | `…:stepfun-upgrade-20260825-r10` —— packed-NZ routed MoE + fused GMM1/SwiGLU/requant + adaptive down grid | `8510f30e1f…e9907b`（config `38ebba41d6…657b5f`） | `519b588a` | `fe641929` | 其余 pin 与 r9 相同 | **最终 release-admitted，71/71 PASS**：Main+MTP、N=128 `127/128`、H4 parity、ITL p50 `21.742 ms`、A/B/A `−3.241%`、六档 correctness `6/6`、outer DFX 8/8、develop sync；contract SHA `bcdd0b11…8dafca` | [`2026-08-25-moe-fusion-image-release.md`](../benchmark/2026-08-25-moe-fusion-image-release.md) |
 | 2026-08-24 | `…:stepfun-upgrade-20260824-r9` —— 五仓全栈升级 + H4 resident constants | `b637f00c66…a71690f6`（config `f6c8f72e…e421dae`） | `519b588a` | `bf3ff440` | pto-isa `cd4a3d3f` / PTOAS `307d0484` / simpler `85a82c45` / ptoas-bin `v0.57` | **升级任务准出**：registry/fresh pull、precision `127/128`、Main+MTP liveness、L3/L4 exact、8/8 chip swimlane；64K p50 `22.253 ms` **仅在 `PYPTO_H4_RESIDENT=all`**，默认 `none=27.812 ms` | [`2026-08-24-upgrade-r9-release.md`](../benchmark/2026-08-24-upgrade-r9-release.md) |
 | 2026-08-11 | `…:stepfun-develop-20260811-k8-selective` —— K8 persistent-window 选择性清零 | `076af8a167…c47f3` | `1c048a74` | `cb96747e` | — | **部分**：64K bs1 p50 `32.14 ms`（−5.02% vs pre-K8）、hidden byte-exact、N=128 `123/128`。batch16 / MTP / 六档 64K 未重跑 | [`2026-08-11-k8-selective-window-zeroing-image.md`](../benchmark/2026-08-11-k8-selective-window-zeroing-image.md) |
 | 2026-08-06 | `…-20260806-attn-taskmajor-canonical` —— task-major Attention | `3eb694e045…25479` | `8e92b468` | `c9af5790` | — | **pre-fix evidence**（不含 SWA mask 修复 `63814d4a`）：64K p50 `39.612 ms` | [`2026-08-06-attention-taskmajor-canonical.md`](../benchmark/2026-08-06-attention-taskmajor-canonical.md) |
@@ -55,6 +60,7 @@
 
 | 日期 | 落地了什么 | pypto | pypto-lib | 门结论 | 证据 |
 |---|---|---|---|---|---|
+| 2026-08-25 | packed-NZ MoE fusion 用 exact lease fast-forward 到远端 `stepfun/develop` | `519b588a` | `fe641929` | `bf3ff440 → fe641929` fast-forward，远端 SHA 复核；对应 r10 final contract `71/71 PASS` | [`2026-08-25-moe-fusion-image-release.md`](../benchmark/2026-08-25-moe-fusion-image-release.md) |
 | 2026-08-24 | 五仓升级目标同步到远端 `stepfun/develop` | `519b588a` | `bf3ff440` | pto-isa `cd4a3d3f` / PTOAS `307d0484` / simpler `85a82c45`；五仓 `force-with-lease` 后远端 SHA 逐项复核。simpler 旧 tip 备份为 `backup/stepfun-develop-pre-upgrade-20260824-e2efebcb` | [`2026-08-24-upgrade-r9-release.md`](../benchmark/2026-08-24-upgrade-r9-release.md) §5 |
 | 2026-08-15~19 | **MoE `moe-routed-packed-fusion` R5 —— 升级前的历史 source-overlay MoE 基线** | 未移动 | `decode_fwd.py` sha `67b73589…`（⚠ commit 未记录，见「台账缺口」） | ctx-64K BS1 p50 `27.757 ms`@ITERS=100 / `26.329 ms`@ITERS=1000；`hidden_sha256=567b206b…`、tail token `14371`；`ITERS=1000` 一轮长跑 0 liveness 事件 | [`16`](../postmortems/16-dispatch-fusion-orch-decouple.md)、`0162:…/moe-routed-packed-fusion-20260815/` |
 | 2026-08-12 | TP all-reduce **small-message selector**（单行 8 KiB 走静态两波 one-shot mesh，其余走三波 fallback；ownership 与 transfer chunk 解耦） | `1c048a74` | **`69ad31e4`** | unit `365 passed, 7 skipped`；Main/MTP compile + 8 卡 rows `1/3/16` PASS；Whole A/B/A `31.065/29.912/30.999 ms` = **`−1.120 ms / −3.609%`**，三臂 precision PASS。`ABA_RESULT.json` sha `383caa23…` | [`03-tp-allreduce-algorithm-comparison.md`](../design/performance/03-tp-allreduce-algorithm-comparison.md) |
@@ -79,7 +85,7 @@
 | K6b dynamic-valid-shape 产品路径 | 不恢复 | 被 `69ad31e4` selector 取代 | STATUS §5.3 |
 | 多 `@pl.program` / per-layer 拆分 / Option-C | **NO-GO（架构裁定）** | N≥6 co-prepare 墙；生产只允许单 `@pl.program` | [`08`](../postmortems/08-multiprogram-coprepare-deadlock.md) |
 | native W8A8 回退 BF16-dequant | 禁止 | 「明知临时的地基」，`CLAUDE.md` 铁律 6 | [`12`](../postmortems/12-integration-churn-meta.md) 根因 3 |
-| `gate_up+act` / `act+h_quant` 融合、`tp_all_reduce` 降 ring step | NO-GO | 分别是 ROI 改判 / grid 维度冲突 / 前提未证实 | [`2026-08-10-step3p5-p1a-gate-decouple.md`](../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md) |
+| 历史 standalone `gate_up+act` / `act+h_quant` DSL 融合、`tp_all_reduce` 降 ring step | NO-GO | 当时分别为 ROI 改判 / grid 维度冲突 / 前提未证实；不等于 2026-08-25 packed-NZ external 三合一 bundle | [`2026-08-10-step3p5-p1a-gate-decouple.md`](../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md) |
 | AR+residual、residual+RMS、RMS+projection 融合 | 已证伪或无稳定收益 | 不合入 | STATUS §3 |
 | `down24` | NO-GO | 见 N256 报告 | [`2026-08-10-step3p5-moe-n256-final.md`](../benchmark/2026-08-10-step3p5-moe-n256-final.md) |
 | 2026-08-05 R1 / R2 镜像 | R1 已撤销、R2 从未发布 | pypto-lib `91c7f46e` 已被多次 supersede，不得恢复 | [`2026-08-05-attention-canonical-r1-r2.md`](../benchmark/2026-08-05-attention-canonical-r1-r2.md) |
@@ -92,7 +98,6 @@
    下一次碰 MoE 生产路径时，从 0162 `…/moe-routed-packed-fusion-20260815/` 反查并补进表 B。
 2. **2026-07-24 / 07-26 / 07-28 三个镜像的 manifest digest 未记录**，只有 tag。
    按 `CLAUDE.md` 判定顺序第 4 条，无 digest 的镜像不能作为发布依据。
-3. r9 已按**本次五仓升级任务合同** release-admitted；Wave5 则是历史上完成
-   **完整 production matrix** 的回退基线，两种准出范围不得混写。若要把 r9 提升到
-   Wave5 同口径，还需补 Main N=128×3、Main batch16、MTP batch1/16 完整矩阵，以及
-   六档 64K golden/A/B。
+3. r10 已按本次 packed-NZ MoE fusion 合同 `71/71` release-admitted；Wave5 的历史
+   **完整 production matrix** 与本次合同范围不同，两者不得互相借证据。本次准出也不
+   等价于 Phase 28 live serving 已完成。

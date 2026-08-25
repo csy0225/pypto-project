@@ -24,6 +24,15 @@ IMGID=${1:?need image id or digest}
 N=${2:-128}
 SEED=${3:-6127}
 THRESHOLD=${THRESHOLD:-95}
+H4_RESIDENT=${PYPTO_H4_RESIDENT:-}
+
+case "$H4_RESIDENT" in
+  ""|none|rope|gate|all) ;;
+  *)
+    echo "FAIL: PYPTO_H4_RESIDENT=$H4_RESIDENT is invalid" >&2
+    exit 2
+    ;;
+esac
 
 D=/mnt/persist/chensiyu/workspace/upgrade-20260821
 CKPT=/data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp
@@ -44,6 +53,10 @@ DEVOPTS="$DEVS --device /dev/davinci_manager --device /dev/hisi_hdc --device /de
   -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro"
 # CPU-only client: no devices, but needs host net for :8000 and the tokenizer.
 CLIENT="--rm --net host $SEC -v $CKPT:$CKPT:ro -v $OUT:/out"
+H4_ENV=()
+if [ -n "$H4_RESIDENT" ]; then
+  H4_ENV=(--env "PYPTO_H4_RESIDENT=$H4_RESIDENT")
+fi
 
 {
   echo "schema=step3p5.precision-gate.v1"
@@ -53,6 +66,7 @@ CLIENT="--rm --net host $SEC -v $CKPT:$CKPT:ro -v $OUT:/out"
   echo "manifest=$MANIFEST"
   echo "host_devices=0,1,2,3,4,5,6,7"
   echo "n=$N seed=$SEED threshold=$THRESHOLD"
+  echo "h4_resident=${H4_RESIDENT:-none}"
   echo "started=$(date -Is)"
 } > "$OUT/run_contract.txt"
 cat "$OUT/run_contract.txt"
@@ -141,6 +155,7 @@ echo "[stage B] pypto teacher-forced replay, $N steps"
 set +e
 # shellcheck disable=SC2086
 $NC run --rm --net host --ipc host --privileged $SEC $DEVOPTS \
+  "${H4_ENV[@]}" \
   -v "$CKPT":"$CKPT":ro -v "$OUT":/out --shm-size 32g \
   -v "$OUT/ipc":/tmp/n1_ci -v "$OUT/artifacts":/tmp/n1_artifacts \
   -v "$OUT/build":/tmp/pypto_build_output \
@@ -171,4 +186,12 @@ set -e
 
 { echo "finished=$(date -Is)"; echo "stage_b_rc=$rc gate_rc=$grc"; } >> "$OUT/run_contract.txt"
 echo "[gate] OUT=$OUT"
-if [ "$rc" = 0 ] && [ "$grc" = 0 ]; then echo PRECISION_GATE_PASS; else echo PRECISION_GATE_FAIL; fi
+gate_rc=0
+[[ $rc -eq 0 && $grc -eq 0 ]] || gate_rc=1
+[[ -s "$OUT/verdict.txt" ]] || gate_rc=1
+if [[ $gate_rc -eq 0 ]]; then
+  echo PRECISION_GATE_PASS
+else
+  echo PRECISION_GATE_FAIL >&2
+fi
+exit "$gate_rc"

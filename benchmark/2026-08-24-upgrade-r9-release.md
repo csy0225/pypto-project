@@ -3,6 +3,23 @@
 > 本文是 [`2026-08-23-upgrade-image-release-gates.md`](2026-08-23-upgrade-image-release-gates.md)
 > 中受阻候选的后续收口。所有最终结论都绑定同一 immutable manifest；不借用旧镜像或
 > source-overlay 数据。
+>
+> **2026-08-25 状态更新**：packed-NZ MoE fusion r10 已完成 immutable
+> A/B/A、六档 correctness、outer DFX、`stepfun/develop` exact-lease 同步和最终
+> release contract，现为当前 release-admitted 基线。本文保留为 r9 回退记录。r10 见
+> [`2026-08-25-moe-fusion-image-release.md`](2026-08-25-moe-fusion-image-release.md)。
+>
+> r10 A1/B/A2 p50 为 `22.524/21.821/22.580 ms`、mean
+> `22.862/21.937/22.633 ms`、p99 `28.542/28.338/24.208 ms`；相对 baseline
+> midpoint `22.552 ms` 为 `−0.731 ms / −3.241%`，bracket `0.056 ms`，
+> 三臂 hidden/token exact，ABA verdict SHA256
+> `8d4224e0214b71bae01efe24393e5886375e04dff5481ffd34ba19e3821ddb0e`。
+> pypto-lib `stepfun/develop` 已由 `bf3ff440` exact-lease FF 到 `fe641929`
+> （`git-sync-r10-20260825-144155/`）。最终合同
+> `r10-release-admission-20260825-150350/release_contract.json` 为
+> `step3p5.r10-release-admission.v2`、`71/71` PASS，SHA256
+> `bcdd0b11d346e450dca49b8434544de5566b7fc0ad1a38c715815a41958dafca`。
+> 完整 `E5→E6` 仍为 `n/a`，BS8/BS16 单次回退 caveat 仍保留。
 
 ## 1. 最终发布身份
 

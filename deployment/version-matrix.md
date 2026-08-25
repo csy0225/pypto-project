@@ -5,7 +5,56 @@
 
 ## 已验证组合
 
-### 当前 upgrade r9 release admission（2026-08-24）
+### 当前 r10 packed-NZ MoE fusion release admission（2026-08-25）
+
+> **0162 immutable-image release admission：PASS。**
+> Build/audit/fresh-pull/compile、Main+MTP liveness、N=128/H4 parity、ITL、
+> matched A/B/A、六档 correctness、前五层 hidden/swimlane/DFX、
+> `stepfun/develop` exact-lease sync 与最终 release contract 均已闭环。
+
+```text
+tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260825-r10
+manifest: sha256:8510f30e1f2a2f2edcaa834c831165b349a4aca1212b655ca2a02ed6b3e9907b
+config:   sha256:38ebba41d6aa0c49940c03e2e7c6fa42d85b61d631c143d38944683d0c657b5f
+runtime:  PYPTO_H4_RESIDENT=all
+```
+
+| 槽位 | Pin | 备注 |
+|------|-----|------|
+| Driver | `25.5.2` | 0162 device verified |
+| Firmware | `7.8.0.7.220` | 与 driver 成对 |
+| CANN | `9.0.0-beta.1` | NOT GA |
+| pypto | `519b588a7a6461cac0e443e853accf29479c1d15` | 与 r9 相同 |
+| pypto-lib / vllm-pypto | `fe641929dbf959d887ad111f3bd7cac0b73fa34b` | `stepfun/develop` 远端 exact-lease fast-forward 后已复核 |
+| pto-isa | `cd4a3d3f7a1a27fcfe536f617e9bca3008929664` | 上游声明 pin |
+| PTOAS | `307d0484a9e7d5e36f01b253d2bebe4d2f45fe81` | source pin |
+| simpler | `85a82c454074c069315ed6485033c3c2b136e562` | 与 r9 相同 |
+| ptoas-bin | `v0.57` | binary SHA `2183e4cf…` |
+| vLLM patch | `1b3e538c35999e62b6d24e0651b3a85b7d16c826` | immutable checkout |
+
+当前门结论：
+
+- source unit `162 passed`；镜像 audit/smoke、whole compile、registry/fresh pull PASS；
+- Main 8-step、MTP single/batch16 PASS；
+- accepted-oracle N=128：H4 `all/none` 均 `127/128`、mismatch `[94]`、
+  finite、TP spread 0；256/256 hidden tensor pair byte-exact；
+- H4-all 64K/1000 p50 `21.742 ms`，curve p50
+  `21.503/22.106/22.135/22.285 ms`，ITL admission PASS；
+- immutable r9/r10/r9 A/B/A p50 `22.524/21.821/22.580 ms`，r10 相对
+  baseline midpoint `22.552 ms` 为 `-0.731 ms / -3.241%`，三臂 hidden/token exact；
+- 六档 BS correctness `6/6` exact、`12/12` tensor health PASS；单次诊断中
+  BS8/BS16 分别回退 `+5.677/+0.551 ms`，不宣称多 BS 性能全面提升；
+- L3/L4 hidden exact，8/8 rank DFX 完整；fused E3→E4 median
+  `44.97/41.62 us`，routed down `16.18/16.44 us`；
+- pypto-lib `stepfun/develop` 已从 `bf3ff440` fast-forward 到 `fe641929`；
+- final contract：
+  `0162:…/r10-release-admission-20260825-150350/release_contract.json`，
+  `pass=true`，SHA256 `bcdd0b11…8dafca`。
+
+完整记录：
+[`../benchmark/2026-08-25-moe-fusion-image-release.md`](../benchmark/2026-08-25-moe-fusion-image-release.md)。
+
+### 前一版 upgrade r9 release admission（2026-08-24）
 
 > **0162 immutable-image admission：PASS。** Registry push、raw manifest/config、
 > fresh pull、precision、Main/MTP liveness、前五层 hidden/swimlane/DFX 与五仓同步均闭环。

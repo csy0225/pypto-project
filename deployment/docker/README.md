@@ -1,12 +1,76 @@
 # vllm-pypto 可复现镜像 — 构建 / 部署 / 验证
 
-基于 0162 验证过的 0724 环境 + immutable repository pins,做成一个自包含、可复现的
-vllm + pypto 集成镜像。**构建于 devbox(有 docker),部署验证在 0162(NPU 机, 只有
-containerd/nerdctl)。**
+基于 immutable repository pins 构建自包含的 vLLM + PyPTO 集成镜像。当前权威
+build/test/publish 主机是 0162（containerd/nerdctl + BuildKit）；devbox 负责
+GitHub ref 同步与 registry raw-manifest 复核，不作为当前权威构建机。
 
 ---
 
-## 0. 当前镜像状态（2026-08-11）
+## 0. 当前镜像状态（2026-08-25）
+
+### 0.1 当前 release-admitted 基线：r10 packed-NZ MoE fusion
+
+```text
+tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260825-r10
+manifest: sha256:8510f30e1f2a2f2edcaa834c831165b349a4aca1212b655ca2a02ed6b3e9907b
+config:   sha256:38ebba41d6aa0c49940c03e2e7c6fa42d85b61d631c143d38944683d0c657b5f
+spec:     builds/stepfun-upgrade-20260825-r10.env
+```
+
+镜像 pins：
+
+```text
+pypto      519b588a7a6461cac0e443e853accf29479c1d15
+pypto-lib  fe641929dbf959d887ad111f3bd7cac0b73fa34b
+pto-isa    cd4a3d3f7a1a27fcfe536f617e9bca3008929664
+PTOAS      307d0484a9e7d5e36f01b253d2bebe4d2f45fe81
+simpler    85a82c454074c069315ed6485033c3c2b136e562
+ptoas-bin  v0.57
+vLLM       1b3e538c35999e62b6d24e0651b3a85b7d16c826
+```
+
+已完成的 digest-only 门：
+
+- source unit `162 passed`；
+- credential、五仓 exact pin/clean tree、prepared-swimlane capability、
+  image smoke 和 external extension audit 全 PASS；
+- whole compile rc=0；
+- registry push、isolated-namespace fresh pull、raw manifest/config 全 PASS；
+- Main 8-step、MTP single、MTP batch16 liveness 全 PASS；
+- accepted-oracle N=128：H4 `all/none` 均 `127/128`，mismatch `[94]`，
+  finite、TP spread 0，两个模式 256/256 hidden tensor pair byte-exact；
+- H4-all 64K/1000 ITL p50 `21.742 ms`，四点 curve p50
+  `21.503/22.106/22.135/22.285 ms`，ITL admission `pass=true`。
+- immutable r9/r10/r9 A/B/A p50 `22.524/21.821/22.580 ms`，r10 相对
+  baseline midpoint 改善 `0.731 ms / 3.241%`，三臂 hidden/token exact；
+- BS `1/2/4/7/8/16` correctness `6/6` exact、`12/12` tensor health PASS；
+- L3/L4 hidden exact，8/8 chip swimlane/deps/name-map/critical-path/merged
+  artifacts 完整，analyzer `pass=true`、`blockers=[]`；
+- pypto-lib `stepfun/develop` 已 exact-lease fast-forward 到 `fe641929`；
+- final release contract `pass=true`：
+  `0162:…/r10-release-admission-20260825-150350/release_contract.json`
+  （SHA256 `bcdd0b11…8dafca`）。
+
+六档单次 latency 只作诊断：BS8/BS16 分别回退 `+5.677/+0.551 ms`，
+因此不能宣称多 BS 性能全面提升。完整记录：
+[`../../benchmark/2026-08-25-moe-fusion-image-release.md`](../../benchmark/2026-08-25-moe-fusion-image-release.md)。
+
+### 0.2 前一版 release-admitted 基线：upgrade r9
+
+```text
+tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260824-r9
+manifest: sha256:b637f00c66d4dc976c053c617d2e19e6d6d66f68f4bef30250984da7a71690f6
+config:   sha256:f6c8f72eecad0a9d40d0c4ea55afaab09dd4e2f5fe54d6a091e332465e421dae
+runtime:  PYPTO_H4_RESIDENT=all
+```
+
+r9 的 registry、precision、Main/MTP liveness、L3/L4 exact、
+8/8 chip swimlane/DFX 与远端同步均已闭环；64K/1000 p50 为
+`22.253 ms`。未显式设置 H4 时默认 `none`，会回到约 `27.8 ms`。
+完整证据：
+[`../../benchmark/2026-08-24-upgrade-r9-release.md`](../../benchmark/2026-08-24-upgrade-r9-release.md)。
+
+### 0.3 历史 K8 partial-gate image（2026-08-11）
 
 当前源码 tip 为 pypto `1c048a744d5f63a8bce1ddb45dac8d1b7f458bb0`、pypto-lib
 `cb96747eb21f5f4932d6a24eddaa69c85d095ef6`（= `8e92b468` / `491267c4` 之后叠了 K8

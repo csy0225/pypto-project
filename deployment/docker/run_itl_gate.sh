@@ -19,6 +19,14 @@ set -Eeuo pipefail
 cd /tmp
 
 IMGID=${1:?need image id or digest}
+H4_RESIDENT=${PYPTO_H4_RESIDENT:-}
+case "$H4_RESIDENT" in
+  ""|none|rope|gate|all) ;;
+  *)
+    echo "FAIL: PYPTO_H4_RESIDENT=$H4_RESIDENT is invalid" >&2
+    exit 2
+    ;;
+esac
 D=/mnt/persist/chensiyu/workspace/upgrade-20260821
 CKPT=/data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp
 OUT=$D/itl-$(date +%Y%m%d-%H%M%S)
@@ -31,6 +39,9 @@ COMMON="--rm --net host --ipc host --privileged --security-opt apparmor=unconfin
   --device /dev/davinci_manager --device /dev/hisi_hdc --device /dev/devmm_svm
   -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
   -v $CKPT:$CKPT:ro -v $OUT:/out -v $OUT/build:/tmp/pypto_build_output --shm-size 32g"
+if [ -n "$H4_RESIDENT" ]; then
+  COMMON="$COMMON --env PYPTO_H4_RESIDENT=$H4_RESIDENT"
+fi
 
 {
   echo "schema=step3p5.itl-gate.v1"
@@ -39,6 +50,7 @@ COMMON="--rm --net host --ipc host --privileged --security-opt apparmor=unconfin
   echo "checkpoint=$CKPT"
   echo "host_devices=0,1,2,3,4,5,6,7"
   echo "platform=a2a3 active_batch=1 num_blocks=512 overrides=none"
+  echo "h4_resident=${H4_RESIDENT:-none}"
   echo "started=$(date -Is)"
 } > "$OUT/run_contract.txt"
 cat "$OUT/run_contract.txt"
@@ -84,4 +96,14 @@ done
 
 { echo "finished=$(date -Is)"; echo "rc_long=$rc_long rc_curve=$rc_curve"; } >> "$OUT/run_contract.txt"
 echo "[gate] OUT=$OUT"
-if [ "$rc_long" = 0 ] && [ "$rc_curve" = 0 ]; then echo ITL_GATE_RC0; else echo ITL_GATE_RC_NONZERO; fi
+gate_rc=0
+[[ $rc_long -eq 0 && $rc_curve -eq 0 ]] || gate_rc=1
+for report in "$OUT/long/itl_report.json" "$OUT/curve/itl_report.json"; do
+  [[ -s $report ]] || gate_rc=1
+done
+if [[ $gate_rc -eq 0 ]]; then
+  echo ITL_GATE_RC0
+else
+  echo ITL_GATE_RC_NONZERO >&2
+fi
+exit "$gate_rc"

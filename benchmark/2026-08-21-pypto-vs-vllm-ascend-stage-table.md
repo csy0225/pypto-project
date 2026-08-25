@@ -1,4 +1,4 @@
-# PyPTO vs vLLM-Ascend 逐阶段时间对比表（2026-08-24 r9 overlay；保留 2026-08-21 历史对照）
+# PyPTO vs vLLM-Ascend 逐阶段时间对比表（2026-08-25 r10 immutable 复核；保留历史对照）
 
 > **历史基线一句话（2026-08-21 R5）**：PyPTO 单层 wall 与 vLLM-Ascend 同类层同量级（full-MoE `458.82` vs
 > `408.50 us`，**1.12×**）。差距**不在 expert 计算**（`routed_gmm1` `41.72` vs `42.52 us`
@@ -69,7 +69,7 @@ E0–E7 语义 endpoint 对齐，不要求 kernel 名称一致；不要把两种
 | `E2→E3` route organization / dispatch | `49.40 / 48.66 us` | `52.0 / 50.5 us` | `42.50 us` | `+6.90 / +6.16 us` | EP ownership transfer 相对 local route plan 多出跨卡等待 |
 | `E3→E4` GMM1 + activation + requant | `85.42 / 79.34 us` | `87.8 / 82.0 us` | `45.25 us` | `+40.17 / +34.09 us` | **这是逻辑阶段差异，不是 kernel-name 差异**；r9 三个 task 聚合后与 vLLM 一个语义阶段对齐 |
 | `E4→E5` routed down | `35.48 / 25.14 us` | `40.1 / 26.9 us` | `34.50 us` | `+0.98 / −9.36 us` | L3 接近、L4 方向偏快；仍受 BS/context 与 route 分布影响 |
-| `E5→E6` return / restore / merge | `n/a / n/a` | `59.30* / 52.66* us` | `57.50 us` | n/a | 完整 r9 endpoint 的观测缺失；`*` 仅为 routed-combine partial diagnostic，不与 vLLM 完整阶段直比 |
+| `E5→E6` return / restore / merge | `n/a / n/a` | `31.8 / 43.6 us` | `57.50 us` | n/a | 完整 r9 endpoint 的观测缺失；CP 只覆盖 routed combine；其 scatter→reduce partial envelope 另为 `59.30 / 52.66 us`，不能与 vLLM 完整阶段直比 |
 | `E6→E7` residual | `15.72 / 14.64 us` | `10.0 / 11.3 us` | `4.50 us` | `+11.22 / +10.14 us` | residual/output-ready 方向上 r9 仍有余量 |
 | **`E0→E7` complete MoE** | **n/a / n/a** | **n/a** | **`229.25 us`** | **n/a** | 当前 r9 报告没有形成包含 shared + TP AR + global fence 的统一 E0/E7 endpoint |
 
@@ -107,7 +107,9 @@ restore 算术时间。
 3. **`E5→E6` 当前只能报告 routed combine 子路径。**
    `combine_scatter → combine_wait → combine_reduce` 已在 observed path，
    但 shared branch、TP AR 和 global fence 没有在当前 rank2 报告中形成统一
-   E6 endpoint；完整阶段应记 `n/a`，不能从 partial sum 推导全阶段比值。
+   E6 endpoint；完整阶段应记 `n/a`，不能从 partial envelope
+   `59.30/52.66 us` 推导全阶段比值。该子路径 observed-CP 为
+   `31.8/43.6 us`，两种口径不得互换。
 4. **R5 的 `~4 us/task` gap 仍只属于历史 stage-exclusive capture。**
    当前 r9 LOW-WAIT rank2 的 stall `0.323 ms` 全部是 data-wait，没有
    `core-wait` 或 `front-gap`，不能把历史 gap 直接搬到 r9。
@@ -124,6 +126,230 @@ restore 算术时间。
 | r9 当前完整 `E0→E7` 已经比 vLLM 快/慢多少 | ❌ 当前报告没有全局 E0/E7 endpoint，且 workload/statistics 不同 |
 | EP combine 是 `E5→E6` 的主要结构性差异 | ✅ 方向性支持；完整 E6 仍需全 rank endpoint |
 | 旧表 `routed_gmm1` kernel parity 是否等于 r9 phase parity | ❌ 两者不是同一层次；以本节 E3→E4 为准 |
+
+### 0.5 2026-08-24 packed-NZ fused candidate（latest-r9 source overlay）
+
+本轮在同一 latest-r9 digest 上，把历史 packed-NZ external 路径窄移植到
+current-r9 source pin。该候选在 2026-08-24 采集时仍是 **source overlay**；
+2026-08-25 已烧入并准出为 immutable r10，镜像自身的复核结果见 §0.6。
+
+实现边界：
+
+- `expert_gate_up → expert_gate_up_act → routed_h_quant` 三个 scheduler task
+  合成一个 mixed AIC/AIV task：
+  `routed_nz_gmm1_swiglu_quant`；
+- W13/W2 使用 `FRACTAL_NZ`，down 使用独立 external kernel；
+- fused task 固定 `24 AIC + 48 AIV` physical slices，因为内部有 whole-die
+  `SYNCALL`；down 在 BS1 为 `23 AIC + 46 AIV`，multi-batch 为 `22 AIC`
+  对应的 dual-AIV 配置；
+- down 的 `23/22` 是按 BS 的二档策略，不是按本 rank active-expert 数动态
+  改 `core_num`。逻辑 work 在 kernel 内 grid-stride；为选核而提前把 device
+  active-expert scalar 拉回 orchestrator 会破坏 early-submit，不能机械加入。
+
+#### 0.5.1 Whole-network matched A/B/A
+
+合同：BS1、ctx `65536`、`num_blocks=512`、warmup `10`、iters `100`、
+`PYPTO_H4_RESIDENT=all`、cards `8-15`，三臂 fresh container/nonce/build，
+并持 full-machine 与 legacy half-machine 全部锁。
+
+| arm | source | p50 | mean | p99 | hidden/token |
+|---|---|---:|---:|---:|---|
+| A1 | current-r9 `bf3ff440` | `22.786 ms` | `22.882 ms` | `24.713 ms` | exact |
+| B | packed-NZ fused candidate | **`21.854 ms`** | **`21.982 ms`** | `26.315 ms` | exact |
+| A2 | current-r9 `bf3ff440` | `22.537 ms` | `22.671 ms` | `25.809 ms` | exact |
+
+基线 midpoint 为 `22.6615 ms`；候选降低
+**`0.8075 ms / 3.563%`**，且低于两次 baseline。三臂 hidden SHA 均为
+`567b206b…e27f03e`，token 均为 `14371`。候选 100-iter 的 p99 有单次尾点，
+因此准入结论以 p50/mean 和后面的 1000-iter corroboration 为主，不能声称
+tail 已由这组三臂完全解决。
+
+另做同合同 candidate-only 1000-iter：
+
+```text
+p50 22.012 ms
+mean 22.216 ms
+p99 25.310 ms
+min  21.806 ms
+max  33.918 ms
+```
+
+相对已发布、但非 matched arm 的 r9 H4-all 1000-iter
+`22.253/22.426/27.206 ms`（p50/mean/p99），候选分别为
+`−0.241/−0.210/−1.896 ms`。这只是跨时段、跨 card set 的重复性旁证；
+正式相对收益仍以上面的 matched A/B/A 为准。
+
+#### 0.5.2 Candidate five-layer DFX
+
+原始 device run 的 L3/L4 hidden 均 `torch.equal`，8/8 rank 的
+swimlane/deps/name-map/critical-path/merged JSON 完整。首次 metrics sidecar
+因 external funcs `72–75` 在 L3/L4 复用而按 name-only 错误合层，导致
+`pass=false`；这是观测器 bug，不是 kernel/device failure。随后只用原始 DFX
+按每层 `dispatch_gather → combine_scatter` task-id 区间离线重解析，corrected
+verdict `pass=true`，未重跑设备。
+
+同一 physical-task envelope 按 active rank 取 median：
+
+| 阶段 | current r9 active-rank median（L3 / L4） | candidate active-rank median（L3 / L4） | 历史 vLLM | 结论 |
+|---|---:|---:|---:|---|
+| `E3→E4` GMM1+act+requant | `77.43 / 78.34 us` | **`44.19 / 42.18 us`** | `45.25 us` | 描述性阶段耗时已进入 vLLM 同量级；相对 r9 为 `−42.9% / −46.2%` |
+| `E4→E5` routed down | `22.78 / 18.09 us` | **`14.27 / 14.10 us`** | `34.50 us` | candidate down 不是瓶颈 |
+| fused→down inter-task gap | `6.92 / 7.57 us` | `7.47 / 6.97 us` | n/a | 三合一删除了旧 gate-up→act 与 act→quant 两个边界，但最后一个 fused→down 边界仍在 |
+
+current-r9 被删除的两个 raw inter-task gap 合计 median 为
+`11.02 us (L3) / 11.09 us (L4)`。candidate 的收益同时包含 packed-NZ、
+kernel 本体和 task 边界删除，不能把整网 `0.8075 ms` 全归因于调度间隙。
+
+LOW-WAIT `rank2/d0`：
+
+| 指标 | L3 | L4 |
+|---|---:|---:|
+| fused envelope | `69.00 us` | `41.72 us` |
+| fused observed-CP（compute+stall） | `95.5 us` | `63.3 us` |
+| down envelope | `30.14 us` | `12.76 us` |
+| fused→down gap | `7.54 us` | `7.24 us` |
+| E5→E6 scatter / wait / reduce | `14.08 / 1.58 / 4.64 us` | `14.20 / 33.68 / 3.46 us` |
+| E5→E6 routed partial envelope | `27.68 us` | `57.14 us` |
+| E5→E6 routed observed-CP | `29.6 us` | `63.6 us` |
+
+L3 rank2 有 `24` 条接收 route，而 L4 为 `8`，所以 `69.00/30.14 us`
+是实际重 route 计算长尾，不是 analyzer 把两层拼接后的假 span。全 rank
+`combine_wait` 最大仍为 `150.50 us (L3) / 143.78 us (L4)`，且 zero-route
+rank 最严重；因此 E5→E6 的主要尾部仍是 remote-producer completion wait，
+不是本地 unpermute/reduce 算术。
+
+#### 0.5.3 E5→E6 与 vLLM unpermute 的最终判定
+
+不能用 local `MoeTokenUnpermute` 直接替换 PyPTO 的完整 E5→E6：
+
+1. PyPTO 是 EP8，E5 后结果仍在 remote expert owner，必须保留
+   `combine_scatter → completion wait → token reduce`；
+2. route weight 已在 W2 epilogue 乘过，直接复用 weighted unpermute 会产生
+   weight²；
+3. 当前 local reduce 已是 token-major FP32 TopK reduce，本体仅数微秒。
+
+可借鉴的是 index-driven local reduce 或更大的 E2→E6 distributed primitive，
+但当前下一优先级应是：
+
+1. fused/down 内按 route-row tile 做 device-side work partition，压 L3 rank2 /
+   L4 rank6 的重 route 长尾；不要用阻塞 host scalar read 动态改核数；
+2. 评估 fused→down 继续融合或消除 GM bridge，目标回收剩余 `~7 us` 边界；
+3. 把 W2 completion 改成 required-peer/chunk 粒度并与 remote put 重叠，
+   先满足 payload-store-before-notify fence 合同；
+4. 补完整 shared TP-AR/global fence 的 E6 endpoint；在此之前完整 E5→E6
+   仍必须记为 `n/a`。
+
+权威产物：
+
+```text
+0162:/mnt/persist/chensiyu/workspace/perf-2026q3/
+  r9-moe-fusion-port-20260824/
+    source-v2-agent/candidate/
+    aba-source-v2-current-r9-20260824-175728/ABA_RESULT.json
+    itl1000-source-v2-current-r9-20260824-182531/runtime/itl_report.json
+    five-layer-swimlane-source-v2-agent-20260824-181103/
+      runtime/build_output/FiveLayerMoe_20260824_181436/
+        dfx_outputs/rank2/d0/merged_swimlane_20260824_181516.json
+      runtime/dfx_analysis/candidate_moe_metrics.corrected.verdict.json
+```
+
+### 0.6 2026-08-25 immutable r10 image 复核
+
+本节只使用 r10 digest
+`sha256:8510f30e1f2a2f2edcaa834c831165b349a4aca1212b655ca2a02ed6b3e9907b`
+内置的 clean `pypto-lib@fe641929`，无 source/runtime overlay。outer 合同为
+BS1、ctx `65536`、`num_blocks=512`、warmup `3`、iters `20`、
+`PYPTO_H4_RESIDENT=all`、`PYPTO_MOE_DFX_PROFILE=packed-nz`。
+
+#### 0.6.1 Outer hidden / 8-rank DFX
+
+outer admission `pass=true`：
+
+- L3/L4 hidden 对 accepted r9 golden `torch.equal` 且 file SHA 相同：
+  `5aca3716…108ee8b9` / `0308be31…e400a4`；
+- analyzer `pass=true`、`blockers=[]`，recv_meta sidecar ready；
+- chip swimlane、deps、name-map、critical-path、merged swimlane 五类产物均
+  为 `8/8`；
+- fused task 精确使用 `24 AIC + 48 AIV`，down task 精确使用
+  `23 AIC + 46 AIV`；每层 6 个 active ranks、2 个 predicate-skip ranks。
+
+同一 physical-task envelope 按 active rank 取 median：
+
+| 阶段 | immutable r10 L3 / L4 | min–max（L3 / L4） | 历史 vLLM | 判定 |
+|---|---:|---:|---:|---|
+| `E3→E4` fused GMM1+SwiGLU+requant | **`44.97 / 41.62 us`** | `44.36–70.74 / 40.84–69.72 us` | `45.25 us` | 镜像实测进入同量级；重 route rank 仍形成 max 长尾 |
+| `E4→E5` routed down | **`16.18 / 16.44 us`** | `14.58–28.22 / 14.68–29.14 us` | `34.50 us` | 不是当前瓶颈 |
+| fused→down inter-task gap | `7.30 / 7.23 us` | `6.82–7.86 / 6.80–7.98 us` | n/a | 三合一后仍剩一个 task/GM 边界 |
+
+这组值是 physical-task wall envelope。analyzer 对 per-stage numeric
+critical-path contribution 仍标为 instrumentation limitation，因此不能拿
+全 rank makespan 代替阶段 CP。五层运行 p50/mean 为
+`10.620/10.623 ms`；LOW-WAIT reference 仍是 `rank2/d0`，
+makespan `1.845 ms`。
+
+权威 evidence：
+
+```text
+0162:/mnt/persist/chensiyu/workspace/moe-fusion-release-20260825/
+  r10-outer-swimlane-dfx-20260825-141817/
+    outer_admission.json
+      sha256 e1eab1c6179f1ade55bed81160ef106c1345d25bcd63f0a6fd92d7dcdad20a7d
+    critical_path_metrics.json
+      sha256 0bbe5a409a445a0f3a916ea54676dd24b370537454446f6baaabd2b30009e722
+    runtime/dfx_analysis/moe_dfx_report.json
+      sha256 c5b07841dd03d5a5d8522b1a25f0525720db289ab3dea9294af28b4fe9c3f435
+    runtime/dfx_analysis/moe_critical_path_report.md
+      sha256 9c05e84cc17791ede816c954b75c6a6f2e964932434b130b20b6141f7ffde42b
+    runtime/hidden_l3.pt
+      sha256 5aca3716156b190ece14780bc32316e23423ab0c4f9525ba50b4730f108ee8b9
+    runtime/hidden_l4.pt
+      sha256 0308be3197bfe1921215c2082146946a625350896949f63572b52145afe400a4
+```
+
+#### 0.6.2 E5→E6 仍为 `n/a`
+
+完整 `E5→E6` 仍没有统一的 shared + TP-AR + global-fence semantic endpoint，
+不能把 routed combine partial 当成完整阶段。当前
+`combine_scatter→combine_reduce` partial：
+
+| 统计（8 ranks） | L3 | L4 |
+|---|---:|---:|
+| median | `55.63 us` | `62.54 us` |
+| max | `155.66 us` | `158.98 us` |
+
+最大值来自 route-empty ranks；对应 `combine_wait` 约
+`137.62–146.72 us`，而本地 scatter/reduce 本体只有数微秒到十余微秒。
+因此 immutable r10 再次确认：主要长尾是 remote producer completion wait，
+不是本地 unpermute/reduce 算术。上述 partial 不能与历史 vLLM 完整
+`57.50 us` 直接比较，完整 `E5→E6` 继续记 `n/a`。
+
+#### 0.6.3 六档 correctness 与单次 latency 诊断
+
+r9/r10 digest-only 两臂在 ctx `128`、`num_blocks=32`、warmup `1`、
+iters `1` 下依次执行 BS `1/2/4/7/8/16`。六档全部 hidden
+`torch.equal=true`、`max_abs=0`；`12/12` arm-batch 均为
+BF16 `[8,16,4096]`、finite、TP spread `0.0`、inactive exact zero。
+
+| BS | r9 单次 ITL | r10 单次 ITL | delta | correctness |
+|---:|---:|---:|---:|---|
+| 1 | `22.673 ms` | `21.404 ms` | `−1.269 ms` | exact |
+| 2 | `23.240 ms` | `21.828 ms` | `−1.412 ms` | exact |
+| 4 | `27.103 ms` | `26.376 ms` | `−0.727 ms` | exact |
+| 7 | `34.305 ms` | `33.112 ms` | `−1.193 ms` | exact |
+| 8 | `35.124 ms` | `40.801 ms` | **`+5.677 ms`** | exact |
+| 16 | `51.317 ms` | `51.868 ms` | **`+0.551 ms`** | exact |
+
+这些是 warmup1/iters1 的伴随诊断，不能作为多 BS 性能结论。正确表述是
+“六档 correctness PASS”；不能写成“六档性能全部提升”，因为 BS8/BS16
+单次方向明确回退。
+
+```text
+six-batch-r9-r10-h4-20260825-140158/
+  six_batch_r9_r10_verdict.json
+    sha256 9e58959ff49fe0bf663b69a89ab0ddf0f28c550a1eb3449ee544f884c3a66a85
+  six_batch_r9_r10_verdict.txt
+    sha256 526efd1dc05b12c0eadb7cacd443c38209e27fc58c0907e96bdd036aabde5bc4
+```
 
 ---
 
