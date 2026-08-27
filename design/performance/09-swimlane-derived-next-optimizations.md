@@ -1,11 +1,14 @@
 # 由 swimlane 推导的下一批优化（2026-08-21）
 
-> **2026-08-24 结果更新（优先于下方立项时快照）**：H4 已以
-> `PYPTO_H4_RESIDENT=all` 落地并进入 upgrade r9，`bind.args`
-> `6.461 → 0.063 ms`、64K/1000 ITL `27.812 → 22.253 ms`；H5 已恢复
-> 8/8 rank chip swimlane，L3/L4 exact、analyzer/outer admission PASS。
-> 镜像未 bake H4 env，正式 deployment 接线仍 open。证据见
-> [`../../benchmark/2026-08-24-upgrade-r9-release.md`](../../benchmark/2026-08-24-upgrade-r9-release.md)。
+> **2026-08-27 结果更新（优先于下方立项时快照）**：H4/H5 后，H6 以
+> pypto `14de90fd` 落地并进入 r12。r11 source-overlay A/B/A 的 ITL
+> `21.6805→21.115 ms`（`−2.608%`）、graph build `−44.429%`、
+> graph→first runner `−47.936%`、serial rank submit envelope `−23.887%`；
+> 正式门仍是 serial 8-rank independent submit，不是 native group-submit。
+> r12 immutable correctness/security/final contract `1844/1844` PASS，但未重采
+> r12 immutable 性能 A/B/A。`bind.args` 已降至候选 ITL 的 `0.259%` 且
+> `no_clear_change`，继续优化明确 NO-GO。镜像仍未 bake H4 env。证据见
+> [`../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md)。
 > 下文保留 2026-08-21 的立项推导与当时尚未验证的假设，不能覆盖该结果。
 >
 > **触发**：R6-R9 dispatch 域小算子融合线整体关闭后，重新用 swimlane 定方向。
@@ -22,12 +25,14 @@
 |---|------|---------:|---:|------|
 | **1** | **H4 step-invariant constants resident** | 实测 `5.559 ms` | **9.0×** | ✅ r9 落地；deployment env 待接 |
 | **2** | **观测性修复**：恢复 8/8 rank chip swimlane + outer admission | 非性能项，是 3/4 的前置 | — | ✅ r9 收口 |
-| **3** | K10 去掉剩余一次阻塞 host control round | `0.45–0.53 ms` | `0.73–0.86×` ⚠ 需紧 bracket | ⬜ 已登记 |
-| **4** | MoE 阶段预算（`E0→E7` 269 → <200 µs） | `2.90–3.02 ms` | `4.7–4.9×` | ⛔ gated（见 §4） |
+| **3** | **H6 prepared TaskArgs cache / graph-submit 收口** | 实测 ITL `0.5655 ms`；graph build `1.8183 ms` | ITL `0.92×`，紧 bracket 过门 | ✅ r12 落地 |
+| **4** | 继续优化 `bind.args` | 当前仅 `0.0547 ms` / ITL `0.259%` | 低于地板一个数量级 | ⛔ NO-GO |
+| **5** | K10 去掉剩余一次阻塞 host control round | `0.45–0.53 ms` | `0.73–0.86×` ⚠ 需紧 bracket | ⬜ 已登记 |
+| **6** | MoE 阶段预算（`E0→E7` 269 → <200 µs） | `2.90–3.02 ms` | `4.7–4.9×` | ⛔ gated（见 §4） |
 
-**一句话**：swimlane 说 device 侧关键路径 **81.2% 是 kernel compute、front-gap = 0**，
-所以整个「派发/粒度」章在关键路径上没有余量（这正是 dispatch 融合线 ROI=0 的结构原因）；
-而同期 host 侧单独一项 `bind.args` 就占 ITL 的 **23%**。**重心应从 device 挪回 host。**
+**一句话**：2026-08-21 的“host 优先”判断已兑现，但机制分成两步：H4 回收静态大参数
+H2D/bind，H6 回收 TaskArgs signature、graph build 与 rank submit envelope。当前
+`bind.args` 只剩 `0.259%`，不再是主路径；下方“23%”仅是立项时代的历史输入。
 
 ---
 
@@ -205,7 +210,7 @@ H2 = `submit` 阶段 `3.49 ms`（2026-07-29，bs=16 / ITL 65 ms era）；
 
 > **结果**：最终没有走“手改生成 `host_orch.py` hoist”路线，而是通过 holder 把
 > 4 个 RoPE 表 + 4 个 gate-R 常量一次上传并重绑为 device-resident tensor。
-> 下表是立项时的历史分解；正式落地与门以本文顶部 2026-08-24 更新为准。
+> 下表是立项时的历史分解；正式落地与门以本文顶部 2026-08-27 更新为准。
 
 > 纪律：**先穷举现有 artifact，再考虑占卡**（见
 > [`../../postmortems/12-integration-churn-meta.md`](../../postmortems/12-integration-churn-meta.md) 根因 11：
@@ -251,6 +256,9 @@ H2 = `submit` 阶段 `3.49 ms`（2026-07-29，bs=16 / ITL 65 ms era）；
    "stall 100% 是 data-wait" 单独也支撑同一结论。
 4. §5.2 的 Amdahl 漂移用了两个不同 era / 不同 bs 的 host 数（`3.49` vs `6.12 ms`），
    **不是配对比较**；只用于说明"份额升高"这个方向，不用于记账。
+5. r12 没有 immutable 性能 A/B/A；H6 的性能百分比只绑定 r11 digest 上两文件
+   source-overlay。commit 标题中的 `parallelize rank submit` 也不等于正式门证明并行/
+   native group-submit。
 
 ---
 
@@ -261,6 +269,7 @@ H2 = `submit` 阶段 `3.49 ms`（2026-07-29，bs=16 / ITL 65 ms era）；
 | swimlane rank2 五件 sha256 | [`05-moe-optimization.md`](05-moe-optimization.md) §Candidate merged swimlane |
 | swimlane 全文 + `rc=1` 契约失败 | [`../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md`](../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md) §5 |
 | `bind.args` / `orch` vs `device_wall` | [`07-hardware-scheduler-performance.md`](07-hardware-scheduler-performance.md) §9；`0162:…/dispatch-orch-decouple-20260821/{FINDINGS.md, analysis-bin/orch_span_stats.py}` |
+| H6 whole-step A/B/A 与 r12 准入 | [`../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md) |
 | MoE 阶段预算 | [`../../benchmark/2026-08-12-vllm-ascend-decode-moe-trace-gap.md`](../../benchmark/2026-08-12-vllm-ascend-decode-moe-trace-gap.md) §13.5 / §14.1 |
 | H2 根因 | [`task-tracking.md`](task-tracking.md) H2 行 |
 | 上游方法论 | `pypto:docs/zh/user/performance/`（`origin/main@5b15048e8`） |

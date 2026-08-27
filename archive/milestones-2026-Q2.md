@@ -1,5 +1,63 @@
 # Milestones —— 2026 Q2
 
+## 2026-08-27 —— whole-step host/graph/submit r12 发布与源码同步 ✅
+
+**镜像 / SRC**：r12 tag `stepfun-upgrade-20260826-r12`，manifest
+`sha256:ba42fd19b3af0144a835e95a4a6925ed89ea700624f696b221e93a54e6eb805d`，
+config `sha256:b36f0cec3a8b64e5e17e273c63d69694730bd8b904e69c2806c3d73a5233f08f`；
+pypto `14de90fd`、pypto-lib `e6c7d8ec`，其余 pins 与 r11 相同。五仓远端
+`stepfun/develop` 已在最终合同中逐项 `ls-remote` 复核。
+
+**性能证据分层**：matched A/B/A 在已发布 r11 digest 上执行，A1/A2 无 overlay，
+B 只 overlay `distributed_runner.py@681db467…351d9` 与
+`tensor_arg.py@3b382193…ae55`；三臂 hidden SHA `ee8ae6b4…a7db96a`、
+tail token `43640` exact。p50：ITL `21.6805→21.115 ms`（`−2.608%`）、
+graph build `4.092562→2.274285 ms`（`−44.429%`）、graph→first runner
+`3.098134→1.613020 ms`（`−47.936%`）、runner wave `−24.008%`、
+serial submit wave `−23.887%`、graph→chip done `−8.443%`。
+各 span 重叠，不相加；正式测量仍为 `serial-eight-rank`、`group_size=1`、
+`group_submit=0`。`bind.args` `+0.000220 ms`、占 ITL `0.259%`，
+判定 `no_clear_change`，停止在该项投入。
+
+**r12 immutable 门**：digest-only、无 source/runtime/core overlay；
+Main H4 all/none 均 `126/128=98.4375%`，MTP BS1/BS16 token
+`[6178,410,303]` 且 hidden pass rate `1.0`，dep-only DFX hidden/token exact。
+容器 `privileged=false`，显式只见 0–7 卡，8–15 保护空闲；immutable smoke、
+fresh registry identity 与 11 个 prestart adversarial fixtures 全 PASS。
+
+最终合同 `step3p5.r12-final-release-admission.v1` 为 `release-admitted`、
+`1844/1844 PASS`，SHA256
+`511a545956aee4cef7264a74460bd04862846e377ef71eb01619ae4ddbf87f3a`。
+边界：没有重采 r12 immutable 性能 A/B/A；DFX 仅 dep-only，不宣称完整 outer swimlane；
+镜像 Config 未 bake `PYPTO_H4_RESIDENT=all`。
+
+权威报告：
+[`../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md)。
+
+## 2026-08-26 —— replicated-input local-owner MoE r11 发布 ✅
+
+**镜像**：`hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260826-r11`，
+manifest `sha256:401ead7da4f957f6532e380fa1a138eda733fe1dc04b40eabc67d79d62a67b12`、
+config `sha256:35c42510a64ce3e1c8e899e15c36ab8b534d091ea03a085ec663f18df8706876`。
+相对 r10 仅 pypto-lib `fe641929→e6c7d8ec`，落地 replicated-input
+local-owner MoE；pypto `519b588a` 及其余 pins 不变。
+
+**门结论**：registry push/raw identity/fresh pull PASS；H4 all/none 均
+`126/128=98.4375%`，两臂 output token 与 128 对 active-hidden byte-exact，
+TP spread 0。H4-all 64K/1000 p50 `21.477 ms`、mean `22.262 ms`、
+p99 `35.882 ms`。
+
+r10/r11/r10 immutable A/B/A p50 为 `21.751/21.745/21.752 ms`，
+baseline midpoint `21.7515 ms`，r11 仅 `−0.0065 ms / −0.0299%`；
+结论是性能中性/无回退，不宣称 local-owner 带来端到端性能收益。
+
+最终合同 `step3p5.r11-release-admission.v1` 为 `20/20 PASS`，SHA256
+`570bb04ef761e66fa12fb246f3482973294fe282688d967c76e119fcda740af7`。
+性能数字绑定 `PYPTO_H4_RESIDENT=all`，镜像 Config 未 bake 该值。
+
+权威报告：
+[`../benchmark/2026-08-26-local-owner-moe-r11-release.md`](../benchmark/2026-08-26-local-owner-moe-r11-release.md)。
+
 ## 2026-08-25 —— packed-NZ MoE fusion r10 正式准入与源码合入 ✅
 
 **镜像**：`hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260825-r10`，
@@ -1317,6 +1375,8 @@ max|value|=0`（dummy zero weight 期望零输出）。Run time 6.69s。
 
 | 日期 | 事件 | pypto | pypto-lib | pto-isa | PTOAS（src） | simpler | ptoas-bin |
 |------|------|-------|-----------|---------|--------------|---------|-----------|
+| 2026-08-27 | whole-step host/graph/submit r12 发布 + SRC 同步（IMG `ba42fd19…`） | `14de90fd` | `e6c7d8ec` | `cd4a3d3f` | `307d0484` | `85a82c45` | `v0.57` |
+| 2026-08-26 | replicated-input local-owner MoE r11 发布（IMG `401ead7d…`） | `519b588a` | `e6c7d8ec` | `cd4a3d3f` | `307d0484` | `85a82c45` | `v0.57` |
 | 2026-08-25 | packed-NZ MoE fusion r10 正式准入 + SRC 同步（IMG `8510f30e…`） | `519b588a` | `fe641929` | `cd4a3d3f` | `307d0484` | `85a82c45` | `v0.57` |
 | 2026-08-24 | **五仓全栈升级 r9 发布 + 同步（IMG `b637f00c…`）** | `519b588a` | `bf3ff440` | `cd4a3d3f` | `307d0484` | `85a82c45` | `v0.57` |
 | 2026-08-12 | TP all-reduce single-row selector 合入（SRC） | `1c048a74` | **`69ad31e4`** | `ecb6c303` | `fc8c6cae` | `e2efebcb` | `v0.50` |

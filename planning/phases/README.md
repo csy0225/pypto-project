@@ -6,7 +6,7 @@
 
 | Phase | 主题 | 状态 |
 |-------|------|------|
-| [`28-live-integration.md`](28-live-integration.md) | 单程序整网 → vLLM live single-handoff 集成 | 🟡 r9 standalone 已准出；H4 deployment env / live front / paged-KV / MTP / HBM 待闭环 |
+| [`28-live-integration.md`](28-live-integration.md) | 单程序整网 → vLLM live single-handoff 集成 | 🟡 r12 standalone 已准出；H4 deployment env / live front / paged-KV / MTP / HBM 待闭环 |
 
 ## 归档
 

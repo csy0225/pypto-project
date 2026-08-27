@@ -19,15 +19,22 @@ KV      = resident per-layer KV + runtime metadata
 当前源码 tip：
 
 ```text
-pypto-lib 491267c45875e9b1e0071eed224e2e73526799e2
-pypto     8e92b46808f9f7c09b6431ad4691503f09c12ee5
+pypto-lib e6c7d8ec34a05c3051ccf0dd169639f40f041a57
+pypto     14de90fd74b3c0716f94b9d4eafdd004d4eaed73
 ```
 
-历史 `c9af5790` image manifest `sha256:3eb694e…` 已通过其源码层级的 BS1×64K
-ITL/DFX partial gate；当前 `491267c4` 尚无 immutable image。
-最后一个完成全量 production matrix 的回退基线仍是 Wave5，镜像内源码为
-pypto-lib `7099476b` / pypto `defa97c5`。历史 R1/R2 已 supersede。
-**源码 tip、latest-source partial gate 与 full-matrix release 必须分开报告。**
+当前 release-admitted immutable image：
+
+```text
+tag      stepfun-upgrade-20260826-r12
+manifest sha256:ba42fd19b3af0144a835e95a4a6925ed89ea700624f696b221e93a54e6eb805d
+config   sha256:b36f0cec3a8b64e5e17e273c63d69694730bd8b904e69c2806c3d73a5233f08f
+```
+
+r12 final contract 为 `1844/1844 PASS`；当前直接回退是 r11 manifest
+`sha256:401ead7d…a67b12`。Wave5 只保留为历史完整 production-matrix 对账，
+不再是当前直接回退。**SRC、source-overlay 性能证据、IMG immutable gate 与
+历史 full-matrix 证据必须分开报告。**
 
 ## 2. 精度 gate
 
@@ -42,13 +49,16 @@ all hidden finite
 TP spread = 0
 ```
 
-Wave5 在固定 oracle 上的三轮结果均为：
+当前 r12 在配对 oracle 上，H4 `all/none` 两个模式均为：
 
 ```text
-123/128 = 96.09375%
-miss = [2,8,13,22,82]
+126/128 = 98.4375%
+miss = [20,69]
 TP spread = 0
 ```
+
+Wave5 的历史三轮结果均为 `123/128`、miss `[2,8,13,22,82]`，只用于旧矩阵
+对账，不能替代 r12 当前 gate。
 
 单 token、随机输入、compile-only、截断层数和 BF16 fallback 都不能作为 precision PASS。
 
@@ -70,6 +80,8 @@ TP spread
 
 MTP 必须使用与 Main 配对的同代输入/oracle，单独报告 token、hidden、finite 和 TP
 spread。缺少配对 oracle 时只能标 `SKIPPED_MISSING_ORACLE`，不能借用旧 N1 artifact。
+当前 r12 的 BS1/BS16 token 均为 `[6178,410,303]`，三层 hidden pass rate
+均为 `1.0`、max abs diff `0`。
 
 ## 3. Liveness gate
 
@@ -125,20 +137,27 @@ specific rank swimlane path
 manifest/config digest
 ```
 
-prepared-worker swimlane 必须先生成依赖图，再在同 worker 上进行 timing-only dispatch；
-当前 pypto `8e92b468` 使用 `l2_swimlane_reuse_dep_gen`。没有最终
-`l2_swimlane_records.json` 就不能宣称 DFX gate 完成。
+若声明 prepared-worker whole-swimlane，必须先生成依赖图，再在同 worker 上进行
+timing-only dispatch；没有最终 chip/swimlane records 就不能宣称 whole-swimlane
+完成。当前 r12 只通过 8/8 `deps.json` 的 dep-only DFX，hidden/token exact，
+**不声明 whole-swimlane**。
 
-## 6. 2026-08-08 当前准出状态
+r12 的 whole-step 性能数字来自 r11 immutable digest 上两文件 source-overlay A/B/A，
+不是 r12 immutable-image 性能复测；正式合同仍为 serial 8-rank independent submit。
+
+## 6. 2026-08-27 当前准出状态
 
 ```text
-current source 491267c4  = NO IMMUTABLE IMAGE YET
-historical c9af image    = BS1×64K ATTENTION/ITL/DFX PARTIAL PASS ON 0162
-Wave5                    = FULL PRODUCTION MATRIX PASS ON 0162
-R1                       = REVOKED
-R2                       = NEVER PUBLISHED / SUPERSEDED
+current source 14de90fd / e6c7d8ec = REMOTE stepfun/develop EXACT
+r12 immutable image                 = RELEASE-ADMITTED, 1844/1844 PASS
+r11 immutable image                 = DIRECT ROLLBACK, 20/20 PASS
+r12 performance                     = NO MATCHED IMMUTABLE A/B/A
+r12 DFX                             = DEP-ONLY PASS, NOT WHOLE-SWIMLANE
+Wave5                               = HISTORICAL FULL PRODUCTION-MATRIX EVIDENCE
+R1                                  = REVOKED
+R2                                  = NEVER PUBLISHED / SUPERSEDED
 ```
 
 当前 digest、ITL、swimlane 路径和剩余 full-matrix gate 见
-[`../benchmark/2026-08-06-attention-taskmajor-canonical.md`](../benchmark/2026-08-06-attention-taskmajor-canonical.md)
+[`../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md)
 与 [`../planning/handoff.md`](../planning/handoff.md)。

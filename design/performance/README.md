@@ -1,13 +1,15 @@
 # Performance 性能优化专项
 
-> **2026-08-24 current override（优先于下方所有历史快照）**：upgrade r9 已发布，
-> manifest `sha256:b637f00c…a71690f6`、config `sha256:f6c8f72e…e421dae`；
-> 当前 pypto `519b588a` / pypto-lib `bf3ff440`。`PYPTO_H4_RESIDENT=all`
-> 下 64K/1000 ITL p50 `22.253 ms`，默认 unset=`none` 为 `27.812 ms`；
-> precision `127/128`、Main/MTP liveness、L3/L4 exact、8/8 chip swimlane 与
-> outer admission 均 PASS。⚠ 镜像未 bake H4 env，正式 launcher 必须显式注入。
-> 详见
-> [`../../benchmark/2026-08-24-upgrade-r9-release.md`](../../benchmark/2026-08-24-upgrade-r9-release.md)。
+> **2026-08-27 current override（优先于下方所有历史快照）**：r12 已发布，
+> manifest `sha256:ba42fd19…eb805d`、config `sha256:b36f0cec…33f08f`；
+> 当前 pypto `14de90fd` / pypto-lib `e6c7d8ec`。r11 digest 上两文件
+> source-overlay A/B/A：ITL `21.6805→21.115 ms`（`−2.608%`）、
+> graph build `−44.429%`、graph→first runner `−47.936%`、rank submit
+> envelope `−23.887%`；正式产品仍为 serial 8-rank independent submit。
+> r12 immutable Main/MTP/dep-only DFX 与 1844/1844 final contract PASS；
+> 没有重采 r12 immutable 性能 A/B/A。`bind.args` 仅占 `0.259%`，停止优化。
+> ⚠ 镜像未 bake H4 env，正式 launcher 必须显式注入。详见
+> [`../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md)。
 >
 > **历史：2026-08-11 K8 immutable image 已发布**：
 > `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260811-k8-selective`，
@@ -103,7 +105,7 @@ producer → 数学变换/quant/route-map → transport/window
 | [`04-attention-optimization.md`](04-attention-optimization.md) | 专项 | attention 单一设计入口：历史实验、负面结果、最终 workload-derived task/tile profile、Full/SWA/online-softmax/out-proj 与 release 边界 |
 | [`05-moe-optimization.md`](05-moe-optimization.md) | 专项 | L0–L4 focused MoE：五层/双 hidden 合同、gate/up critical path、combine wait 解释、最终 split tile、golden、0162 A/B/DFX/swimlane |
 | [`06-upstream-asks.md`](06-upstream-asks.md) | 专项 | 对 pypto / PTOAS 的**可直接提 issue** 的六条诉求（notify `PIPE_ALL` correctness 最高；每条给证据路径、解锁数字、有无本地绕路） |
-| [`09-swimlane-derived-next-optimizations.md`](09-swimlane-derived-next-optimizations.md) | 专项 | 2026-08-21 候选排序依据；H4/H5 已于 2026-08-24 在 r9 收口，正文保留立项推导与结果更新 |
+| [`09-swimlane-derived-next-optimizations.md`](09-swimlane-derived-next-optimizations.md) | 专项 | 2026-08-21 候选排序依据；H4/H5/H6 已收口，正文保留立项推导与 2026-08-27 结果更新 |
 | [`task-tracking.md`](task-tracking.md) | 跟踪 | 看板式任务跟踪记录（状态 / owner / 更新时间 / 阻塞） |
 | [`user_prompt.md`](user_prompt.md) | 提示词 | 复制即用的推进/回归提示词（以 skill + 本目录为单一入口） |
 
@@ -131,9 +133,10 @@ producer → 数学变换/quant/route-map → transport/window
 | **PERF-F3** | 复用V4-Flash deferred-norm/quant producer | F L1/L0 微调 | P2 | 统一norm/amax/scale producer，避免重复fusion架构 | D1 | S (~2d) |
 | **PERF-G1** | experts/feature调度轴 + runtime dynamic active batch/token | G 调度轴/动态batch | **P1** | capacity与逻辑batch解耦；attention/MoE/KV不处理inactive rows | 与B2/C2/C3协同 | L (~2w) |
 | **PERF-H1** | retained window 清零：host 搬零 → device `aclrtMemset` | H host per-step | **P0** | ✅ 清零 `21.50→2.21 ms`、ITL p50 `85.02→65.55 ms`（−22.9%）、每步 H2D `244.7 MiB→0`；语义等价 | A1 | S (~1d) |
-| **PERF-H2** | per-rank 视图重建 hoist 到 `prepare()`（= 跨卡起跑阶梯病根） | H host per-step | P1 | submit 3.49 ms 的大部分；起跑阶梯实测 2.914 ms。**v4-flash 同形状**，属 codegen 通用改进 | H1 | M (~1w) |
+| **PERF-H2** | per-rank 视图重建 hoist（residual graph-build 候选） | H host per-step | P1 | H6 后先重拆剩余 `2.2743 ms` graph build；不得按 bind 优化立项 | H1, H6 | TBD |
 | **PERF-H3** | DFX run 第一 barrier 假长条（观测性，非性能） | H host per-step | P2 | 让 swimlane 可信——该假长条曾把 `tp_all_reduce` 误判成 74.1% wall | A1 | S (~2d) |
-| **PERF-J1** | L0–L4 routed gate/up stage split + task-grain tuning | J MoE compute | **P0** | 🟦 r9 BS1 admission 已闭环：L3/L4 exact、8/8 DFX/swimlane、precision 过门；r9 六档 64K matched A/B 尚未重跑 | A1, C1–C3, D1–D2, G1, I2 | M |
+| **PERF-H6** | prepared TaskArgs cache + whole-step graph/submit 收口 | H host per-step | **P0** | ✅ r11 source-overlay ITL `−2.608%`、graph build `−44.429%`、graph→first `−47.936%`；baked 入 r12，正式仍 serial 8-rank | H4 | DONE |
+| **PERF-J1** | L0–L4 routed gate/up stage split + task-grain tuning | J MoE compute | **P0** | 🟦 实现已被 r12 继承；Main/MTP/dep-only DFX 过门，当前六档 64K matched A/B 尚未重跑 | A1, C1–C3, D1–D2, G1, I2 | M |
 
 优先级：**P0** 零/低风险且解锁其它项，先做；**P1** 收益大的主体；**P2** 微调/收尾。
 工作量：S ≤ 3d，M ≈ 1w，L ≈ 2w，XL 多周。
@@ -149,14 +152,14 @@ Track A–J 是**按 workstream 分工**（谁认领）。但同一个 ITL 数�
 
 | 层 | 是什么 | 谁在这一层被消耗 | 度量工具 | 子任务 |
 |---|---|---|---|---|
-| **L3 · host / CPU** | host 进程的 Python + nanobind + mailbox 往返；`Worker(level=3)` 编排、window 生命周期、per-step 参数打包 | **host CPU 时间**、PCIe H2D | `_dispatch_prepared` / `_reset_persistent_domains` 计时探针；`[STRACE]` | **H1 ✅** · **H2** · H3 |
+| **L3 · host / CPU** | host 进程的 Python + nanobind + mailbox 往返；`Worker(level=3)` 编排、window 生命周期、per-step 参数打包 | **host CPU 时间**、PCIe H2D | `_dispatch_prepared` / `_reset_persistent_domains` 计时探针；`[STRACE]` | **H1 ✅** · H2 · H3 · **H6 ✅** |
 | **L2 · AICPU 调度** | 片上 orchestrator/scheduler：task 图形状、依赖链深度、`early_dispatch`、每 task 的 `block_num` | **task 派发/完成延迟**、核空转 | l2_swimlane（`deps.json` + 记录）、scope_stats | F1 · （新）**任务图瘦身**：1086-hop 关键路径、878/1542 个 `block_num=1` task |
 | **cross-chip · 通信** | 跨卡 collective 与 rendezvous：`tp_all_reduce`、EP dispatch/combine、signal window 与 epoch | **等待时间**（非带宽） | swimlane 上 `*_wait` / `tp_all_reduce` 时长分布；per-rank 对比 | C1 ✅ · C2 ✅ · C3 ✅ · C4 ✅ · E1 · （新）**combine_wait 13.4 ms** |
 | **L1 · kernel 内数据流** | 单 task 内的 MTE/tiling/L1-UB 驻留、量化链、norm 融合 | **MTE 停顿**、cube/vec 利用率 | `perf_hints.log`（PH001 tile 粒度）、PMU exec counter | D1 ✅ · D2 ✅ · F2 · F3 |
 | **L0 · 核内流水** | 一个 AICore 内 cube/vector/MTE 的 pipeline 重叠 | **单 task 时长** | l0_swimlane（`simpler_setup.tools.l0_swimlane`） | （暂无立项；`expert_gate_up_aiv` 与 `aic` 同耗时是候选线索） |
 | **结构 / codegen** | program 形态本身：层展开 vs `pl.range`、权重 resident、调度轴、动态 batch | 以上各层的**上界** | 源码体量、编译产物、IR | B1 ✅ · B2 ✅ · B3 · G1 ✅ |
 | **可观测性** | 让上面每一层可测且可信 | —— | —— | A1 ✅ · H3 |
-| **MoE compute** | routed expert 的 expert/feature/tile 调度与 W8A8 cube/vec pipeline | **L0–L4 focused graph 的 L3/L4 gate/up/down** | focused clean A/B + all-rank DFX/swimlane + memory | **J1 🟦：r9 BS1 hidden/precision/DFX/swimlane 已闭环；r9 六档 64K matched A/B 尚未重跑** |
+| **MoE compute** | routed expert 的 expert/feature/tile 调度与 W8A8 cube/vec pipeline | **L0–L4 focused graph 的 L3/L4 gate/up/down** | focused clean A/B + all-rank DFX/swimlane + memory | **J1 🟦：实现已被 r12 继承；当前六档 64K matched A/B 与所需 all-rank DFX 尚未重跑** |
 
 ### 历史 2026-07-27 ITL 65 ms 按层分账（ctx=64k / bs=16，实测）
 

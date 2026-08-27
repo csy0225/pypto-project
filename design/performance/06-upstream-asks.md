@@ -5,11 +5,12 @@
 > 完整实验记录在 [`task-tracking.md`](task-tracking.md)，本文件只做面向上游的收口，
 > **不重复证据细节**。
 >
-> **最后更新**：2026-08-24。
+> **最后更新**：2026-08-27。
 >
-> **当前产品边界**：`pypto-lib@bf3ff440` / upgrade r9 已收录
-> `69ad31e4` 的静态 single-row selector + 静态三波 fallback，不依赖下列 K6b
-> dynamic-valid-shape 能力。第 2/3 条仍是
+> **当前产品边界**：r12 为 pypto `14de90fd` / pypto-lib `e6c7d8ec`；
+> 仍继承 `69ad31e4` 的静态 single-row selector + 静态三波 fallback，不依赖下列 K6b
+> dynamic-valid-shape 能力。whole-step H6 已落地，`bind.args` 不再是优化项。
+> 第 2/3 条仍是
 > 通用上游能力诉求，其 `µs/call` 数字只绑定历史 K6b 模型，不得写成当前产品待解锁收益。
 
 排序按「correctness 优先，其余按解锁收益」：

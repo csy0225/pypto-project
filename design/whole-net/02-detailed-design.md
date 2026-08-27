@@ -9,10 +9,12 @@
 > [`../../reference/canonical-test.md`](../../reference/canonical-test.md) 的 pin），
 > 重构后如漂移以符号名为准。
 >
-> **2026-08-12 TP all-reduce 增量说明**：当前
-> `pypto-lib stepfun/develop@69ad31e4`；本轮只把共享 dense ABI 与 §6 的
-> TP all-reduce 更新到该提交。其它章节仍锚定 2026-07 历史生成链，不得据此推断
-> 当前完整 topology；当前全局状态以 [`../../STATUS.md`](../../STATUS.md) 为准。
+> **2026-08-27 current override**：当前为 pypto `14de90fd` /
+> pypto-lib `e6c7d8ec`，已烧入 r12。replicated-input local-owner MoE 与 prepared
+> TaskArgs descriptor/signature cache 已落地；正式产品 `decode_fwd.py` 的 host rank
+> loop 仍是 `pl.range`，生成代码仍为 serial 8-rank / 8 个独立 `_submit_chip`。
+> 下方大部分行号仍锚定 2026-07 历史生成链；全局状态以
+> [`../../STATUS.md`](../../STATUS.md) 为准。
 
 ## 1. 单 `@pl.program` canonical 结构
 
@@ -35,10 +37,17 @@
   dense MLP / MoE body 全部 inline 进整 program。
 - MTP 有独立 hidden-only fwd `mtp_hidden_fwd.py`（同样 raw-hidden 边界）。
 
-## 2. host_orch single-submit 与 resident holder
+## 2. host_orch 逐 rank submit、TaskArgs cache 与 resident holder
 
 - host_orch 签名/体：`decode_layer.py:27544`（`@pl.function(level=HOST, role=Orchestrator)`）。
-- 每层段内 `for r in pl.range(pld.world_size())`（如 `:27692/:27709/:27727`）→ **每 rank 一次 `_submit_chip`**。TP=8 = 8 次 submission/step，全部出自这一个 host_orch。
+- 当前产品源码在 `decode_fwd.py` 末端用 `for r in pl.range(pld.world_size())`；
+  生成 `host_orch.py` 保留一个 Python `range`，**每 rank 一次 `_submit_chip`**。
+  TP=8 = 8 次独立 submission/step；r12 未切 native group-submit，也未证明并行下发。
+- pypto `14de90fd` 在 prepared boundary 为 public args 生成稳定 descriptor key /
+  generation token；`tensor_arg.py` 用该 token 复用 TaskArgs signature/cache。
+  未知/可变对象或 cache 异常 fail-open 回完整 signature，cache 与 memo 都有界。
+- `free()` 与 submit validation/token publication/同步 graph construction 共用互斥，
+  保证 cache hit 的 TaskArgs 在 proof window 内不会引用已释放 Buffer。
 - resident holder：`whole_decode_holder.py:42` `WholeDecodeHolder`；`build()`(`:139`) 编译；`__enter__`(`:211`) `compiled.prepare()` 常驻 + `import_weights_all` + `import_kv_all`；`run()`(`:283/:507`) 每 step 一次 `self.rt.run(self.compiled, *self._args_list)`。
 - per-step 变的 host tensor：`current_hidden`、attn-meta（`seq_lens`/`block_table`/`slot_mapping`/`rope_*`）、KV（IPC `add_inout`）；resident 不变：weights、`gate_r_full/swa`（block-diag R 常量）、`final_norm`、`lm_head`。
 

@@ -70,7 +70,7 @@ code block 一律不译。
 | 一个方向被否决（NO-GO） | [`progress/landed.md`](progress/landed.md)「已否决，不要重试」加一行 —— **让下一位不重跑它** |
 | 设计变更（架构/接口/数据流） | 对应 [`design/`](design/) 的 HLD 或 LLD |
 | 组件 pin 移动（任意 fork push） | [`STATUS.md`](STATUS.md) §1/§2（当前值）+ [`progress/landed.md`](progress/landed.md)（门证据）+ [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md) pin 时间线 |
-| 镜像发布（有 manifest digest） | [`progress/landed.md`](progress/landed.md) 表 A + [`STATUS.md`](STATUS.md) §2 + [`deployment/version-matrix.md`](deployment/version-matrix.md) |
+| 镜像发布（有 manifest digest） | [`progress/landed.md`](progress/landed.md) 表 A + [`STATUS.md`](STATUS.md) §2；镜像新增优化及其性能/边界必须同时写 [`STATUS.md`](STATUS.md) §4，并下沉完整证据到 [`benchmark/`](benchmark/)；再更新 [`deployment/version-matrix.md`](deployment/version-matrix.md) |
 | 部署/版本变化 | [`deployment/`](deployment/) 对应 spec |
 | 踩到一个**新坑**（不够大、不值得单独成篇） | [`postmortems/CASEBOOK.md`](postmortems/CASEBOOK.md) 加一条（≤14 行，打 ✅/🩹/⏸）+ §0 索引一行。**先查路由表它有没有别的家** |
 | 落了一个**绕路**（根因仍在，绕路承重） | 同上，标 🩹 并写清「移除代价 / 复发条件」—— **不写就会有人当冗余删掉** |

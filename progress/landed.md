@@ -15,26 +15,27 @@
 | **IMG** immutable-image released | 有 manifest digest，在 0162 上 **digest-only、无 source/runtime overlay** 验证过 | 这是生产可部署的形态 | 除非注明"完整"，否则不代表全矩阵准出 |
 | **SRC** source-overlay GO | 代码已合入 `stepfun/develop`，在**固定 immutable 镜像**上通过只读 `/candidate` overlay 验证 | 实现 + 该门的结论成立 | ❌ 不代表镜像已包含它；❌ 不能当镜像级准出数据 |
 
-**当前 r10 pin 集**：
-`pypto-lib fe641929` / `pto-isa cd4a3d3f` / `PTOAS(src) 307d0484` /
+**当前 r12 pin 集**：
+`pypto 14de90fd` / `pypto-lib e6c7d8ec` / `pto-isa cd4a3d3f` / `PTOAS(src) 307d0484` /
 `simpler 85a82c45` / `ptoas-bin v0.57`。
 2026-08-24 之前表格中的“canonical/偏离”均按**当时**的旧 pin 集解释，不反向改写历史。
 
 ---
 
-## 当前生产真相（2026-08-25）
+## 当前生产真相（2026-08-27）
 
-- **最新 IMG** = packed-NZ MoE fusion r10（manifest `8510f30e…e9907b`）；
-  final contract `71/71 PASS`，SHA256 `bcdd0b11…8dafca`。
-- **性能门**：64K/1000 p50 `21.742 ms`；immutable A/B/A p50
-  `22.524/21.821/22.580 ms`，midpoint `22.552 ms`，收益 `−0.731 ms / −3.241%`；
-  三臂 hidden SHA `567b206b…e27f03e`、token `14371` exact。
-- **正确性/观测门**：N=128 `127/128`，六档 BS hidden exact `6/6`、health
-  `12/12`，L3/L4 exact，outer DFX 8/8 chip/merged swimlane PASS。
-- **当前 SRC tips** = pypto `519b588a` / pypto-lib `fe641929` / pto-isa `cd4a3d3f` /
+- **最新 IMG** = whole-step host/graph/submit r12（manifest `ba42fd19…eb805d`）；
+  final contract `1844/1844 PASS`，SHA256 `511a5459…87f3a`。
+- **性能证据**是 r11 digest 上仅 overlay 两个 pypto runtime 文件的 A/B/A：
+  ITL p50 `21.6805 → 21.115 ms`（`−2.608%`），graph build `−44.429%`，
+  graph→first runner `−47.936%`；不是 r12 immutable 性能重采。
+- **immutable r12 门**：Main H4 all/none 均 `126/128`，MTP BS1/BS16 token
+  `[6178,410,303]` 且 hidden pass rate `1.0`，dep-only DFX hidden/token exact。
+- **当前 SRC tips** = pypto `14de90fd` / pypto-lib `e6c7d8ec` / pto-isa `cd4a3d3f` /
   PTOAS `307d0484` / simpler `85a82c45`，五仓远端 `stepfun/develop` 已复核。
-- ⚠ 发布性能仍要求显式 `PYPTO_H4_RESIDENT=all`。六档 timing 是单次诊断：
-  BS8 `35.124→40.801 ms`、BS16 `51.317→51.868 ms` 回退，不能写成多 BS 性能全赢。
+- r11（manifest `401ead7d…a67b12`）保留为回退；其 r10/r11/r10 immutable A/B/A
+  仅 `−0.0065 ms / −0.0299%`，结论是性能中性，不是性能收益。
+- ⚠ 性能仍要求显式 `PYPTO_H4_RESIDENT=all`；r12 Config 未 bake 该值。
 
 ---
 
@@ -42,12 +43,14 @@
 
 | 日期 | 镜像 / 落地了什么 | manifest digest | pypto | pypto-lib | 偏离 canonical pin | 准出范围 | 证据 |
 |---|---|---|---|---|---|---|---|
+| 2026-08-27 | `…:stepfun-upgrade-20260826-r12` —— prepared TaskArgs cache + whole-step graph-build/submit 优化 | `ba42fd19b3…eb805d`（config `b36f0cec3a…33f08f`） | `14de90fd` | `e6c7d8ec` | 其余 pin 与 r11 相同 | **最终 release-admitted，1844/1844 PASS**：publication/fresh digest、immutable smoke、Main H4 all/none `126/128`、MTP BS1/16、dep-only DFX、显式 0–7 卡且无 overlay；性能来自 r11 source-overlay A/B/A，不冒充 r12 immutable A/B/A；contract SHA `511a5459…87f3a` | [`2026-08-27-whole-step-host-graph-submit-r12-release.md`](../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md) |
+| 2026-08-26 | `…:stepfun-upgrade-20260826-r11` —— replicated-input local-owner MoE | `401ead7da4…a67b12`（config `35c42510a6…06876`） | `519b588a` | `e6c7d8ec` | 其余 pin 与 r10 相同 | **release-admitted，20/20 PASS**：H4 all/none 均 `126/128` 且 hidden/token parity；64K/1000 p50 `21.477 ms`；r10/r11/r10 immutable A/B/A `21.751/21.745/21.752 ms`，`−0.0065 ms`，只判性能中性；contract SHA `570bb04e…740af7` | [`2026-08-26-local-owner-moe-r11-release.md`](../benchmark/2026-08-26-local-owner-moe-r11-release.md) |
 | 2026-08-25 | `…:stepfun-upgrade-20260825-r10` —— packed-NZ routed MoE + fused GMM1/SwiGLU/requant + adaptive down grid | `8510f30e1f…e9907b`（config `38ebba41d6…657b5f`） | `519b588a` | `fe641929` | 其余 pin 与 r9 相同 | **最终 release-admitted，71/71 PASS**：Main+MTP、N=128 `127/128`、H4 parity、ITL p50 `21.742 ms`、A/B/A `−3.241%`、六档 correctness `6/6`、outer DFX 8/8、develop sync；contract SHA `bcdd0b11…8dafca` | [`2026-08-25-moe-fusion-image-release.md`](../benchmark/2026-08-25-moe-fusion-image-release.md) |
 | 2026-08-24 | `…:stepfun-upgrade-20260824-r9` —— 五仓全栈升级 + H4 resident constants | `b637f00c66…a71690f6`（config `f6c8f72e…e421dae`） | `519b588a` | `bf3ff440` | pto-isa `cd4a3d3f` / PTOAS `307d0484` / simpler `85a82c45` / ptoas-bin `v0.57` | **升级任务准出**：registry/fresh pull、precision `127/128`、Main+MTP liveness、L3/L4 exact、8/8 chip swimlane；64K p50 `22.253 ms` **仅在 `PYPTO_H4_RESIDENT=all`**，默认 `none=27.812 ms` | [`2026-08-24-upgrade-r9-release.md`](../benchmark/2026-08-24-upgrade-r9-release.md) |
 | 2026-08-11 | `…:stepfun-develop-20260811-k8-selective` —— K8 persistent-window 选择性清零 | `076af8a167…c47f3` | `1c048a74` | `cb96747e` | — | **部分**：64K bs1 p50 `32.14 ms`（−5.02% vs pre-K8）、hidden byte-exact、N=128 `123/128`。batch16 / MTP / 六档 64K 未重跑 | [`2026-08-11-k8-selective-window-zeroing-image.md`](../benchmark/2026-08-11-k8-selective-window-zeroing-image.md) |
 | 2026-08-06 | `…-20260806-attn-taskmajor-canonical` —— task-major Attention | `3eb694e045…25479` | `8e92b468` | `c9af5790` | — | **pre-fix evidence**（不含 SWA mask 修复 `63814d4a`）：64K p50 `39.612 ms` | [`2026-08-06-attention-taskmajor-canonical.md`](../benchmark/2026-08-06-attention-taskmajor-canonical.md) |
 | 2026-08-06 | L0–L4 MoE formal 镜像（六档 focused A/B） | `cab8966816…9d88c` | `8e92b468` | `c9af5790` | — | **pre-fix evidence**：BS `1/2/4/7/8/16` × 3 轮 36/36，L3/L4 hash exact | seal `875804db…c531` |
-| 2026-08-03 | `…-20260803-attn-final-wave5` —— source partial 改 self-target TPUT | `4acc77cdce…67b32` | `defa97c5` | `7099476b` | — | ✅ **完整 release-qualified（0162）** = 当前回退基线。64K p50 `49.796 ms`、N=128 三轮 `123/128` spread=0 | STATUS §2 |
+| 2026-08-03 | `…-20260803-attn-final-wave5` —— source partial 改 self-target TPUT | `4acc77cdce…67b32` | `defa97c5` | `7099476b` | — | ✅ **历史完整 production-matrix release-qualified 基线**。当前直接回退是 r11；Wave5 保留作旧矩阵对账。64K p50 `49.796 ms`、N=128 三轮 `123/128` spread=0 | STATUS §2 |
 | 2026-08-03 | Wave4 historical candidate（第三 completion wave） | `8125c678…` | `defa97c5` | `d7e1381b` | — | 已被 Wave5 取代（N=128 Run1 step2 spread=`2.0` 未过稳定性门） | STATUS §2 |
 | 2026-08-02 | Attention/Vec 收口 historical candidate | `64c573bc…` | `defa97c5` | `76d96bdb` | — | 已被 Wave3/4 lifetime 修复取代（N=128 三轮 `121/128`） | STATUS §2 |
 | 2026-07-29 | `…-20260729-perf-h1` —— retained-window 清零改 device memset | `b4e8c8a457a5…` | `1f704616` | `4513007d` | — | ITL p50 `50.9/52.0/58.0/64.1 ms`（ctx 1K/8K/32K/64K，较 C4 降 23–27%）；N=256 token `256/256` exact | [`2026-07-29-perf-h1-image-itl-dfx.md`](../benchmark/2026-07-29-perf-h1-image-itl-dfx.md) |
@@ -60,6 +63,7 @@
 
 | 日期 | 落地了什么 | pypto | pypto-lib | 门结论 | 证据 |
 |---|---|---|---|---|---|
+| 2026-08-27 | prepared TaskArgs descriptor/signature cache 与 whole-step host/graph/submit 优化合入远端 `stepfun/develop` | `14de90fd` | `e6c7d8ec` | r11 digest 上 source-overlay A/B/A：ITL `21.6805→21.115 ms`（`−2.608%`）、graph build `−44.429%`、graph→first runner `−47.936%`，三臂 hidden/token exact；正式合同仍为 `serial-eight-rank`、`group_size=1`、无 group submit；随后 baked 入 r12 并过 immutable release gate | [`2026-08-27-whole-step-host-graph-submit-r12-release.md`](../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md) |
 | 2026-08-25 | packed-NZ MoE fusion 用 exact lease fast-forward 到远端 `stepfun/develop` | `519b588a` | `fe641929` | `bf3ff440 → fe641929` fast-forward，远端 SHA 复核；对应 r10 final contract `71/71 PASS` | [`2026-08-25-moe-fusion-image-release.md`](../benchmark/2026-08-25-moe-fusion-image-release.md) |
 | 2026-08-24 | 五仓升级目标同步到远端 `stepfun/develop` | `519b588a` | `bf3ff440` | pto-isa `cd4a3d3f` / PTOAS `307d0484` / simpler `85a82c45`；五仓 `force-with-lease` 后远端 SHA 逐项复核。simpler 旧 tip 备份为 `backup/stepfun-develop-pre-upgrade-20260824-e2efebcb` | [`2026-08-24-upgrade-r9-release.md`](../benchmark/2026-08-24-upgrade-r9-release.md) §5 |
 | 2026-08-15~19 | **MoE `moe-routed-packed-fusion` R5 —— 升级前的历史 source-overlay MoE 基线** | 未移动 | `decode_fwd.py` sha `67b73589…`（⚠ commit 未记录，见「台账缺口」） | ctx-64K BS1 p50 `27.757 ms`@ITERS=100 / `26.329 ms`@ITERS=1000；`hidden_sha256=567b206b…`、tail token `14371`；`ITERS=1000` 一轮长跑 0 liveness 事件 | [`16`](../postmortems/16-dispatch-fusion-orch-decouple.md)、`0162:…/moe-routed-packed-fusion-20260815/` |
@@ -79,6 +83,7 @@
 
 | 方向 | 判定 | 为什么 | 出处 |
 |---|---|---|---|
+| 继续优化 `bind.args` | **NO-GO（当前 P0）** | r11 source-overlay A/B/A 为 `0.054449→0.054669 ms`，仅 `+0.000220 ms`、占候选 ITL `0.259%`，判定 `no_clear_change`；不再挤占 host/graph/submit 主路径预算 | [`2026-08-27-whole-step-host-graph-submit-r12-release.md`](../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md) |
 | MoE dispatch 域小算子融合（R6–R9 八个变体） | **NO-GO** | 概率性 liveness hang，且匹配曝光后也不快；orchestrator 从不在关键路径 ⇒ ROI 上界 0 | [`16`](../postmortems/16-dispatch-fusion-orch-decouple.md) |
 | 删掉 `combine_scatter` 的 orchestration 阻塞读（静态 grid） | **NO-GO** | 那个读是承重的 run-ahead 流控阀，删掉即 `HEAP_RING_DEADLOCK` | [`16`](../postmortems/16-dispatch-fusion-orch-decouple.md) §3 |
 | `a791071` TP all-reduce Ring 实验 | **结论撤回，不得合入** | 是 standalone-builder A/A，未命中 production 或 two-layer collective | STATUS §1 |

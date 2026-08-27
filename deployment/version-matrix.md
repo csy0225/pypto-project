@@ -5,7 +5,113 @@
 
 ## 已验证组合
 
-### 当前 r10 packed-NZ MoE fusion release admission（2026-08-25）
+### 当前 r12 whole-step host/graph/submit release admission（2026-08-27）
+
+> **0162 immutable-image release admission：PASS。**
+> r12 bake 入 prepared TaskArgs signature/cache 与 rank submit envelope 优化；
+> registry publication、fresh digest pull、baked-runtime identity、Main precision、
+> MTP BS1/BS16、dep-only DFX、五仓远端 exact ref 与最终 release contract 已闭环。
+> 性能收益来自 r11 immutable digest 上的 source/runtime-overlay A/B/A；不得写成
+> “r12 immutable A/B/A 实测”。`PYPTO_H4_RESIDENT=all` 仍是显式运行合同，
+> 镜像 Config Env 未 bake 该值。
+
+```text
+tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260826-r12
+manifest: sha256:ba42fd19b3af0144a835e95a4a6925ed89ea700624f696b221e93a54e6eb805d
+config:   sha256:b36f0cec3a8b64e5e17e273c63d69694730bd8b904e69c2806c3d73a5233f08f
+spec:     docker/builds/stepfun-upgrade-20260826-r12.env
+runtime:  PYPTO_H4_RESIDENT=all
+```
+
+| 槽位 | Pin | 备注 |
+|------|-----|------|
+| Driver | `25.5.2` | 0162 device verified |
+| Firmware | `7.8.0.7.220` | 与 driver 成对 |
+| CANN | `9.0.0-beta.1` | NOT GA |
+| pypto | `14de90fd74b3c0716f94b9d4eafdd004d4eaed73` | TaskArgs signature/cache + rank submit envelope 优化 |
+| pypto-lib / vllm-pypto | `e6c7d8ec34a05c3051ccf0dd169639f40f041a57` | replicated-input local-owner MoE |
+| pto-isa | `cd4a3d3f7a1a27fcfe536f617e9bca3008929664` | 与 r11 相同 |
+| PTOAS | `307d0484a9e7d5e36f01b253d2bebe4d2f45fe81` | source pin |
+| simpler | `85a82c454074c069315ed6485033c3c2b136e562` | pypto runtime gitlink |
+| ptoas-bin | `v0.57` | binary SHA `2183e4cf…` |
+| vLLM patch | `1b3e538c35999e62b6d24e0651b3a85b7d16c826` | immutable checkout |
+
+当前门结论：
+
+- build spec SHA256 `94e018c0…35f93f27`；base 为已发布 r11 manifest
+  `sha256:401ead7d…a67b12`，构建时重新 materialize 全部 pinned source tree；
+- registry tag/digest raw manifest/config、fresh pull、digest-only audit/smoke/
+  source-bake 与 non-privileged device smoke 全 PASS；
+- immutable baked runtime 无 source/runtime/core overlay；显式设备 `0–7`，
+  保护 `8–15`，major/minor exact，`privileged=false`；
+- Main H4 `all/none` 均 `126/128 = 98.4375%`，mismatch `[20,69]`，
+  hidden finite、TP spread `0`；
+- MTP BS1/BS16 tokens 均为 `[6178,410,303]`，三层 hidden pass rate `1.0`、
+  max abs diff `0`；
+- dep-only DFX 为 8/8 `deps.json`，hidden/token exact、tail token `43640`；
+  本门不声明 whole-swimlane；
+- r11 source-overlay A/B/A（H4 all、64K、warmup10/iters100）：
+  ITL `−0.5655 ms / −2.608%`、graph build `−1.8183 ms / −44.429%`、
+  graph→first runner `−1.4851 ms / −47.936%`、rank submit envelope
+  `−0.2875 ms / −23.887%`、graph→chip done `−1.7624 ms / −8.443%`；
+  span 有重叠，不得相加；
+- `bind.args` 为 `0.054449 → 0.054669 ms`，候选 ITL 占比 `0.259%`，
+  判定 `no_clear_change`，不再继续优化；
+- 产品 host loop 仍是 serial 8-rank，发出 8 个独立 chip submit
+  （`group_size=1`），不是 native group-submit；commit 标题中的
+  `parallelize rank submit` 不等于正式设备门已证明并行 fanout；
+- final contract `1844/1844 PASS`：
+  `0162:…/release-admission-r12-20260826-224620/release_contract.json`，
+  SHA256 `511a5459…87f3a`。
+
+完整记录：
+[`../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md)。
+
+### 前一版 r11 replicated-input local-owner MoE（2026-08-26）
+
+> **0162 immutable-image release admission：PASS。**
+> r11 以 r10 为 base，仅将 pypto-lib 前进到 `e6c7d8ec`；registry/fresh pull、
+> source identity、H4 all/none precision/parity、64K ITL 与 immutable
+> r10/r11/r10 A/B/A 已闭环。
+
+```text
+tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260826-r11
+manifest: sha256:401ead7da4f957f6532e380fa1a138eda733fe1dc04b40eabc67d79d62a67b12
+config:   sha256:35c42510a64ce3e1c8e899e15c36ab8b534d091ea03a085ec663f18df8706876
+spec:     docker/builds/stepfun-upgrade-20260826-r11.env
+runtime:  PYPTO_H4_RESIDENT=all
+```
+
+| 槽位 | Pin | 备注 |
+|------|-----|------|
+| Driver | `25.5.2` | 0162 device verified |
+| Firmware | `7.8.0.7.220` | 与 driver 成对 |
+| CANN | `9.0.0-beta.1` | NOT GA |
+| pypto | `519b588a7a6461cac0e443e853accf29479c1d15` | 与 r10 相同 |
+| pypto-lib / vllm-pypto | `e6c7d8ec34a05c3051ccf0dd169639f40f041a57` | replicated-input local-owner MoE |
+| pto-isa | `cd4a3d3f7a1a27fcfe536f617e9bca3008929664` | 与 r10 相同 |
+| PTOAS | `307d0484a9e7d5e36f01b253d2bebe4d2f45fe81` | source pin |
+| simpler | `85a82c454074c069315ed6485033c3c2b136e562` | 与 r10 相同 |
+| ptoas-bin | `v0.57` | binary SHA `2183e4cf…` |
+| vLLM patch | `1b3e538c35999e62b6d24e0651b3a85b7d16c826` | immutable checkout |
+
+验证结论：
+
+- build spec SHA256 `9c272afe…5218c62`，base 为 r10 manifest
+  `sha256:8510f30e…e9907b`；
+- H4 `all/none` 均 `126/128 = 98.4375%`、mismatch `[20,69]`；
+  output token、active hidden、row0 hidden 两模式逐步 byte-exact；
+- H4-all 64K/1000 p50 `21.477 ms`；
+- immutable r10/r11/r10 A/B/A p50 `21.751/21.745/21.752 ms`，
+  r11 相对 midpoint `−0.0065 ms / −0.0299%`，结论为**性能中性**；
+- final contract `20/20 PASS`：
+  `0162:…/release-admission-r11-20260826-113923/release_contract.json`，
+  SHA256 `570bb04e…740af7`。
+
+完整记录：
+[`../benchmark/2026-08-26-local-owner-moe-r11-release.md`](../benchmark/2026-08-26-local-owner-moe-r11-release.md)。
+
+### 历史 r10 packed-NZ MoE fusion release admission（2026-08-25）
 
 > **0162 immutable-image release admission：PASS。**
 > Build/audit/fresh-pull/compile、Main+MTP liveness、N=128/H4 parity、ITL、
@@ -32,7 +138,7 @@ runtime:  PYPTO_H4_RESIDENT=all
 | ptoas-bin | `v0.57` | binary SHA `2183e4cf…` |
 | vLLM patch | `1b3e538c35999e62b6d24e0651b3a85b7d16c826` | immutable checkout |
 
-当前门结论：
+历史门结论：
 
 - source unit `162 passed`；镜像 audit/smoke、whole compile、registry/fresh pull PASS；
 - Main 8-step、MTP single/batch16 PASS；
@@ -54,7 +160,7 @@ runtime:  PYPTO_H4_RESIDENT=all
 完整记录：
 [`../benchmark/2026-08-25-moe-fusion-image-release.md`](../benchmark/2026-08-25-moe-fusion-image-release.md)。
 
-### 前一版 upgrade r9 release admission（2026-08-24）
+### 历史 upgrade r9 release admission（2026-08-24）
 
 > **0162 immutable-image admission：PASS。** Registry push、raw manifest/config、
 > fresh pull、precision、Main/MTP liveness、前五层 hidden/swimlane/DFX 与五仓同步均闭环。
@@ -78,7 +184,7 @@ runtime:  PYPTO_H4_RESIDENT=all
 | pto-isa | `cd4a3d3f7a1a27fcfe536f617e9bca3008929664` | 上游声明 pin |
 | PTOAS | `307d0484a9e7d5e36f01b253d2bebe4d2f45fe81` | source pin |
 | simpler | `85a82c454074c069315ed6485033c3c2b136e562` | `stepfun/develop`；旧 tip 有 backup ref |
-| ptoas-bin | `v0.57` | 与当前 pypto 声明配对 |
+| ptoas-bin | `v0.57` | 与该历史组合的 pypto 声明配对 |
 | vLLM patch | `1b3e538c35999e62b6d24e0651b3a85b7d16c826` | immutable checkout |
 
 验证结论：
@@ -206,8 +312,8 @@ Wave3/Wave4 为历史中间版本；Wave4 的 TP-spread blocker 已由 Wave5 关
 
 R1 不得用于交付；R2 不得恢复。二者只作为失败过程记录；在该历史阶段，源码和 pending
 构建对象以本页 2026-08-08 spec 为准，当时最后一个完整 production-matrix release
-仍是 Wave5。本段的源码/pending 目标已由本页顶部 r9 pins 取代；r9 是升级任务
-release admission，不取代 Wave5 的历史完整 production-matrix 回退口径。详见
+仍是 Wave5。本段的源码/pending 目标已由后续 r9、r10、r11、r12 组合取代；
+r9 是升级任务 release admission，不取代 Wave5 的历史完整 production-matrix 回退口径。详见
 [`../benchmark/2026-08-05-attention-canonical-r1-r2.md`](../benchmark/2026-08-05-attention-canonical-r1-r2.md)。
 
 ### 历史 clean canonical candidate（2026-08-02）
@@ -350,9 +456,10 @@ simpler 是 pypto 的 git submodule，在 `pypto/runtime/`。`pypto` 仓的
 pin 决定编哪个 simpler commit。更新 simpler 时必须
 `git submodule update` 并 commit pypto 侧的 submodule pin。
 
-当前 r9 组合使用 simpler `85a82c454074c069315ed6485033c3c2b136e562` 与
-pypto `519b588a7a6461cac0e443e853accf29479c1d15`；两者的最终组合已在 0162
-完成 immutable admission。K8 与 Wave5 历史组合使用 simpler
+当前 r12 组合使用 simpler `85a82c454074c069315ed6485033c3c2b136e562` 与
+pypto `14de90fd74b3c0716f94b9d4eafdd004d4eaed73`；两者的最终组合已在 0162
+完成 immutable admission。r9-r11 使用同一 simpler pin，pypto 当时为
+`519b588a7a6461cac0e443e853accf29479c1d15`。K8 与 Wave5 历史组合使用 simpler
 `e2efebcbd190302609c0775d2984f409f5f42c76`。2026-07-29 历史发布组合使用的是 simpler
 `8459d60f04b64b74322e965e0dd038ab26165124`，由 pypto `6933b1aa` 固定。
 **Dockerfile 里的显式 checkout 不算**——`pip install -e pypto` 期间的
