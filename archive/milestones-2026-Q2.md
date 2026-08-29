@@ -1371,8 +1371,8 @@ max|value|=0`（dummy zero weight 期望零输出）。Run time 6.69s。
 约 `1.81 ms`；routed expert / route-combine 虽仍是 device 大池，但当前缺 authority
 instrumentation 或受 notify fence gate。选择已通过当前 runtime 1000-step liveness 的 H4。
 
-r12 matched `none/default/none`（64K、warmup10、100 steps）p50
-`30.516/22.606/29.440 ms`，default=`all` 相对 midpoint 收益
+r12 **source-default-all** matched `none/default/none`（64K、warmup10、100 steps）
+p50 `30.516/22.606/29.440 ms`，default=`all` 相对 midpoint 收益
 `7.372 ms / 24.591%`，三臂 hidden SHA `ee8ae6…db96a`、token `43640` exact，
 0 fatal marker。父 env unset 的 exact launcher 64K/1000 p50 `20.973 ms`、RC=0，
 四档 curve 全过，pre/postflight clean。

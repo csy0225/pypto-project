@@ -52,7 +52,8 @@ vLLM       1b3e538c35999e62b6d24e0651b3a85b7d16c826
 - final release contract `1844/1844 PASS`：
   `0162:…/release-admission-r12-20260826-224620/release_contract.json`
   （SHA256 `511a5459…87f3a`）。
-- 2026-08-29 deployment launcher 默认 H4=`all`：r12 matched `none/default/none`
+- 2026-08-29 deployment launcher 默认 H4=`all`：r12 **source-default-all** matched
+  `none/default/none`
   p50 `30.516/22.606/29.440 ms`，收益 `7.372 ms / 24.591%`；父 env unset 的
   exact launcher 64K/1000 p50 `20.973 ms`、RC=0。完整记录见
   [`../../benchmark/2026-08-29-h4-resident-deployment-contract.md`](../../benchmark/2026-08-29-h4-resident-deployment-contract.md)。

@@ -36,7 +36,7 @@
 - r11（manifest `401ead7d…a67b12`）保留为回退；其 r10/r11/r10 immutable A/B/A
   仅 `−0.0065 ms / −0.0299%`，结论是性能中性，不是性能收益。
 - **H4 deployment contract 已落地**：`run_itl_gate.sh` / `run_precision_gate.sh` /
-  `run_swimlane_gate.sh` 默认注入 `all`，`none` 可回退；r12 matched A/B/A
+  `run_swimlane_gate.sh` 默认注入 `all`，`none` 可回退；r12 source-default-all matched A/B/A
   `30.516/22.606/29.440 ms`，exact launcher 64K/1000 p50 `20.973 ms`。
   r12 Config 与 pypto-lib 代码默认仍不 bake `all`，绕过 launcher 的调用方不继承此合同。
 

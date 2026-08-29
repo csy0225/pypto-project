@@ -5,7 +5,7 @@
 > 45 层外推的主要 device 池为 routed expert `5.115 ms`、route/combine
 > `3.472 ms`、TP collective `2.861 ms`，但前两者缺 authority instrumentation，
 > 后者受 `UPSTREAM-NOTIFY-FENCE` gate。当前最高收益可落地项仍是 H4 deployment：
-> r12 matched `none/default/none` p50 `30.516/22.606/29.440 ms`，收益
+> r12 source-default-all matched `none/default/none` p50 `30.516/22.606/29.440 ms`，收益
 > `7.372 ms / 24.591%`；canonical launcher 已默认注入 `all`，`none` 可回退。
 > 证据见
 > [`../../benchmark/2026-08-29-h4-resident-deployment-contract.md`](../../benchmark/2026-08-29-h4-resident-deployment-contract.md)。

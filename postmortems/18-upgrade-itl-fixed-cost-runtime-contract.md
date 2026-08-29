@@ -45,7 +45,7 @@
 - H4 `all/none` 在两套 oracle 上的输出 token 序列各自完全一致；
 - 最终 release contract 明确记录 `h4_resident=all`，不再只写镜像 tag/digest。
 - 2026-08-29 三个 canonical deployment launcher 默认显式注入 `all`，并保留
-  `PYPTO_H4_RESIDENT=none` 回退；r12 matched A/B/A 收益 `7.372 ms / 24.591%`；
+  `PYPTO_H4_RESIDENT=none` 回退；r12 source-default-all matched A/B/A 收益 `7.372 ms / 24.591%`；
 - 父 env unset 的 exact launcher 64K/1000 p50 `20.973 ms`、RC=0，完成 clean teardown。
 
 H4 每 rank 额外占用约 `99.64 MiB` device memory。resident RoPE 不允许原地修改 host

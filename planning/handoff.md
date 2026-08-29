@@ -40,7 +40,7 @@ graph→first-runner `−47.936%`、submit envelope `−23.887%`。正式合同�
 `0.259%` 且 `no_clear_change`，不再优化。
 
 H4 deployment contract 已于 2026-08-29 收口：三个 canonical launcher 默认注入
-`PYPTO_H4_RESIDENT=all`，`none` 保留为回退；r12 matched A/B/A 收益
+`PYPTO_H4_RESIDENT=all`，`none` 保留为回退；r12 source-default-all matched A/B/A 收益
 `7.372 ms / 24.591%`，exact launcher 64K/1000 p50 `20.973 ms`。证据见
 [`2026-08-29-h4-resident-deployment-contract.md`](../benchmark/2026-08-29-h4-resident-deployment-contract.md)。
 

@@ -65,9 +65,10 @@ collective 又被 `UPSTREAM-NOTIFY-FENCE` correctness blocker 限制，不能作
 | dispatch/task 粒度与既有 AR/MoE 变体 | 已有明确 NO-GO / correctness gate | 不重试 |
 
 H4 已具备 r12 `all/none` 128-step parity、MTP/DFX 门，以及当前 runtime 的显式
-`all` 1000-step liveness，因此本轮只需补齐 matched 性能与 unset launcher 等价性。
+`all` 1000-step liveness，因此本轮只需补齐 source-default sensitivity 与 unset launcher
+等价性。
 
-## 4. Matched `none / default / none` A/B/A
+## 4. Source-default-all matched `none / default / none` A/B/A
 
 证据目录：
 
@@ -78,6 +79,11 @@ H4 已具备 r12 `all/none` 128-step parity、MTP/DFX 门，以及当前 runtime
 
 合同：r12 digest、cards 8–15、fresh container/nonce/build、warmup 10、100 measured
 steps；A1/A2 显式 `none`，B 不传 env，候选 source 的 unset 默认为 `all`。
+
+> 口径说明：本节的 B 臂使用临时 **pypto-lib source overlay** 将代码默认改为
+> `all`，用于隔离 H4 的运行时收益；它不是当前 launcher 代码本身的证据。最终
+> canonical launcher 在父环境 unset 下的实际注入行为由下一节 exact deployment gate
+> 独立验证，且发布的 pypto-lib 代码默认仍为 `none`。
 
 | arm | H4 | p50 | mean | hidden / token |
 |---|---|---:|---:|---|

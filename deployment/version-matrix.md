@@ -57,7 +57,7 @@ runtime:  PYPTO_H4_RESIDENT=all
   span 有重叠，不得相加；
 - `bind.args` 为 `0.054449 → 0.054669 ms`，候选 ITL 占比 `0.259%`，
   判定 `no_clear_change`，不再继续优化；
-- H4 deployment matched `none/default/none` p50 `30.516/22.606/29.440 ms`，
+- H4 source-default-all matched `none/default/none` p50 `30.516/22.606/29.440 ms`，
   default=`all` 相对 midpoint 收益 `7.372 ms / 24.591%`，三臂 hidden/token exact；
 - 父 env unset 的 exact launcher 64K/1000 p50 `20.973 ms`、RC=0，context curve
   `20.139/20.698/20.827/20.821 ms`，pre/postflight clean；

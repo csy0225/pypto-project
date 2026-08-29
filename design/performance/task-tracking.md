@@ -17,7 +17,7 @@
 > `1844/1844` final contract PASS；未重采 r12 immutable 性能 A/B/A。
 > `bind.args` 仅占候选 ITL `0.259%` 且 `no_clear_change`，不再优化。
 > 2026-08-29 canonical deployment launcher 已默认注入 H4=`all`，`none` 可回退；
-matched A/B/A 收益 `7.372 ms / 24.591%`，exact launcher 64K/1000 p50 `20.973 ms`。
+source-default-all matched A/B/A 收益 `7.372 ms / 24.591%`，exact launcher 64K/1000 p50 `20.973 ms`。
 > 证据见
 > [`../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md)。
 >
