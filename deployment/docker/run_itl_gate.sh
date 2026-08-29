@@ -11,6 +11,8 @@
 #
 # PYPTO_PROG_BUILD_DIR is baked to /tmp/pypto_build_output in the image, so it is
 # mounted out; with --rm an unmounted build dir loses every artifact.
+# H4 resident constants are enabled by default for release measurements.
+# Set PYPTO_H4_RESIDENT=none (or another supported mode) for rollback or diagnostics.
 # Usage: bash run_itl_gate.sh <image-id>
 set -Eeuo pipefail
 
@@ -19,9 +21,9 @@ set -Eeuo pipefail
 cd /tmp
 
 IMGID=${1:?need image id or digest}
-H4_RESIDENT=${PYPTO_H4_RESIDENT:-}
+H4_RESIDENT=${PYPTO_H4_RESIDENT:-all}
 case "$H4_RESIDENT" in
-  ""|none|rope|gate|all) ;;
+  none|rope|gate|all) ;;
   *)
     echo "FAIL: PYPTO_H4_RESIDENT=$H4_RESIDENT is invalid" >&2
     exit 2
@@ -39,9 +41,7 @@ COMMON="--rm --net host --ipc host --privileged --security-opt apparmor=unconfin
   --device /dev/davinci_manager --device /dev/hisi_hdc --device /dev/devmm_svm
   -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
   -v $CKPT:$CKPT:ro -v $OUT:/out -v $OUT/build:/tmp/pypto_build_output --shm-size 32g"
-if [ -n "$H4_RESIDENT" ]; then
-  COMMON="$COMMON --env PYPTO_H4_RESIDENT=$H4_RESIDENT"
-fi
+COMMON="$COMMON --env PYPTO_H4_RESIDENT=$H4_RESIDENT"
 
 {
   echo "schema=step3p5.itl-gate.v1"
@@ -50,7 +50,7 @@ fi
   echo "checkpoint=$CKPT"
   echo "host_devices=0,1,2,3,4,5,6,7"
   echo "platform=a2a3 active_batch=1 num_blocks=512 overrides=none"
-  echo "h4_resident=${H4_RESIDENT:-none}"
+  echo "h4_resident=$H4_RESIDENT"
   echo "started=$(date -Is)"
 } > "$OUT/run_contract.txt"
 cat "$OUT/run_contract.txt"

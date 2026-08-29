@@ -9,27 +9,7 @@
 六段复盘（模板 [`postmortems/TEMPLATE.md`](postmortems/TEMPLATE.md)）+ 更新
 [`STATUS.md`](STATUS.md) §8 摘要。**已解 / 已定案的东西不留在本文件** —— 包括"负结论"。
 
-**最后检视：2026-08-27。**
-
----
-
-## 🔴 ACTIVE — H4-DEPLOY-CONTRACT：当前镜像未内置性能运行时 env
-
-**症状**：r12 Config Env 仍没有 `PYPTO_H4_RESIDENT=all`；代码默认值也是 `none`。
-r12 immutable gate 分别证明 `all/none` correctness parity，但没有提供默认部署的
-immutable 性能 A/B。whole-step source-overlay A/B/A 显式使用 `all`，不能代表正式
-launcher 默认会启用它。
-
-**根因**：H4 把 4 个 RoPE 表 + 4 个 gate-R 常量一次上传并常驻（`99.64 MiB/rank`）；
-它是**部署运行合同**，不是 manifest digest 自带属性。历史 r9 同 digest 实测
-`none=27.812 ms`、`all=22.253 ms`，但正式 serving launcher / manifest 仍未找到接线。
-
-**解除条件**：① 正式 launcher / manifest 显式设置 `PYPTO_H4_RESIDENT=all`，并在 exact
-deployment 上重跑 startup contract + 64K ITL；或 ② 修改代码/镜像默认值为 `all`，
-重新构建、发布并跑完整门。在此之前，性能结论必须明确写出 H4 env。
-
-**证据**：[`benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md)；
-[`postmortems/18`](postmortems/18-upgrade-itl-fixed-cost-runtime-contract.md)。
+**最后检视：2026-08-29。**
 
 ---
 

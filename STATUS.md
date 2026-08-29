@@ -4,7 +4,7 @@
 > [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)，长证据去
 > [`benchmark/`](benchmark/)，未决去 [`blockers.md`](blockers.md)。
 >
-> **最后更新：2026-08-27。预算 ≤130 行。**
+> **最后更新：2026-08-29。预算 ≤130 行。**
 
 ## 0. Agent 判定当前状态的强制顺序
 
@@ -12,9 +12,9 @@
    `refs/heads/stepfun/develop`；不得用本地 branch/worktree 名推断当前 tip。
 2. 区分源码 tip（SRC）、镜像内容（IMG）和部署运行合同；三者不能互相代替。
 3. 镜像只认 manifest/config digest、fresh pull 与 immutable gate。
-4. 性能数字必须绑定完整环境。本轮 whole-step A/B/A 是 r11 immutable 基座上的
-   source-overlay 证据，不是 r12 immutable-image 性能复测；合同显式使用
-   `PYPTO_H4_RESIDENT=all`，r12 Config Env 未 bake 该值。
+4. 性能数字必须绑定完整环境。H4 matched A/B/A 与 exact launcher 长门均绑定
+   r12 digest；正式 deployment launcher 默认注入 `PYPTO_H4_RESIDENT=all`。
+   r12 Config Env 与 pypto-lib 代码默认仍未 bake `all`，三层不能互相代替。
 
 ## 1. 当前 SRC（五仓远端 `stepfun/develop`）
 
@@ -77,6 +77,10 @@ r11 manifest `401ead7d…a67b12` 保留为直接回退镜像，r10 为更早回�
   graph→chip done `−1.7624 ms / −8.443%`。
 - `bind.args` 仅 `0.054449 → 0.054669 ms`（`+0.000220 ms`，候选 ITL 的
   `0.259%`，`no_clear_change`），不再投入优化。各 span 有重叠，不得相加。
+- 2026-08-29 H4 deployment 收口：r12 matched `none/default/none` p50
+  `30.516/22.606/29.440 ms`，默认 `all` 相对 midpoint 收益 `7.372 ms / 24.591%`，
+  三臂 hidden SHA `ee8ae6…db96a`、token `43640` exact；exact launcher 在父 env
+  unset 下 64K/1000 p50 `20.973 ms`、RC=0。`none` 保留为回退。
 
 ## 5. 当前功能边界
 
@@ -87,11 +91,11 @@ r11 manifest `401ead7d…a67b12` 保留为直接回退镜像，r10 为更早回�
 
 ## 6. 当前下一步
 
-1. 把 `PYPTO_H4_RESIDENT=all` 接入正式 deployment，并在 exact launcher 上重跑
-   startup contract + 64K ITL。
-2. 继续 Phase 28 live serving、paged-KV/dynamic batch 与 3-way HBM 收口。
-3. 收口 `UPSTREAM-NOTIFY-FENCE`；任何拉近 payload store 与 credit 的 AR 改动，在 fence
+1. 继续 Phase 28 live serving、paged-KV/dynamic batch 与 3-way HBM 收口。
+2. 收口 `UPSTREAM-NOTIFY-FENCE`；任何拉近 payload store 与 credit 的 AR 改动，在 fence
    落地前继续禁止。
+3. 下一轮 device 性能先补 routed expert / route-combine authority instrumentation，
+   不按含 peer-arrival spin 的首个 collective 条带立项。
 
 ## 7. 机器状态口径
 
@@ -104,7 +108,6 @@ containerd/BuildKit 与驱动内核线程不是占卡 workload。
 
 | Blocker | 当前缺口 | 严重度 / gate |
 |---|---|---|
-| H4-DEPLOY-CONTRACT | r12 Config Env 未 bake `PYPTO_H4_RESIDENT=all`，正式 launcher 尚未显式接线 | 🔴 生产性能口径 |
 | UPSTREAM-NOTIFY-FENCE | notify 的 invalidate 在 payload drain 前，缺 pre-CMO `PIPE_ALL` | 🔴 AR correctness |
 | N1-S-0234 | 0234 同步后 whole-net stall，尚未独立复核 | 🔴 0234 可用性 |
 | Phase 28 live | live prefill + paged-KV + 3-way HBM 未闭环 | 🔴 live serving |

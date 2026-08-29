@@ -1,6 +1,6 @@
 # 接力上下文（Handoff）
 
-> **T6 = 纯指针 + “现在接什么”。最后更新：2026-08-27。预算 ≤90 行。**
+> **T6 = 纯指针 + “现在接什么”。最后更新：2026-08-29。预算 ≤90 行。**
 >
 > 当前真相 → [`../STATUS.md`](../STATUS.md)　落地台账 →
 > [`../progress/landed.md`](../progress/landed.md)　未决 →
@@ -39,21 +39,26 @@ graph→first-runner `−47.936%`、submit envelope `−23.887%`。正式合同�
 性能 A/B/A，也不能写成 native group-submit 已过门。`bind.args` 仅占候选 ITL
 `0.259%` 且 `no_clear_change`，不再优化。
 
+H4 deployment contract 已于 2026-08-29 收口：三个 canonical launcher 默认注入
+`PYPTO_H4_RESIDENT=all`，`none` 保留为回退；r12 matched A/B/A 收益
+`7.372 ms / 24.591%`，exact launcher 64K/1000 p50 `20.973 ms`。证据见
+[`2026-08-29-h4-resident-deployment-contract.md`](../benchmark/2026-08-29-h4-resident-deployment-contract.md)。
+
 ## 现在接什么（按优先级，只有三条）
 
-### 1. 把 H4 运行合同接入正式 deployment
-
-r12 Config Env 仍未 bake `PYPTO_H4_RESIDENT=all`。在正式 launcher 显式接线后，
-按 exact deployment 重跑 startup contract + 64K ITL。
-
-### 2. 继续 Phase 28 live serving
+### 1. 继续 Phase 28 live serving
 
 继续 live prefill → paged-KV/dynamic batch → 消除 3-way HBM → live token-exact A/B。
 
-### 3. 收口 upstream notify fence
+### 2. 收口 upstream notify fence
 
 任何拉近 remote payload store 与 credit notify 的改动，必须先补
 `UPSTREAM-NOTIFY-FENCE` 的 pre-CMO `PIPE_ALL`。
+
+### 3. 补 device 阶段 authority instrumentation
+
+最新 clean swimlane 外推的主要池子是 routed expert、route/combine 与 TP collective；
+先补全 rank/全层 authority，再对高 stall 段立项，不复用含 peer-arrival spin 的首条 collective。
 
 ## 操作约束
 

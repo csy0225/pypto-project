@@ -18,11 +18,18 @@
 #     deps.json but are missing from the swimlane records. Pre-existing, see
 #     design/performance/05-moe-optimization.md.
 #
+# H4 resident constants are enabled by default; set
+# PYPTO_H4_RESIDENT=none for rollback or diagnostic comparisons.
 # Usage: bash run_swimlane_gate.sh <image-id>
 set -Eeuo pipefail
 cd /tmp   # nerdctl resolves apparmor_parser relative to cwd
 
 IMGID=${1:?need image id or digest}
+H4_RESIDENT=${PYPTO_H4_RESIDENT:-all}
+case "$H4_RESIDENT" in
+  none|rope|gate|all) ;;
+  *) echo "FAIL: PYPTO_H4_RESIDENT=$H4_RESIDENT is invalid" >&2; exit 2 ;;
+esac
 D=/mnt/persist/chensiyu/workspace/upgrade-20260821
 CKPT=/data/chensiyu/step3p5_flash_release_hf_mtp3_w8a8_0328-copy-mtp
 OUT=$D/swimlane-$(date +%Y%m%d-%H%M%S)
@@ -36,6 +43,7 @@ DEVS=""; for i in 0 1 2 3 4 5 6 7; do DEVS="$DEVS --device /dev/davinci$i"; done
 cat > "$OUT/run_contract.json" <<JSON
 {"kind":"five_layer_l2_swimlane","image":"$IMGID","devices":"$DEVCSV",
  "active_batch":1,"context_len":65536,"num_blocks":512,"warmup":3,"iters":20,
+ "h4_resident":"$H4_RESIDENT",
  "seed_token":6127,"instrumented":true,
  "absolute_latency_is_not_a_clean_claim":true,
  "digest_only":true,"source_overlay":false,"runtime_overlay":false,
@@ -49,6 +57,7 @@ set +e
 $NC run --rm --net host --ipc host --privileged \
   --security-opt apparmor=unconfined \
   --env PYPTO_LIVE_IPC_STRICT=1 \
+  --env PYPTO_H4_RESIDENT="$H4_RESIDENT" \
   --env PYPTO_CODEGEN_MAX_WORKERS=1 \
   --env PYPTO_RELEASE_CONTEXT_LEN=65536 \
   --env PYPTO_STEP3P5_MAX_SEQ=65536 \

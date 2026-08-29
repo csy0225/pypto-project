@@ -18,7 +18,8 @@ spec:     builds/stepfun-upgrade-20260826-r12.env
 runtime:  PYPTO_H4_RESIDENT=all
 ```
 
-`runtime` 行是显式 launcher/perf 合同，不是镜像 Config Env 默认值。
+`runtime` 行由 canonical launcher 默认注入，不是镜像 Config Env 或 pypto-lib 代码默认值；
+设置 `PYPTO_H4_RESIDENT=none` 可回退。
 
 镜像 pins：
 
@@ -51,6 +52,10 @@ vLLM       1b3e538c35999e62b6d24e0651b3a85b7d16c826
 - final release contract `1844/1844 PASS`：
   `0162:…/release-admission-r12-20260826-224620/release_contract.json`
   （SHA256 `511a5459…87f3a`）。
+- 2026-08-29 deployment launcher 默认 H4=`all`：r12 matched `none/default/none`
+  p50 `30.516/22.606/29.440 ms`，收益 `7.372 ms / 24.591%`；父 env unset 的
+  exact launcher 64K/1000 p50 `20.973 ms`、RC=0。完整记录见
+  [`../../benchmark/2026-08-29-h4-resident-deployment-contract.md`](../../benchmark/2026-08-29-h4-resident-deployment-contract.md)。
 
 r12 的性能收益证据来自 r11 immutable digest 上的 source/runtime-overlay A/B/A，
 不是 r12 immutable-image timing：64K warmup10/iters100 下 ITL
@@ -518,7 +523,7 @@ deployment/docker/
 
 | IMAGE_TAG | 日期 | pypto / pypto-lib / pto-isa / PTOAS / simpler / ptoas-bin | 验证(0162) |
 |-----------|------|----------------------------------------------------------|-------------|
-| `stepfun-upgrade-20260826-r12` | 2026-08-27 | `14de90fd` / `e6c7d8ec` / `cd4a3d3f` / `307d0484` / `85a82c45` / `v0.57` | **当前 release-admitted**。manifest `sha256:ba42fd19…e6eb805d`，config `sha256:b36f0cec…3d73a5233f08f`；prepared TaskArgs signature/cache + rank submit envelope 优化已 bake。Registry/fresh pull、baked-runtime identity、Main H4 all/none `126/128`、MTP BS1/BS16、dep-only DFX、五仓远端 exact 均 PASS；final contract `1844/1844`，SHA `511a5459…87f3a`。性能收益来自 r11 digest source-overlay A/B/A，不是 r12 immutable timing；正式仍是 serial 8-rank independent submit |
+| `stepfun-upgrade-20260826-r12` | 2026-08-27 | `14de90fd` / `e6c7d8ec` / `cd4a3d3f` / `307d0484` / `85a82c45` / `v0.57` | **当前 release-admitted**。manifest `sha256:ba42fd19…e6eb805d`，config `sha256:b36f0cec…3d73a5233f08f`；prepared TaskArgs signature/cache + rank submit envelope 优化已 bake。Registry/fresh pull、baked-runtime identity、Main H4 all/none `126/128`、MTP BS1/BS16、dep-only DFX、五仓远端 exact 均 PASS；final contract `1844/1844`，SHA `511a5459…87f3a`。性能收益来自 r11 digest source-overlay A/B/A，不是 r12 immutable timing；正式仍是 serial 8-rank independent submit；2026-08-29 canonical launcher 默认 H4=`all`，`none` 可回退 |
 | `stepfun-upgrade-20260826-r11` | 2026-08-26 | `519b588a` / `e6c7d8ec` / `cd4a3d3f` / `307d0484` / `85a82c45` / `v0.57` | **前一版 release-admitted / r12 直接回退**。manifest `sha256:401ead7d…a67b12`，config `sha256:35c42510…06876`；replicated-input local-owner MoE。H4 all/none `126/128` 且 parity PASS，64K/1000 p50 `21.477 ms`；r10/r11/r10 A/B/A 性能中性；final contract `20/20`，SHA `570bb04e…740af7` |
 | `stepfun-develop-20260723` | 2026-07-23 | `8af501fc` / `4c48215b` / `ecb6c303` / `72ada0a1` / `36957c6b` / `v0.45` | 冒烟 PASS + 整网 decode `6127→303` / step2→`6127`(与 vanilla 逐 token 一致)✅ |
 | `stepfun-develop-20260724` | 2026-07-24 | `ca21ab5f` / `fd26b1be` / `ecb6c303` / `fc8c6cae` / `216e7632` / `v0.50` | 合并 origin/main + IPC 权重 interior 指针 provenance 修复（解 `submit_next_level child_memory` 卡点）。冒烟 PASS(ptoas 0.50) + 整网 8 步 decode `6127→303→1207→6127`(与 live vanilla 逐 token 一致)✅ |

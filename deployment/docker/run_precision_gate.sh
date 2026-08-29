@@ -11,7 +11,9 @@
 # is NOT a precision PASS.
 #
 # Both stages run on cards 0-7 sequentially, so only 0162-cards0-7.lock is held
-# and codex keeps 8-15. Usage: bash run_precision_gate.sh <image-id> [N] [SEED]
+# and codex keeps 8-15. H4 resident constants default to all; set
+# PYPTO_H4_RESIDENT=none to roll back.
+# Usage: bash run_precision_gate.sh <image-id> [N] [SEED]
 set -Eeuo pipefail
 
 # nerdctl resolves apparmor_parser relative to cwd, so any invocation from a
@@ -24,10 +26,10 @@ IMGID=${1:?need image id or digest}
 N=${2:-128}
 SEED=${3:-6127}
 THRESHOLD=${THRESHOLD:-95}
-H4_RESIDENT=${PYPTO_H4_RESIDENT:-}
+H4_RESIDENT=${PYPTO_H4_RESIDENT:-all}
 
 case "$H4_RESIDENT" in
-  ""|none|rope|gate|all) ;;
+  none|rope|gate|all) ;;
   *)
     echo "FAIL: PYPTO_H4_RESIDENT=$H4_RESIDENT is invalid" >&2
     exit 2
@@ -53,10 +55,7 @@ DEVOPTS="$DEVS --device /dev/davinci_manager --device /dev/hisi_hdc --device /de
   -v /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro"
 # CPU-only client: no devices, but needs host net for :8000 and the tokenizer.
 CLIENT="--rm --net host $SEC -v $CKPT:$CKPT:ro -v $OUT:/out"
-H4_ENV=()
-if [ -n "$H4_RESIDENT" ]; then
-  H4_ENV=(--env "PYPTO_H4_RESIDENT=$H4_RESIDENT")
-fi
+H4_ENV=(--env "PYPTO_H4_RESIDENT=$H4_RESIDENT")
 
 {
   echo "schema=step3p5.precision-gate.v1"
@@ -66,7 +65,7 @@ fi
   echo "manifest=$MANIFEST"
   echo "host_devices=0,1,2,3,4,5,6,7"
   echo "n=$N seed=$SEED threshold=$THRESHOLD"
-  echo "h4_resident=${H4_RESIDENT:-none}"
+  echo "h4_resident=$H4_RESIDENT"
   echo "started=$(date -Is)"
 } > "$OUT/run_contract.txt"
 cat "$OUT/run_contract.txt"

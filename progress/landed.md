@@ -22,7 +22,7 @@
 
 ---
 
-## 当前生产真相（2026-08-27）
+## 当前生产真相（2026-08-29）
 
 - **最新 IMG** = whole-step host/graph/submit r12（manifest `ba42fd19…eb805d`）；
   final contract `1844/1844 PASS`，SHA256 `511a5459…87f3a`。
@@ -35,7 +35,10 @@
   PTOAS `307d0484` / simpler `85a82c45`，五仓远端 `stepfun/develop` 已复核。
 - r11（manifest `401ead7d…a67b12`）保留为回退；其 r10/r11/r10 immutable A/B/A
   仅 `−0.0065 ms / −0.0299%`，结论是性能中性，不是性能收益。
-- ⚠ 性能仍要求显式 `PYPTO_H4_RESIDENT=all`；r12 Config 未 bake 该值。
+- **H4 deployment contract 已落地**：`run_itl_gate.sh` / `run_precision_gate.sh` /
+  `run_swimlane_gate.sh` 默认注入 `all`，`none` 可回退；r12 matched A/B/A
+  `30.516/22.606/29.440 ms`，exact launcher 64K/1000 p50 `20.973 ms`。
+  r12 Config 与 pypto-lib 代码默认仍不 bake `all`，绕过 launcher 的调用方不继承此合同。
 
 ---
 

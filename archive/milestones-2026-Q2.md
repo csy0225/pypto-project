@@ -1365,6 +1365,23 @@ release flag）。修法：别传 `CMAKE_BUILD_TYPE`（用 dev default）。
 + `LAYER_*_ROWS_DYN` override。`next_hidden_out shape=[1, 16, 4096],
 max|value|=0`（dummy zero weight 期望零输出）。Run time 6.69s。
 
+## 2026-08-29 —— H4 resident constants deployment contract 收口 ✅
+
+基于最新 swimlane 校正，首个 TP collective 含 peer-arrival spin，五层 clean makespan
+约 `1.81 ms`；routed expert / route-combine 虽仍是 device 大池，但当前缺 authority
+instrumentation 或受 notify fence gate。选择已通过当前 runtime 1000-step liveness 的 H4。
+
+r12 matched `none/default/none`（64K、warmup10、100 steps）p50
+`30.516/22.606/29.440 ms`，default=`all` 相对 midpoint 收益
+`7.372 ms / 24.591%`，三臂 hidden SHA `ee8ae6…db96a`、token `43640` exact，
+0 fatal marker。父 env unset 的 exact launcher 64K/1000 p50 `20.973 ms`、RC=0，
+四档 curve 全过，pre/postflight clean。
+
+落地：三个 canonical deployment launcher 默认注入 `PYPTO_H4_RESIDENT=all`，保留
+`none|rope|gate|all` 覆盖；未移动五仓 pin、未重建 r12、未修改 pypto-lib 代码默认。
+完整证据见
+[`../benchmark/2026-08-29-h4-resident-deployment-contract.md`](../benchmark/2026-08-29-h4-resident-deployment-contract.md)。
+
 ---
 
 ## Pin snapshot 完整历史（降序，窄格）

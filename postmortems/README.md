@@ -32,7 +32,7 @@ signature 或一类根因）。目标是沉淀——让后来者不重复踩坑�
 | [`15`](15-tp-allreduce-source-publication-lifetime.md) | TP all-reduce source publication / lifetime 边界 | 间歇性 `hidden_tp_spread != 0` | whole-net | ✅ 已解（0162） |
 | [`16`](16-dispatch-fusion-orch-decouple.md) | MoE dispatch 域小算子融合整线 NO-GO（`orch` 阻塞读是承重节流；orchestrator 不在关键路径） | `orch_error=8 TENSOR_WAIT` / `orch_error=2 HEAP_RING_DEADLOCK` | whole-net / perf | ✅ 已定案（**负结论**） |
 | [`17`](17-upgrade-ipc-buffer-provenance.md) | 升级后 IPC interior slice 缺 Buffer provenance | `raw-pointer DeviceTensor cannot be dispatched` | whole-net / runtime | ✅ 已解 |
-| [`18`](18-upgrade-itl-fixed-cost-runtime-contract.md) | 升级 ITL 固定 host 开销与 H4 运行合同混写 | 同一工作点 `47.993 / 27.812 / 22.253 ms` | whole-net / perf / deployment | 🟡 发布门已解，deployment env 待接线 |
+| [`18`](18-upgrade-itl-fixed-cost-runtime-contract.md) | 升级 ITL 固定 host 开销与 H4 运行合同混写 | 同一工作点 `47.993 / 27.812 / 22.253 ms` | whole-net / perf / deployment | ✅ 已解（launcher 默认 H4=`all`） |
 
 ## 必读教训索引
 

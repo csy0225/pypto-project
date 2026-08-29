@@ -11,9 +11,9 @@
 > r12 bake 入 prepared TaskArgs signature/cache 与 rank submit envelope 优化；
 > registry publication、fresh digest pull、baked-runtime identity、Main precision、
 > MTP BS1/BS16、dep-only DFX、五仓远端 exact ref 与最终 release contract 已闭环。
-> 性能收益来自 r11 immutable digest 上的 source/runtime-overlay A/B/A；不得写成
-> “r12 immutable A/B/A 实测”。`PYPTO_H4_RESIDENT=all` 仍是显式运行合同，
-> 镜像 Config Env 未 bake 该值。
+> H6 性能收益来自 r11 immutable digest 上的 source/runtime-overlay A/B/A；不得写成
+> “r12 immutable A/B/A 实测”。2026-08-29 canonical deployment launcher 已默认
+> 注入 `PYPTO_H4_RESIDENT=all`，`none` 可回退；镜像 Config Env 与代码默认仍未 bake。
 
 ```text
 tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260826-r12
@@ -57,6 +57,10 @@ runtime:  PYPTO_H4_RESIDENT=all
   span 有重叠，不得相加；
 - `bind.args` 为 `0.054449 → 0.054669 ms`，候选 ITL 占比 `0.259%`，
   判定 `no_clear_change`，不再继续优化；
+- H4 deployment matched `none/default/none` p50 `30.516/22.606/29.440 ms`，
+  default=`all` 相对 midpoint 收益 `7.372 ms / 24.591%`，三臂 hidden/token exact；
+- 父 env unset 的 exact launcher 64K/1000 p50 `20.973 ms`、RC=0，context curve
+  `20.139/20.698/20.827/20.821 ms`，pre/postflight clean；
 - 产品 host loop 仍是 serial 8-rank，发出 8 个独立 chip submit
   （`group_size=1`），不是 native group-submit；commit 标题中的
   `parallelize rank submit` 不等于正式设备门已证明并行 fanout；

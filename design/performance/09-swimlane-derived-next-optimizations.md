@@ -1,5 +1,15 @@
 # 由 swimlane 推导的下一批优化（2026-08-21）
 
+> **2026-08-29 最新校正与落地（优先于全部历史快照）**：首个 TP collective
+> 含 peer-arrival spin；按未污染 rank 校正后五层 clean makespan 约 `1.81 ms`。
+> 45 层外推的主要 device 池为 routed expert `5.115 ms`、route/combine
+> `3.472 ms`、TP collective `2.861 ms`，但前两者缺 authority instrumentation，
+> 后者受 `UPSTREAM-NOTIFY-FENCE` gate。当前最高收益可落地项仍是 H4 deployment：
+> r12 matched `none/default/none` p50 `30.516/22.606/29.440 ms`，收益
+> `7.372 ms / 24.591%`；canonical launcher 已默认注入 `all`，`none` 可回退。
+> 证据见
+> [`../../benchmark/2026-08-29-h4-resident-deployment-contract.md`](../../benchmark/2026-08-29-h4-resident-deployment-contract.md)。
+>
 > **2026-08-27 结果更新（优先于下方立项时快照）**：H4/H5 后，H6 以
 > pypto `14de90fd` 落地并进入 r12。r11 source-overlay A/B/A 的 ITL
 > `21.6805→21.115 ms`（`−2.608%`）、graph build `−44.429%`、

@@ -16,7 +16,8 @@
 > 不是 native group-submit。r12 immutable Main/MTP/dep-only DFX 与
 > `1844/1844` final contract PASS；未重采 r12 immutable 性能 A/B/A。
 > `bind.args` 仅占候选 ITL `0.259%` 且 `no_clear_change`，不再优化。
-> ⚠ 镜像未 bake H4 env，正式 launcher 接线仍由 `H4-DEPLOY-CONTRACT` 跟踪。
+> 2026-08-29 canonical deployment launcher 已默认注入 H4=`all`，`none` 可回退；
+matched A/B/A 收益 `7.372 ms / 24.591%`，exact launcher 64K/1000 p50 `20.973 ms`。
 > 证据见
 > [`../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md)。
 >
@@ -332,7 +333,7 @@ producer → 数学变换/quant/route-map → transport/window
 |----|--------|--------|------|-------|------|------|----------|
 | H1 | retained window 清零：host 搬零 → device `aclrtMemset` | P0 | ✅ | claude | A1 | simpler `e2efebcb` + pypto `1f704616`（含 gitlink bump）。清零 `21.50→2.21 ms`、ITL p50 `85.02→65.55 ms`（−22.9%）、每步 H2D `244.7 MiB→0`、mailbox 往返 `248 串行→1 次广播`。同镜像 A/B `main_hidden_8step` 两边 `passed=True`，`main_hidden_only_report.json` 除 `run_sec` 外逐字段相同；单测 8/8。⚠ live N=128 精度门未跑（需 vanilla oracle 占 cards 0-7）；CI 整体 rc=1 但两边同样缺 MTP fixture，与本项无关。数据见 [`benchmark/2026-07-29-host-window-memset.md`](../../benchmark/2026-07-29-host-window-memset.md) | 2026-07-29 |
 | H2 | per-rank 视图重建 hoist 到 `prepare()`（residual graph-build 候选） | P1 | ⬜ | — | H1, H6 | 2026-07-29 量化过起跑阶梯 `2.914 ms` 与 submit `3.49 ms`。H6 已用 prepared descriptor/signature cache 回收 graph/submit 主体，但候选 graph build 仍为 `2.2743 ms`；不能仅凭 `bind.args=0.259%` 宣布 H2 无 ROI。后续先重拆 residual graph-build，再决定是否 hoist；不得把 H2 重新表述成 bind 优化 | 2026-08-27 |
-| **H4** | **8 个 step-invariant RoPE/gate-R 常量 device-resident** | **P0** | ✅ | — | — | r9 起 `PYPTO_H4_RESIDENT=all`：`bind.args` p50 `6.461 → 0.063 ms`，64K/1000 ITL `27.812 → 22.253 ms`；额外 `99.64 MiB/rank`。实现与 immutable correctness gates 已完成；r12 Config 仍未 bake env，见 `H4-DEPLOY-CONTRACT` | 2026-08-27 |
+| **H4** | **8 个 step-invariant RoPE/gate-R 常量 device-resident** | **P0** | ✅ | — | — | r9 起 `PYPTO_H4_RESIDENT=all`：`bind.args` p50 `6.461 → 0.063 ms`；2026-08-29 r12 matched `none/default/none` 收益 `7.372 ms / 24.591%`，exact launcher 64K/1000 p50 `20.973 ms`。三个 canonical launcher 默认注入 `all`，额外 `99.64 MiB/rank`，`none` 可回退；image Config/代码默认不变 | 2026-08-29 |
 | **H5** | **恢复 all-rank chip swimlane 与 outer admission** | **P1** | ✅ | — | A1 | r9 combined gate：8/8 rank `chip_swimlane_records.json`、deps/name-map/critical-path/merged 全齐；L3/L4 exact，analyzer `pass=true/blockers=[]`，recv_meta ready，outer admission `pass=true`。analyzer 自身保留 `PENDING_EXTERNAL_GATE` 是职责边界，不是 structural failure | 2026-08-24 |
 | **H6** | **prepared TaskArgs descriptor/signature cache + whole-step graph/submit 收口** | **P0** | ✅ | codex | H4 | pypto `14de90fd`。r11 source-overlay A/B/A：ITL `−0.5655 ms / −2.608%`、graph build `−1.8183 ms / −44.429%`、graph→first runner `−1.4851 ms / −47.936%`、serial submit envelope `−0.2875 ms / −23.887%`；hidden/token exact。cache 有界、未知对象 fail-open，`free()` 与 proof window 互斥。baked 入 r12 并过 immutable release gate；设备门仍是 serial 8-rank independent submit | 2026-08-27 |
 | H3 | DFX run 第一 barrier 假长条（观测性，非性能） | P2 | ⬜ | — | A1 | DFX run 里第一个 `tp_all_reduce` 被记成 115 ms(pmu)–379.9 ms(swim)，其余 89 次 39–366 µs，straggler 每次换人。**已排除 host 下发**（`_submit_chip` 在 DFX 下只多一次字符串拼接；clean run 下发等距 0.412 ms）。clean run 算术上界：非 device 时间共 5.7 ms → 380 ms 不可能存在。方向 = chip child 侧 collector 开销落在被 trace 区间内（注意 `orch._dfx_dispatch_idx` 每 request 重置，留下的是**最后一步**，非冷启动）。危害：曾使 `tp_all_reduce` 被误判成 74.1% wall | 2026-07-29 |

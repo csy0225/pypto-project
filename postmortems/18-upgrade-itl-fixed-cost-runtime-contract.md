@@ -5,8 +5,8 @@
 | **子系统** | whole-net / performance / deployment |
 | **error signature** | 同一工作点出现 `47.993 / 27.812 / 22.253 ms` 三种 ITL |
 | **首次出现** | 2026-08-23 |
-| **状态** | 🟡 发布门已解；正式 deployment env 接线仍 open |
-| **相关证据** | [`../benchmark/2026-08-24-upgrade-r9-release.md`](../benchmark/2026-08-24-upgrade-r9-release.md) |
+| **状态** | ✅ 已解（2026-08-29 deployment launcher 接线） |
+| **相关证据** | [`../benchmark/2026-08-29-h4-resident-deployment-contract.md`](../benchmark/2026-08-29-h4-resident-deployment-contract.md) |
 
 ## 1. 背景（Background）
 
@@ -44,6 +44,9 @@
 - 发布性能合同显式设置 `PYPTO_H4_RESIDENT=all`，64K/1000 p50 `22.253 ms`；
 - H4 `all/none` 在两套 oracle 上的输出 token 序列各自完全一致；
 - 最终 release contract 明确记录 `h4_resident=all`，不再只写镜像 tag/digest。
+- 2026-08-29 三个 canonical deployment launcher 默认显式注入 `all`，并保留
+  `PYPTO_H4_RESIDENT=none` 回退；r12 matched A/B/A 收益 `7.372 ms / 24.591%`；
+- 父 env unset 的 exact launcher 64K/1000 p50 `20.973 ms`、RC=0，完成 clean teardown。
 
 H4 每 rank 额外占用约 `99.64 MiB` device memory。resident RoPE 不允许原地修改 host
 副本；若常量生命周期变化，必须重建 holder 并重新做正确性门。
@@ -63,5 +66,5 @@ H4 每 rank 额外占用约 `99.64 MiB` device memory。resident RoPE 不允许�
 - 同 digest 数字不一致时，先 `diff` runner 和 env，再查负载；不要先猜硬件波动。
 - 用环境变量开启的优化必须同时回答：代码默认是什么、镜像是否 bake、正式 launcher
   是否注入。三者没闭环时，只能写“image + env”的性能。
-- 当前剩余动作由 [`../blockers.md`](../blockers.md) 的
-  `R9-H4-DEPLOY-CONTRACT` 跟踪。
+- launcher 默认、image Config 与代码默认必须继续分层记录；本次只关闭 deployment
+  contract，不把 r12 描述成 bake 了 H4。
