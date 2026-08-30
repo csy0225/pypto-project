@@ -22,7 +22,7 @@
 
 ---
 
-## 当前生产真相（2026-08-29）
+## 当前生产真相（2026-08-30）
 
 - **最新 IMG** = whole-step host/graph/submit r12（manifest `ba42fd19…eb805d`）；
   final contract `1844/1844 PASS`，SHA256 `511a5459…87f3a`。
@@ -87,6 +87,7 @@
 | 方向 | 判定 | 为什么 | 出处 |
 |---|---|---|---|
 | 继续优化 `bind.args` | **NO-GO（当前 P0）** | r11 source-overlay A/B/A 为 `0.054449→0.054669 ms`，仅 `+0.000220 ms`、占候选 ITL `0.259%`，判定 `no_clear_change`；不再挤占 host/graph/submit 主路径预算 | [`2026-08-27-whole-step-host-graph-submit-r12-release.md`](../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md) |
+| routed GMM fixed-22-participant latch | **NO-GO** | H4 A/B/A 收益 `0.588 ms`，低于 required floor `0.616 ms`；不要恢复固定 22-worker 双 latch | [`2026-08-30-routed-gmm-active-worker-dual-latch.md`](../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md) |
 | MoE dispatch 域小算子融合（R6–R9 八个变体） | **NO-GO** | 概率性 liveness hang，且匹配曝光后也不快；orchestrator 从不在关键路径 ⇒ ROI 上界 0 | [`16`](../postmortems/16-dispatch-fusion-orch-decouple.md) |
 | 删掉 `combine_scatter` 的 orchestration 阻塞读（静态 grid） | **NO-GO** | 那个读是承重的 run-ahead 流控阀，删掉即 `HEAP_RING_DEADLOCK` | [`16`](../postmortems/16-dispatch-fusion-orch-decouple.md) §3 |
 | `a791071` TP all-reduce Ring 实验 | **结论撤回，不得合入** | 是 standalone-builder A/A，未命中 production 或 two-layer collective | STATUS §1 |

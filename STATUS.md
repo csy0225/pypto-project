@@ -4,7 +4,7 @@
 > [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)，长证据去
 > [`benchmark/`](benchmark/)，未决去 [`blockers.md`](blockers.md)。
 >
-> **最后更新：2026-08-29。预算 ≤130 行。**
+> **最后更新：2026-08-30。预算 ≤130 行。**
 
 ## 0. Agent 判定当前状态的强制顺序
 
@@ -95,8 +95,8 @@ r11 manifest `401ead7d…a67b12` 保留为直接回退镜像，r10 为更早回�
 1. 继续 Phase 28 live serving、paged-KV/dynamic batch 与 3-way HBM 收口。
 2. 收口 `UPSTREAM-NOTIFY-FENCE`；任何拉近 payload store 与 credit 的 AR 改动，在 fence
    落地前继续禁止。
-3. 下一轮 device 性能先补 routed expert / route-combine authority instrumentation，
-   不按含 peer-arrival spin 的首个 collective 条带立项。
+3. review/merge routed GMM candidate `a745ab6`，补 exact `recv_meta` sidecar 后重跑
+   publication DFX；canonical 合入后构建新 immutable image，不回写或冒充 r12。
 
 ## 7. 机器状态口径
 

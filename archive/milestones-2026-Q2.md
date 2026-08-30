@@ -1382,6 +1382,32 @@ p50 `30.516/22.606/29.440 ms`，default=`all` 相对 midpoint 收益
 完整证据见
 [`../benchmark/2026-08-29-h4-resident-deployment-contract.md`](../benchmark/2026-08-29-h4-resident-deployment-contract.md)。
 
+## 2026-08-30 —— routed GMM active-worker dual-latch feature branch GO 🟦
+
+基于 r12 immutable substrate 与 canonical pypto-lib `e6c7d8ec`，将 routed GMM 两级
+latch 的参与者收缩为 active worker：`A=min(active_local_experts,36)`，
+`G=min(22,10A)`、`H=min(22,5A)`、`Q=min(22,A)`；96-entry route-plan workspace
+在 offset `64/80` 放置 cache-line 隔离 counter，保留全部 store drain/barrier/CMO。
+
+最终 H4-all A/B/A p50 `21.099/20.172/21.107 ms`，相对 baseline midpoint 收益
+`0.931 ms / 4.4117%`，超过 `0.616 ms` floor；三臂 hidden SHA
+`ee8ae6…db96a`、token `43640` exact。fixed-22 版本仅 `0.588 ms`，明确 NO-GO。
+
+whole compile、direct CCEC、focused `168 passed`、full Step3p5 unit
+`535 passed, 4 skipped` 均通过。最终 unit 日志已在 0162 r12 容器复跑并封存：focused
+`unit-final-a745ab6-focused-20260830-170353-1937305-890145330/pytest.log`
+SHA256 `2b3dbe2b…999be`；full
+`unit-final-a745ab6-full-20260830-170433-1937841-972655798/pytest.log` SHA256
+`5bcffb92…c39b2`。五层 outer L3/L4 byte-exact 与 analyzer structural gate
+PASS，policy 为 `release-local-ep-cdb2bb26-resident-dual-latch-22-v2`；但缺 exact
+`recv_meta` route sidecar，完整 publication readiness 仍为 `NOT_EVALUABLE`，不声明稳定
+DFX span 收益。
+
+commit `a745ab659c68` 已推送到
+`perf/gmm-soft-mix-prestage-20260829`（parent `e6c7d8ec`）；这是 **CAND
+source-overlay GO**，尚未合入 canonical `stepfun/develop`，也未构建新 image。完整证据见
+[`../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md`](../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md)。
+
 ---
 
 ## Pin snapshot 完整历史（降序，窄格）

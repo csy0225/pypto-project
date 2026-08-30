@@ -1,11 +1,12 @@
 # 接力上下文（Handoff）
 
-> **T6 = 纯指针 + “现在接什么”。最后更新：2026-08-29。预算 ≤90 行。**
+> **T6 = 纯指针 + “现在接什么”。最后更新：2026-08-30。预算 ≤90 行。**
 >
 > 当前真相 → [`../STATUS.md`](../STATUS.md)　落地台账 →
 > [`../progress/landed.md`](../progress/landed.md)　未决 →
 > [`../blockers.md`](../blockers.md)　r12 证据 →
-> [`../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md)
+> [`../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md)　J3 CAND 证据 →
+> [`../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md`](../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md)
 
 ## 当前交付基线
 
@@ -44,6 +45,11 @@ H4 deployment contract 已于 2026-08-29 收口：三个 canonical launcher 默�
 `7.372 ms / 24.591%`，exact launcher 64K/1000 p50 `20.973 ms`。证据见
 [`2026-08-29-h4-resident-deployment-contract.md`](../benchmark/2026-08-29-h4-resident-deployment-contract.md)。
 
+routed GMM J3 已在 feature branch `a745ab6` 完成 source-overlay GO：H4 A/B/A 收益
+`0.931 ms / 4.4117%`，hidden/token exact，whole compile 与五层结构 DFX/L3/L4 exact
+PASS。canonical pypto-lib 仍是 `e6c7d8ec`，完整 publication 缺 exact `recv_meta`
+sidecar，r12 不含该候选，也没有新 image。
+
 ## 现在接什么（按优先级，只有三条）
 
 ### 1. 继续 Phase 28 live serving
@@ -55,14 +61,14 @@ H4 deployment contract 已于 2026-08-29 收口：三个 canonical launcher 默�
 任何拉近 remote payload store 与 credit notify 的改动，必须先补
 `UPSTREAM-NOTIFY-FENCE` 的 pre-CMO `PIPE_ALL`。
 
-### 3. 补 device 阶段 authority instrumentation
+### 3. 推进 routed GMM J3 canonical / IMG 准入
 
-最新 clean swimlane 外推的主要池子是 routed expert、route/combine 与 TP collective；
-先补全 rank/全层 authority，再对高 stall 段立项，不复用含 peer-arrival spin 的首条 collective。
+review 并 exact-lease 合入 `a745ab6`，补 exact `recv_meta` route sidecar 后重跑
+publication DFX；再构建 r12 successor image，完成 digest-only immutable gate。
 
 ## 操作约束
 
 - 性能数字必须绑定 manifest/config、完整命令、effective env 与 overlay 身份。
-- r12 只声明 dep-only DFX，不声明 whole-swimlane。
+- r12 只声明 dep-only DFX，不声明 whole-swimlane；`a745ab6` 只声明 CAND source-overlay GO。
 - 每次占卡前重新查锁、`nerdctl ps`、`sudo -n fuser` 和 NPU process。
 - 禁止 NPU reset、破坏性 kill、source/runtime overlay 冒充 image gate。

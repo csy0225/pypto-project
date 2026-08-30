@@ -7,6 +7,14 @@
 
 ---
 
+> **🟦 2026-08-30 current override：J3 routed GMM active-worker dual-latch 已完成
+> feature-branch source-overlay GO。** `perf/gmm-soft-mix-prestage-20260829@a745ab6`
+> 基于 canonical `e6c7d8ec`；H4-all A/B/A 收益 `0.931 ms / 4.4117%`，hidden/token
+> exact，whole compile 与五层结构 DFX/L3/L4 exact PASS。固定 22-participant 版本仅
+> `0.588 ms < 0.616 ms`，NO-GO。当前仍缺 exact `recv_meta` route sidecar，publication
+> `NOT_EVALUABLE`；未合入 `stepfun/develop`、未进入 r12、未构建新 image。证据见
+> [`../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md`](../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md)。
+>
 > **✅ 2026-08-27 current override：whole-step host/graph/submit H6 已进入 r12。**
 > 当前远端为 pypto `14de90fd` / pypto-lib `e6c7d8ec`，r12 manifest
 > `sha256:ba42fd19…eb805d`。r11 digest 上两文件 source-overlay A/B/A：
@@ -354,6 +362,7 @@ producer → 数学变换/quant/route-map → transport/window
 |----|--------|--------|------|-------|------|------|----------|
 | J1 | L0–L4 routed gate/up stage split + task-grain tuning | P0 | 🟦 | codex | A1, C1–C3, D1–D2, G1, I2 | 产品实现已被当前 `stepfun/develop@e6c7d8ec` 与 r11/r12 继承；r12 Main precision/MTP/dep-only DFX 已过门。r9 的 8/8 whole-swimlane 与旧 `c9af5790` 六档 normal A/B 仍只是历史 evidence；若 J1 要升级为“当前六档 campaign release”，仍需在 r12 对 BS `1/2/4/7/8/16` 重跑同口径 golden/A/B 与所需 DFX，不能跨镜像借证据。设计见 [`05-moe-optimization.md`](05-moe-optimization.md) | 2026-08-27 |
 | J2 | gate fan-out 与 norm/quant 解耦（deferred `inv_rms`） | P0 | ✅ | claude | J1 | 已发布 `stepfun/develop@d13b2ca6`（单 commit FF，只改 `decode_fwd.py` +63/-35，sha `d392311c… -> 28080c53…`）。`gate_expert_fanout` 只写 raw FP32 logits，`inv_rms/sigmoid/bias` 尾巴搬进本来就等 `inv_rms` 的 `gate_topk`；算子顺序与数值语义不变，codegen 侧 `params_t70` 不再 `add_input(moe_inv_rms)`，task 数与 `block_num=9` 不变。0162 三臂 A/B/A：bs=1/64k/nb512 p50 `36.494 -> 33.849 ms`（**+7.25%**，地板 0.634）、bs=8/64k/nb4096 p50 `97.528 -> 91.722 ms`（**+5.95%**，地板 2.637）；bs=16 物理不可行（16 GiB 单次 rtMalloc → `207001`）。**两档三臂 hidden payload 各自 byte-exact**（bs=1 = N256 golden `567b206b…`、bs=8 `1fcd4fcc…`）→ 按项目口径 sha256 即准出。机理：MoE-only 段 15→14 hop、`norm_quant` 离开关键路径、链头 `81.8 -> 56.5 us`。数据见 [`../../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md`](../../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md) | 2026-08-10 |
+| J3 | routed GMM active-worker dual-latch | P0 | 🟦 | codex | J1, J2 | feature branch `a745ab6` source-overlay GO：`A=min(active_local_experts,36)`，`G/H/Q=min(22,10A/5A/A)`；H4 A/B/A 收益 `0.931 ms / 4.4117%`，hidden/token exact，whole compile 与结构 DFX/L3/L4 exact PASS。固定 22-participant 版本 `0.588 ms < 0.616 ms` 已 NO-GO。阻塞：canonical merge、exact `recv_meta` route sidecar、完整 publication gate 与新 immutable image；r12 不含该候选。见 [`../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md`](../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md) | 2026-08-30 |
 
 ### Track K — TP all-reduce 二次优化（campaign 内部代号 P2；注意与本表「优先级」列的 P0/P2 无关）
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
@@ -400,12 +409,12 @@ immutable-image qualification，不再恢复旧 Ring、K5-C 或 K6b 路线。
 | 状态 | 数量 |
 |------|------|
 | ⬜ TODO | 12 |
-| 🟦 IN PROGRESS | 3 |
+| 🟦 IN PROGRESS | 4 |
 | ✅ DONE | 25 |
 | ⏸ PAUSED / SUPERSEDED | 1 |
 | ❌ / ⛔ NO-GO | 5 |
 | ⛔ BLOCKED | 0 |
-| **合计** | **46** |
+| **合计** | **47** |
 
 **base 校正后关键路径**：A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/**H4/H5/H6**/I1/I2/I3/I4/I5/I7/J2/K1/K6a/**K8/K11** 已 ✅；K6b 已降为被 K11 supersede 的历史中间方案。
 其中 **K8 是已通过整网 A/B/A + 精度门并发布 immutable image 的 host-reset 优化**
@@ -413,8 +422,9 @@ immutable-image qualification，不再恢复旧 Ring、K5-C 或 K6b 路线。
 K11 已被后续 immutable image 收录；historical pull C2 仅作回归基线；C5、K2a、K5-C 与 **K9** 是四个实测否决的负结果（K9 整网
 `+1.72 ms/step`，符号与 bench 相反）。当前 performance 看板进行中的是
 **B3（KV resident/in-place 的连续多轮 row-diff/liveness 证据）**、**J1（formal DFX /
-publication / swimlane 收尾）**、**K2b（publisher release fence hoist，需上游 pypto 补丁）**；
-H4/H5/H6 已收口；当前第一优先是把 H4 env 接入正式 deployment。
+publication / swimlane 收尾）**、**J3（active-worker dual-latch canonical/IMG 准入）**、
+**K2b（publisher release fence hoist，需上游 pypto 补丁）**。H4/H5/H6 已收口；当前
+performance 第一优先是合入 J3、补 exact `recv_meta` 并完成新 immutable image gate。
 `bind.args` 继续优化已按 `0.259%` / `no_clear_change` 判为 NO-GO。
 `K10`（上界 `0.45–0.53 ms/step`，K8 的直接后继）排在 deployment 接线之后 ——
 **注意 K10 的上界低于近期整网 bracket 地板
@@ -446,6 +456,7 @@ source-overlay 实现/精度 PASS、性能 **NO-GO**；I7 的 `e5e26f9f` 只对
 
 | 日期 | ID | 变更 | 备注 |
 |------|----|----|------|
+| 2026-08-30 | J3 | routed GMM active-worker dual-latch feature branch 完成 source-overlay GO | `a745ab6`（parent `e6c7d8ec`）已推送；H4 A/B/A `21.099/20.172/21.107 ms`，收益 `0.931 ms / 4.4117%`，hidden/token exact；whole compile、focused/full unit、五层结构 DFX 与 L3/L4 exact PASS。fixed-22 `0.588 ms` NO-GO。缺 exact `recv_meta`，publication `NOT_EVALUABLE`；待 canonical merge 与 IMG gate。 |
 | 2026-08-27 | H6 / H2 | prepared TaskArgs cache 合入并发布 r12；H2 改为 residual graph-build 重画像 | pypto `14de90fd`；r11 source-overlay A/B/A：ITL `−2.608%`、graph build `−44.429%`、graph→first runner `−47.936%`、serial submit envelope `−23.887%`，hidden/token exact；r12 immutable Main/MTP/dep-only DFX 与 1844/1844 contract PASS。正式仍是 serial 8-rank，bind `0.259%` 不再优化；H2 是否仍有 ROI 需先拆候选剩余 `2.2743 ms` graph build |
 | 2026-08-24 | H4 / H5 / K11 | upgrade r9 immutable admission + 五仓同步 | manifest `b637f00c…`、config `f6c8f72e…`；H4 all 令 `bind.args 6.461→0.063 ms`、64K/1000 `27.812→22.253 ms`，all/none 输出 parity；H5 8/8 chip records、L3/L4 exact、analyzer + outer admission PASS；Main/MTP liveness 与 precision `127/128` PASS。五仓 `stepfun/develop` 已同步。镜像未 bake H4 env，deployment 接线仍 open |
 | 2026-08-12 | K11 | single-row small-message selector 合入 `stepfun/develop@69ad31e4` | `active_rows==1` 为静态 8 KiB 两波 one-shot mesh，其余 Main/MTP 为静态三波 fallback；ownership/transfer chunk 解耦。unit `365 passed, 7 skipped`；Main/MTP default+chunk256 compile、8 卡 rows `1/3/16` PASS。focused 历史 regular-call kernel-duration pooled mean `38.325→22.667 µs/call`（非 strict critical-tail）；Whole A/B/A `31.065/29.912/30.999 ms`，delta `-1.120 ms/-3.609%`，precision/per-iteration PASS。landing tree `e26d762c…`；未构建新 immutable image。 |

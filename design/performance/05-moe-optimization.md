@@ -1,5 +1,16 @@
 # 05 · MoE 优化专项：L0–L4 focused network
 
+> **2026-08-30 current override（优先于下方全部历史快照）**：当前 packed-NZ fused
+> routed GMM 的 J3 candidate 为 `perf/gmm-soft-mix-prestage-20260829@a745ab6`
+>（parent/canonical base `e6c7d8ec`）。`A=min(active_local_experts,36)`，gate、hidden、
+> quant latch participant 分别为 `min(22,10A)`、`min(22,5A)`、`min(22,A)`；96-entry
+> route-plan workspace 在 offset `64/80` 放置 cache-line 隔离 counter，所有 drain/barrier
+> 保留。r12 H4-all A/B/A 收益 `0.931 ms / 4.4117%`，hidden/token exact；fixed-22
+> 版本 `0.588 ms < 0.616 ms` 已 NO-GO。五层结构 DFX 与 L3/L4 exact PASS，但缺 exact
+> `recv_meta`，publication `NOT_EVALUABLE`。该结果是 feature-branch source-overlay CAND，
+> 尚非 canonical SRC/IMG。证据见
+> [`../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md`](../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md)。
+>
 > **2026-08-24 current override（优先于下方 2026-08-08 快照）**：产品实现已进入
 > `pypto-lib@bf3ff440`，upgrade r9 manifest `sha256:b637f00c…a71690f6` 的 BS1
 > combined gate 已完成：L3/L4 `torch.equal=true`、8/8 rank

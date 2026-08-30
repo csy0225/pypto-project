@@ -871,6 +871,51 @@ flowchart LR
 
 ---
 
+## Track J — MoE compute
+
+### PERF-J3 · routed GMM active-worker dual-latch 🟦 CAND source-overlay GO
+
+- **目标**：保留 `22 AIC / 44 AIV` resident mixed grid 与全部 store publication/drain
+  语义，只让有 active local expert 工作的 worker 参与 gate/up-ready 与 hidden-ready latch，
+  回收空 worker 的 atomic publication 和 polling。
+- **源码身份**：canonical base `pypto-lib@e6c7d8ec`；feature branch
+  `perf/gmm-soft-mix-prestage-20260829@a745ab6`；parent exact 为 `e6c7d8ec`，diff SHA256
+  `4cc1e10b7949d57893fbf4dc19e6170ffce771dacc92eb1abf31e2e95c2e7c5e`。
+- **参与者公式**：
+
+  ```text
+  A = min(active_local_experts, 36)
+  G = min(22, 10A)
+  H = min(22, 5A)
+  Q = min(22, A)
+  ```
+
+  AIC `b<G` publish gate/up；lane-0 AIV `b<H` await gate/up 并 publish hidden；
+  lane-0 AIV `b<Q` await hidden。`A=0` 由外层 predicate 跳过 soft latch。
+- **接口 / shape**：local expert count 保持 40-entry INT32 physical ABI；route plan 为
+  96-entry INT32 workspace，语义 plan 为 `0:38`，counter offsets 为 `64/80`。两个 counter
+  与 metadata 及彼此 cache-line 隔离；producer 清零完整 workspace。Python 对 workspace
+  使用 `pl.InOut`，三个 external routed GMM kernel 的对应参数保持 InOut lineage。
+- **同步不变量**：不得删除或下沉现有 store drain、`pipe_barrier`、`dcci`、`dsb`；本项只
+  改参与 latch 的 worker 集合。fused grid 必须为 `22 AIC / 44 AIV`，BS1 down 为
+  `23 AIC / 46 AIV`。
+- **边界合同**：覆盖 `A=0..36`，重点 `0,1,2,3,4,5,21,22,36`；结构测试绑定公式常量、
+  loop 上界、workspace offset、InOut ABI、source policy 与 mixed-grid targets。
+- **已过门**：focused `168 passed`；full Step3p5 unit `535 passed, 4 skipped`；whole
+  compile 与 direct CCEC PASS；H4 A/B/A 收益 `0.931 ms / 4.4117%`，hidden/token exact；
+  五层 analyzer structural gate 与 outer L3/L4 byte-exact PASS。计数绑定 0162 final logs：
+  `unit-final-a745ab6-focused-20260830-170353-1937305-890145330/pytest.log` SHA256
+  `2b3dbe2b…999be`、`unit-final-a745ab6-full-20260830-170433-1937841-972655798/pytest.log`
+  SHA256 `5bcffb92…c39b2`。
+- **未闭合**：exact `recv_meta` route sidecar 缺失，完整 publication readiness 为
+  `NOT_EVALUABLE`；feature branch 尚未合入 `stepfun/develop`，没有新 immutable image。
+  physical slices 不能充当 route histogram。准入顺序固定为 canonical merge → exact
+  sidecar/publication DFX → r12 successor immutable image gate。
+- **证据**：
+  [`../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md`](../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md)。
+
+---
+
 ## 通用落地规范
 
 1. **精度验收 = 多步 decode 逐 token** vs live vanilla vLLM W8A8 oracle，seed=6127 / N=128 →

@@ -1,7 +1,7 @@
 # 踩坑案例集（CASEBOOK）
 
 > **按现象查的单点坑档案。** 每条写清 背景 / 现象 / 过程 / 处置（解决还是绕开）。
-> 最后更新：2026-08-24。**真正的约束是每条 ≤14 行 + 索引一行一条**——
+> 最后更新：2026-08-30。**真正的约束是每条 ≤14 行 + 索引一行一条**——
 > 一条写到像复盘那么长，说明它该独立成 `NN-*.md`。
 
 ## 这一页和别的页什么关系
@@ -36,6 +36,7 @@
 | [A9](#a9) | 149 个 AIV 函数 Vec 用量加起来 24.8× 超 UB 限额，却编译通过 | ✅ 认知 |
 | [A10](#a10) | 同一组 pin 重新构建的镜像跑不通，老镜像能跑 | ✅ 主路径 |
 | [A11](#a11) | 升级后 compile gate 报 rc=1 / `status: NO-GO`，可日志里明明有 `[holder] compile OK` | ✅ 判据 |
+| [A12](#a12) | fatal-marker 扫描命中 `507018`，实际只是在更长的时间戳数字里 | ✅ 已修 |
 | [B1](#b1) | `ptoas compilation failed`，但错误正文是空的 | ✅ 判 flake |
 | [B2](#b2) | 按 runtime 打印的 env 名去设，完全不起作用 | 🩹 |
 | [B3](#b3) | 设了 `ASCEND_PROCESS_LOG_PATH`，目录建了、文件是空的 | ✅ |
@@ -188,6 +189,16 @@
   `ptoas compilation failed`），**不拿 probe 的 rc 当门**。用 rc 之前先问「这个 rc 里还
   AND 了什么」，并对 parent 跑同一检查，证明失败项是不是新的。
 - **出处**：`upgrade-20260821/PATCH-AUDIT.md` Appendix D、0162 `compile-gate-20260822-232050`
+
+<a id="a12"></a>
+### A12. 裸 error-code regex 命中时间戳子串 ✅
+
+- **背景**：validation harness 扫描 fatal marker `507018`。
+- **现象**：报告命中 `507018`，实际文本是时间戳 `251929535070183` 的数字子串，没有 device fault。
+- **过程**：裸 regex 把错误码当普通 substring，导致正确 run 被误判为 fatal。
+- **处置**：✅ error code 改用数字边界匹配，并增加 shell regression；该修复只修 harness，
+  **不能**当成优化正确性或设备稳定性证据。
+- **出处**：[`../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md`](../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md) §6.1
 
 ---
 

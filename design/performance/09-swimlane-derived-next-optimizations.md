@@ -1,5 +1,13 @@
 # 由 swimlane 推导的下一批优化（2026-08-21）
 
+> **2026-08-30 current override（优先于全部历史快照）**：routed expert authority 已推进到
+> J3 active-worker dual-latch feature branch `a745ab6`。在 r12 + H4-all 上，A/B/A
+> `21.099/20.172/21.107 ms`，收益 `0.931 ms / 4.4117%`，hidden/token exact；固定
+> 22-participant latch 的 `0.588 ms` 低于 `0.616 ms` floor，已 NO-GO。五层结构 DFX 与
+> L3/L4 byte-exact PASS，但缺 exact `recv_meta` route sidecar，完整 publication gate
+> `NOT_EVALUABLE`。这是 source-overlay CAND，不是 canonical SRC 或 IMG。证据见
+> [`../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md`](../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md)。
+>
 > **2026-08-29 最新校正与落地（优先于全部历史快照）**：首个 TP collective
 > 含 peer-arrival spin；按未污染 rank 校正后五层 clean makespan 约 `1.81 ms`。
 > 45 层外推的主要 device 池为 routed expert `5.115 ms`、route/combine
@@ -279,6 +287,7 @@ H2 = `submit` 阶段 `3.49 ms`（2026-07-29，bs=16 / ITL 65 ms era）；
 | swimlane rank2 五件 sha256 | [`05-moe-optimization.md`](05-moe-optimization.md) §Candidate merged swimlane |
 | swimlane 全文 + `rc=1` 契约失败 | [`../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md`](../../benchmark/2026-08-11-k8-selective-window-zeroing-image.md) §5 |
 | `bind.args` / `orch` vs `device_wall` | [`07-hardware-scheduler-performance.md`](07-hardware-scheduler-performance.md) §9；`0162:…/dispatch-orch-decouple-20260821/{FINDINGS.md, analysis-bin/orch_span_stats.py}` |
+| J3 routed GMM active-worker dual-latch | [`../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md`](../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md) |
 | H6 whole-step A/B/A 与 r12 准入 | [`../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md) |
 | MoE 阶段预算 | [`../../benchmark/2026-08-12-vllm-ascend-decode-moe-trace-gap.md`](../../benchmark/2026-08-12-vllm-ascend-decode-moe-trace-gap.md) §13.5 / §14.1 |
 | H2 根因 | [`task-tracking.md`](task-tracking.md) H2 行 |
