@@ -15,14 +15,15 @@
 | **IMG** immutable-image released | 有 manifest digest，在 0162 上 **digest-only、无 source/runtime overlay** 验证过 | 这是生产可部署的形态 | 除非注明"完整"，否则不代表全矩阵准出 |
 | **SRC** source-overlay GO | 代码已合入 `stepfun/develop`，在**固定 immutable 镜像**上通过只读 `/candidate` overlay 验证 | 实现 + 该门的结论成立 | ❌ 不代表镜像已包含它；❌ 不能当镜像级准出数据 |
 
-**当前 r12 pin 集**：
-`pypto 14de90fd` / `pypto-lib e6c7d8ec` / `pto-isa cd4a3d3f` / `PTOAS(src) 307d0484` /
-`simpler 85a82c45` / `ptoas-bin v0.57`。
+**当前 canonical SRC pin 集（2026-09-01）**：
+`pypto 655c7bda` / `pypto-lib a745ab659` / `pto-isa cd4a3d3f` /
+`PTOAS(src) 307d0484` / `simpler 85a82c45` / `ptoas-bin v0.57`。
+此前 r12 的 `14de90fd/e6c7d8ec` 仍作为历史 IMG pin 保留。
 2026-08-24 之前表格中的“canonical/偏离”均按**当时**的旧 pin 集解释，不反向改写历史。
 
 ---
 
-## 当前生产真相（2026-08-30）
+## 当前生产真相（2026-09-01）
 
 - **最新 IMG** = whole-step host/graph/submit r12（manifest `ba42fd19…eb805d`）；
   final contract `1844/1844 PASS`，SHA256 `511a5459…87f3a`。
@@ -31,8 +32,13 @@
   graph→first runner `−47.936%`；不是 r12 immutable 性能重采。
 - **immutable r12 门**：Main H4 all/none 均 `126/128`，MTP BS1/BS16 token
   `[6178,410,303]` 且 hidden pass rate `1.0`，dep-only DFX hidden/token exact。
-- **当前 SRC tips** = pypto `14de90fd` / pypto-lib `e6c7d8ec` / pto-isa `cd4a3d3f` /
-  PTOAS `307d0484` / simpler `85a82c45`，五仓远端 `stepfun/develop` 已复核。
+- **当前 SRC 已前进**：pypto `655c7bda`、pypto-lib `a745ab659` 已用
+  `--force-with-lease` 推送并由 `ls-remote` exact 复核；这两个 commit 的
+  matched candidate H4=`all` A/B/A 为 `21.617/20.516/21.257 ms`，
+  extended correctness admission v2 为 PASS。
+- candidate image manifest `19f51d37…a7f` 尚未完成 a745 匹配的
+  `recv_meta` publication，因此不新增表 A 的 IMG 行，也不改写 r12 release truth。
+- 旧 r13 `655+e6c7d8ec` 的 `21.562 ms` 属未匹配旧栈，不能代表当前 `655+a745ab659`。
 - r11（manifest `401ead7d…a67b12`）保留为回退；其 r10/r11/r10 immutable A/B/A
   仅 `−0.0065 ms / −0.0299%`，结论是性能中性，不是性能收益。
 - **H4 deployment contract 已落地**：`run_itl_gate.sh` / `run_precision_gate.sh` /
@@ -66,6 +72,7 @@
 
 | 日期 | 落地了什么 | pypto | pypto-lib | 门结论 | 证据 |
 |---|---|---|---|---|---|
+| 2026-09-01 | local-owner persistent reset ABI 回退修复 + routed GMM latch participant candidate | `655c7bda` | `a745ab659` | 两 commit 已 exact-lease 推送到 `stepfun/develop`；matched candidate image H4=`all` A/B/A `21.617/20.516/21.257 ms`、gain `0.921 ms`，5-case extended admission v2 PASS；IMG route publication/`recv_meta` 尚未完成，不能称 IMG release | [`2026-09-01-k8-local-owner-reset-regression.md`](../benchmark/2026-09-01-k8-local-owner-reset-regression.md) |
 | 2026-08-27 | prepared TaskArgs descriptor/signature cache 与 whole-step host/graph/submit 优化合入远端 `stepfun/develop` | `14de90fd` | `e6c7d8ec` | r11 digest 上 source-overlay A/B/A：ITL `21.6805→21.115 ms`（`−2.608%`）、graph build `−44.429%`、graph→first runner `−47.936%`，三臂 hidden/token exact；正式合同仍为 `serial-eight-rank`、`group_size=1`、无 group submit；随后 baked 入 r12 并过 immutable release gate | [`2026-08-27-whole-step-host-graph-submit-r12-release.md`](../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md) |
 | 2026-08-25 | packed-NZ MoE fusion 用 exact lease fast-forward 到远端 `stepfun/develop` | `519b588a` | `fe641929` | `bf3ff440 → fe641929` fast-forward，远端 SHA 复核；对应 r10 final contract `71/71 PASS` | [`2026-08-25-moe-fusion-image-release.md`](../benchmark/2026-08-25-moe-fusion-image-release.md) |
 | 2026-08-24 | 五仓升级目标同步到远端 `stepfun/develop` | `519b588a` | `bf3ff440` | pto-isa `cd4a3d3f` / PTOAS `307d0484` / simpler `85a82c45`；五仓 `force-with-lease` 后远端 SHA 逐项复核。simpler 旧 tip 备份为 `backup/stepfun-develop-pre-upgrade-20260824-e2efebcb` | [`2026-08-24-upgrade-r9-release.md`](../benchmark/2026-08-24-upgrade-r9-release.md) §5 |

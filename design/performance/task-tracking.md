@@ -7,16 +7,9 @@
 
 ---
 
-> **🟦 2026-08-30 current override：J3 routed GMM active-worker dual-latch 已完成
-> feature-branch source-overlay GO。** `perf/gmm-soft-mix-prestage-20260829@a745ab6`
-> 基于 canonical `e6c7d8ec`；H4-all A/B/A 收益 `0.931 ms / 4.4117%`，hidden/token
-> exact，whole compile 与五层结构 DFX/L3/L4 exact PASS。固定 22-participant 版本仅
-> `0.588 ms < 0.616 ms`，NO-GO。当前仍缺 exact `recv_meta` route sidecar，publication
-> `NOT_EVALUABLE`；未合入 `stepfun/develop`、未进入 r12、未构建新 image。证据见
-> [`../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md`](../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md)。
->
-> **✅ 2026-08-27 current override：whole-step host/graph/submit H6 已进入 r12。**
-> 当前远端为 pypto `14de90fd` / pypto-lib `e6c7d8ec`，r12 manifest
+> **✅ 2026-09-01 current override：H6 已进入 r12，H7 local-owner reset 回退已修复并推 SRC。**
+> canonical SRC 为 pypto `655c7bda` / pypto-lib `a745ab659`；release IMG 仍是
+> r12（历史 pins `14de90fd/e6c7d8ec`）。
 > `sha256:ba42fd19…eb805d`。r11 digest 上两文件 source-overlay A/B/A：
 > ITL `21.6805→21.115 ms`（`−2.608%`）、graph build `−44.429%`、
 > graph→first runner `−47.936%`、serial rank submit envelope `−23.887%`；
@@ -25,7 +18,9 @@
 > `1844/1844` final contract PASS；未重采 r12 immutable 性能 A/B/A。
 > `bind.args` 仅占候选 ITL `0.259%` 且 `no_clear_change`，不再优化。
 > 2026-08-29 canonical deployment launcher 已默认注入 H4=`all`，`none` 可回退；
-source-default-all matched A/B/A 收益 `7.372 ms / 24.591%`，exact launcher 64K/1000 p50 `20.973 ms`。
+> source-default-all matched A/B/A 收益 `7.372 ms / 24.591%`，exact launcher 64K/1000
+> p50 `20.973 ms`。matched candidate H4=`all` A/B/A `21.617/20.516/21.257 ms`，
+> H4 与 5-case extended correctness 均 PASS；a745 `recv_meta` publication 仍待补齐。
 > 证据见
 > [`../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md)。
 >
@@ -344,6 +339,7 @@ producer → 数学变换/quant/route-map → transport/window
 | **H4** | **8 个 step-invariant RoPE/gate-R 常量 device-resident** | **P0** | ✅ | — | — | r9 起 `PYPTO_H4_RESIDENT=all`：`bind.args` p50 `6.461 → 0.063 ms`；2026-08-29 r12 matched `none/default/none` 收益 `7.372 ms / 24.591%`，exact launcher 64K/1000 p50 `20.973 ms`。三个 canonical launcher 默认注入 `all`，额外 `99.64 MiB/rank`，`none` 可回退；image Config/代码默认不变 | 2026-08-29 |
 | **H5** | **恢复 all-rank chip swimlane 与 outer admission** | **P1** | ✅ | — | A1 | r9 combined gate：8/8 rank `chip_swimlane_records.json`、deps/name-map/critical-path/merged 全齐；L3/L4 exact，analyzer `pass=true/blockers=[]`，recv_meta ready，outer admission `pass=true`。analyzer 自身保留 `PENDING_EXTERNAL_GATE` 是职责边界，不是 structural failure | 2026-08-24 |
 | **H6** | **prepared TaskArgs descriptor/signature cache + whole-step graph/submit 收口** | **P0** | ✅ | codex | H4 | pypto `14de90fd`。r11 source-overlay A/B/A：ITL `−0.5655 ms / −2.608%`、graph build `−1.8183 ms / −44.429%`、graph→first runner `−1.4851 ms / −47.936%`、serial submit envelope `−0.2875 ms / −23.887%`；hidden/token exact。cache 有界、未知对象 fail-open，`free()` 与 proof window 互斥。baked 入 r12 并过 immutable release gate；设备门仍是 serial 8-rank independent submit | 2026-08-27 |
+| **H7** | **local-owner persistent reset ABI 精确 profile（回退修复）** | **P0** | ✅ SRC + candidate gate | codex | H1, H6 | `655c7bda` 为 local-owner 4-control/4-data layout 增加显式顺序、byte-size、control prefix `46,080 B` 与 full window `11,842,560 B` pin；未知 layout 继续 full clear，变更 fail-closed。旧 `655+e6c7d8ec` B 臂 H4 p50 `21.562 ms`；当前 `r14a(14de+a745)` / `r14b(655+a745)` A/B/A `21.617/20.516/21.257 ms`，5-case extended admission v2 PASS。candidate IMG 尚待 a745 `recv_meta` publication，不宣称 release IMG | 2026-09-01 |
 | H3 | DFX run 第一 barrier 假长条（观测性，非性能） | P2 | ⬜ | — | A1 | DFX run 里第一个 `tp_all_reduce` 被记成 115 ms(pmu)–379.9 ms(swim)，其余 89 次 39–366 µs，straggler 每次换人。**已排除 host 下发**（`_submit_chip` 在 DFX 下只多一次字符串拼接；clean run 下发等距 0.412 ms）。clean run 算术上界：非 device 时间共 5.7 ms → 380 ms 不可能存在。方向 = chip child 侧 collector 开销落在被 trace 区间内（注意 `orch._dfx_dispatch_idx` 每 request 重置，留下的是**最后一步**，非冷启动）。危害：曾使 `tp_all_reduce` 被误判成 74.1% wall | 2026-07-29 |
 
 ### Track I — Attention / Vec 收尾与 canonical 发布
@@ -362,7 +358,7 @@ producer → 数学变换/quant/route-map → transport/window
 |----|--------|--------|------|-------|------|------|----------|
 | J1 | L0–L4 routed gate/up stage split + task-grain tuning | P0 | 🟦 | codex | A1, C1–C3, D1–D2, G1, I2 | 产品实现已被当前 `stepfun/develop@e6c7d8ec` 与 r11/r12 继承；r12 Main precision/MTP/dep-only DFX 已过门。r9 的 8/8 whole-swimlane 与旧 `c9af5790` 六档 normal A/B 仍只是历史 evidence；若 J1 要升级为“当前六档 campaign release”，仍需在 r12 对 BS `1/2/4/7/8/16` 重跑同口径 golden/A/B 与所需 DFX，不能跨镜像借证据。设计见 [`05-moe-optimization.md`](05-moe-optimization.md) | 2026-08-27 |
 | J2 | gate fan-out 与 norm/quant 解耦（deferred `inv_rms`） | P0 | ✅ | claude | J1 | 已发布 `stepfun/develop@d13b2ca6`（单 commit FF，只改 `decode_fwd.py` +63/-35，sha `d392311c… -> 28080c53…`）。`gate_expert_fanout` 只写 raw FP32 logits，`inv_rms/sigmoid/bias` 尾巴搬进本来就等 `inv_rms` 的 `gate_topk`；算子顺序与数值语义不变，codegen 侧 `params_t70` 不再 `add_input(moe_inv_rms)`，task 数与 `block_num=9` 不变。0162 三臂 A/B/A：bs=1/64k/nb512 p50 `36.494 -> 33.849 ms`（**+7.25%**，地板 0.634）、bs=8/64k/nb4096 p50 `97.528 -> 91.722 ms`（**+5.95%**，地板 2.637）；bs=16 物理不可行（16 GiB 单次 rtMalloc → `207001`）。**两档三臂 hidden payload 各自 byte-exact**（bs=1 = N256 golden `567b206b…`、bs=8 `1fcd4fcc…`）→ 按项目口径 sha256 即准出。机理：MoE-only 段 15→14 hop、`norm_quant` 离开关键路径、链头 `81.8 -> 56.5 us`。数据见 [`../../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md`](../../benchmark/2026-08-10-step3p5-p1a-gate-decouple.md) | 2026-08-10 |
-| J3 | routed GMM active-worker dual-latch | P0 | 🟦 | codex | J1, J2 | feature branch `a745ab6` source-overlay GO：`A=min(active_local_experts,36)`，`G/H/Q=min(22,10A/5A/A)`；H4 A/B/A 收益 `0.931 ms / 4.4117%`，hidden/token exact，whole compile 与结构 DFX/L3/L4 exact PASS。固定 22-participant 版本 `0.588 ms < 0.616 ms` 已 NO-GO。阻塞：canonical merge、exact `recv_meta` route sidecar、完整 publication gate 与新 immutable image；r12 不含该候选。见 [`../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md`](../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md) | 2026-08-30 |
+| J3 | routed GMM active-worker dual-latch | P0 | 🟦 | codex | J1, J2 | `a745ab659` 已进入 canonical `stepfun/develop`：`A=min(active_local_experts,36)`，`G/H/Q=min(22,10A/5A/A)`；历史 source-overlay H4 收益 `0.931 ms / 4.4117%`，matched `655+a745` candidate A/B/A `21.617/20.516/21.257 ms`，hidden/token exact，5-case extended gate PASS。固定 22-participant 版本 `0.588 ms < 0.616 ms` 已 NO-GO。阻塞：exact `recv_meta` route sidecar、完整 publication gate 与 successor immutable image；r12 不含该候选。见 [`../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md`](../../benchmark/2026-08-30-routed-gmm-active-worker-dual-latch.md)、[`../../benchmark/2026-09-01-k8-local-owner-reset-regression.md`](../../benchmark/2026-09-01-k8-local-owner-reset-regression.md) | 2026-09-01 |
 
 ### Track K — TP all-reduce 二次优化（campaign 内部代号 P2；注意与本表「优先级」列的 P0/P2 无关）
 | ID | 优化点 | 优先级 | 状态 | Owner | 依赖 | 阻塞 | 最后更新 |
@@ -410,21 +406,21 @@ immutable-image qualification，不再恢复旧 Ring、K5-C 或 K6b 路线。
 |------|------|
 | ⬜ TODO | 12 |
 | 🟦 IN PROGRESS | 4 |
-| ✅ DONE | 25 |
+| ✅ DONE | 26 |
 | ⏸ PAUSED / SUPERSEDED | 1 |
 | ❌ / ⛔ NO-GO | 5 |
 | ⛔ BLOCKED | 0 |
 | **合计** | **47** |
 
-**base 校正后关键路径**：A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/**H4/H5/H6**/I1/I2/I3/I4/I5/I7/J2/K1/K6a/**K8/K11** 已 ✅；K6b 已降为被 K11 supersede 的历史中间方案。
+**base 校正后关键路径**：A1/B1/B2/C1/C2/C3/C4/D1/D2/G1/H1/**H4/H5/H6/H7**/I1/I2/I3/I4/I5/I7/J2/K1/K6a/**K8/K11** 已 ✅；K6b 已降为被 K11 supersede 的历史中间方案。
 其中 **K8 是已通过整网 A/B/A + 精度门并发布 immutable image 的 host-reset 优化**
 （ITL `33.84 → 32.08 ms` 源码级 / `32.14 ms` 镜像级，byte-exact + N=128 `123/128`）。
 K11 已被后续 immutable image 收录；historical pull C2 仅作回归基线；C5、K2a、K5-C 与 **K9** 是四个实测否决的负结果（K9 整网
 `+1.72 ms/step`，符号与 bench 相反）。当前 performance 看板进行中的是
 **B3（KV resident/in-place 的连续多轮 row-diff/liveness 证据）**、**J1（formal DFX /
 publication / swimlane 收尾）**、**J3（active-worker dual-latch canonical/IMG 准入）**、
-**K2b（publisher release fence hoist，需上游 pypto 补丁）**。H4/H5/H6 已收口；当前
-performance 第一优先是合入 J3、补 exact `recv_meta` 并完成新 immutable image gate。
+**K2b（publisher release fence hoist，需上游 pypto 补丁）**。H4/H5/H6/H7 已收口；当前
+performance 第一优先是为 `655+a745` 补 exact `recv_meta` 并完成 successor immutable image gate。
 `bind.args` 继续优化已按 `0.259%` / `no_clear_change` 判为 NO-GO。
 `K10`（上界 `0.45–0.53 ms/step`，K8 的直接后继）排在 deployment 接线之后 ——
 **注意 K10 的上界低于近期整网 bracket 地板

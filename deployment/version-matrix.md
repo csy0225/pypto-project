@@ -5,6 +5,36 @@
 
 ## 已验证组合
 
+### 当前 canonical SRC / matched candidate（2026-09-01）
+
+> **SRC 已落地，IMG 尚未 release-admitted。** `pypto@655c7bda` 修复
+> local-owner persistent reset ABI 回退，`pypto-lib@a745ab659` 为最新
+> routed GMM latch participant 优化；两者分别从 `14de90fd`、`e6c7d8ec`
+> exact-lease 前进到 `stepfun/develop`。candidate digest 仅用于验证，
+> 不替代下方 r12 release IMG。
+
+```text
+candidate image: hub.i.basemind.com/stepcast/vllm-pypto@sha256:19f51d373c5f9d6171ccf3306f260066e873eda48efca23f5d77b4d6f5e64a7f
+config:          sha256:7e5dd8683fda03e3e51a0b5217ae71ab82052173f3659db60fd689ea833ed6eb
+runtime:         PYPTO_H4_RESIDENT=all
+```
+
+| 槽位 | Pin | 备注 |
+|------|-----|------|
+| pypto | `655c7bda7b0a0b495a3387b2570ea68c4a857a40` | local-owner reset ABI exact profile；parent `14de90fd` |
+| pypto-lib / vllm-pypto | `a745ab659c68afca01de37870e29ccb9648d7c87` | routed GMM latch participant reduction；parent `e6c7d8ec` |
+| pto-isa | `cd4a3d3f7a1a27fcfe536f617e9bca3008929664` | unchanged |
+| PTOAS | `307d0484a9e7d5e36f01b253d2bebe4d2f45fe81` | unchanged |
+| simpler | `85a82c454074c069315ed6485033c3c2b136e562` | unchanged |
+| ptoas-bin | `v0.57` | unchanged |
+| vLLM patch | `1b3e538c35999e62b6d24e0651b3a85b7d16c826` | unchanged |
+
+验证：matched immutable H4=`all` A/B/A p50 `21.617/20.516/21.257 ms`，
+gain `0.921 ms` > required `0.616 ms`；5-case extended correctness
+admission v2 checks 16/16 PASS，设备/任务清理 PASS。尚未采集 a745 provenance
+匹配的 `recv_meta`/route-identity publication sidecar，因此不得写成 IMG release
+admission；旧 r12 count-only sidecar 不可复用。
+
 ### 当前 r12 whole-step host/graph/submit release admission（2026-08-27）
 
 > **0162 immutable-image release admission：PASS。**

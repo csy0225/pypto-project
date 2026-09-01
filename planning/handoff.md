@@ -1,6 +1,6 @@
 # 接力上下文（Handoff）
 
-> **T6 = 纯指针 + “现在接什么”。最后更新：2026-08-30。预算 ≤90 行。**
+> **T6 = 纯指针 + “现在接什么”。最后更新：2026-09-01。预算 ≤90 行。**
 >
 > 当前真相 → [`../STATUS.md`](../STATUS.md)　落地台账 →
 > [`../progress/landed.md`](../progress/landed.md)　未决 →
@@ -33,6 +33,13 @@ sha256 511a545956aee4cef7264a74460bd04862846e377ef71eb01619ae4ddbf87f3a
 `1844/1844 PASS`：registry/fresh pull、五仓 pin、baked runtime、Main H4
 `all/none`、MTP BS1/BS16、dep-only DFX、显式设备与 non-privileged 安全合同均闭环。
 
+2026-09-01 canonical SRC 已前进到 `pypto@655c7bda` +
+`pypto-lib@a745ab659`（两次 exact-lease push 后 `ls-remote` exact）。
+local-owner reset 回退修复的 matched candidate H4=`all` A/B/A 为
+`21.617/20.516/21.257 ms`，5-case extended admission v2 PASS。
+candidate image 尚未完成 a745 `recv_meta` publication，当前 release IMG
+仍是 r12，不能把 candidate digest 写成 release-admitted。
+
 whole-step 收益证据是 **r11 immutable 基座上的 source-overlay A/B/A**：
 ITL `21.6805 → 21.1150 ms`（`−2.608%`）、graph build `−44.429%`、
 graph→first-runner `−47.936%`、submit envelope `−23.887%`。正式合同仍为
@@ -45,30 +52,30 @@ H4 deployment contract 已于 2026-08-29 收口：三个 canonical launcher 默�
 `7.372 ms / 24.591%`，exact launcher 64K/1000 p50 `20.973 ms`。证据见
 [`2026-08-29-h4-resident-deployment-contract.md`](../benchmark/2026-08-29-h4-resident-deployment-contract.md)。
 
-routed GMM J3 已在 feature branch `a745ab6` 完成 source-overlay GO：H4 A/B/A 收益
-`0.931 ms / 4.4117%`，hidden/token exact，whole compile 与五层结构 DFX/L3/L4 exact
-PASS。canonical pypto-lib 仍是 `e6c7d8ec`，完整 publication 缺 exact `recv_meta`
-sidecar，r12 不含该候选，也没有新 image。
+当前 canonical `655+a745` 的 matched candidate H4=`all` A/B/A 为
+`21.617/20.516/21.257 ms`，5-case extended admission v2 PASS；candidate image
+尚未完成 a745 provenance 匹配的 `recv_meta` publication，当前 release IMG 仍为 r12。
 
 ## 现在接什么（按优先级，只有三条）
 
-### 1. 继续 Phase 28 live serving
+### 1. 为 `655+a745` 重建 successor IMG 并完成 route publication
+
+先采集与 a745 provenance 绑定的 `recv_meta` + per-route identity sidecar，
+再重跑 publication DFX 与完整 release contract；旧 r12 count-only sidecar 不可复用。
+
+### 2. 继续 Phase 28 live serving
 
 继续 live prefill → paged-KV/dynamic batch → 消除 3-way HBM → live token-exact A/B。
 
-### 2. 收口 upstream notify fence
+### 3. 收口 upstream notify fence
 
 任何拉近 remote payload store 与 credit notify 的改动，必须先补
 `UPSTREAM-NOTIFY-FENCE` 的 pre-CMO `PIPE_ALL`。
 
-### 3. 推进 routed GMM J3 canonical / IMG 准入
-
-review 并 exact-lease 合入 `a745ab6`，补 exact `recv_meta` route sidecar 后重跑
-publication DFX；再构建 r12 successor image，完成 digest-only immutable gate。
-
 ## 操作约束
 
 - 性能数字必须绑定 manifest/config、完整命令、effective env 与 overlay 身份。
-- r12 只声明 dep-only DFX，不声明 whole-swimlane；`a745ab6` 只声明 CAND source-overlay GO。
+- r12 只声明 dep-only DFX，不声明 whole-swimlane；`655+a745` candidate
+  correctness PASS 也不等于 IMG release admission。
 - 每次占卡前重新查锁、`nerdctl ps`、`sudo -n fuser` 和 NPU process。
 - 禁止 NPU reset、破坏性 kill、source/runtime overlay 冒充 image gate。

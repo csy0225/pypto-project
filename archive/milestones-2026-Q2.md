@@ -1,5 +1,36 @@
 # Milestones —— 2026 Q2
 
+## 2026-09-01 —— local-owner reset 回退修复 + a745 matched candidate 验证 ✅
+
+**源码落地**：pypto `655c7bda`（parent `14de90fd`）修复
+`distributed_runner.py` 对 local-owner 4-control/4-data persistent layout
+误回退 full-window clear 的问题；pypto-lib `a745ab659`（parent `e6c7d8ec`）
+保留最新 routed GMM latch participant 优化。两仓均用
+`--force-with-lease` 推到 fork `stepfun/develop`，随后 `ls-remote` exact
+复核为 `655c7bda` / `a745ab659`。
+
+**matched immutable candidate**：image manifest
+`sha256:19f51d373c5f9d6171ccf3306f260066e873eda48efca23f5d77b4d6f5e64a7f`、
+config `sha256:7e5dd8683fda03e3e51a0b5217ae71ab82052173f3659db60fd689ea833ed6eb`；
+H4=`all`、64K、8 卡、warmup10/iters100 的 A/B/A p50
+`21.617/20.516/21.257 ms`，gain `0.921 ms`，required `0.616 ms`，
+H4 PASS。三臂 hidden SHA 均
+`ee8ae6b4b3083112d397e5e91cc63fb0e2edfb705eb7a535aceb232f1a7db96a`，
+tail token `43640` exact；B `memset_all` p50 `462.277 us`。
+
+**extended correctness**：0162 五 case（Main H4 all/none、MTP BS1/BS16、
+dep-only DFX）全部 PASS；admission schema
+`step3p5.r14b-extended-immutable-admission.v2`，16/16 admission checks
+为 true；run contract/evidence/device cleanup 复核通过。正式 execute
+runner SHA `94a3cda8…a1b36`，run：
+`.../k8-a745-matched-validation-20260901/runs/extended-candidate-gate-r14b-20260901-235716-2942152-952530890/`。
+
+**边界**：该 candidate gate 未包含 a745 provenance 匹配的
+`recv_meta` route publication sidecar；旧 r12 sidecar schema/provenance
+不匹配，故当前 release IMG 仍为 r12，不能把 manifest `19f51d37…`
+写成 release-admitted。最终报告：
+[`../benchmark/2026-09-01-k8-local-owner-reset-regression.md`](../benchmark/2026-09-01-k8-local-owner-reset-regression.md)。
+
 ## 2026-08-27 —— whole-step host/graph/submit r12 发布与源码同步 ✅
 
 **镜像 / SRC**：r12 tag `stepfun-upgrade-20260826-r12`，manifest
