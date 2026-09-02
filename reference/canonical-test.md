@@ -16,12 +16,14 @@ KV      = resident per-layer KV + runtime metadata
 历史 unroll Main、rollback selector、自定义 Main module/name 参数、
 `models/step3p5_opt` 和 compatibility alias 均不得恢复。
 
-当前源码 tip：
+当前 canonical SRC tip：
 
 ```text
-pypto-lib e6c7d8ec34a05c3051ccf0dd169639f40f041a57
-pypto     14de90fd74b3c0716f94b9d4eafdd004d4eaed73
+pypto-lib a745ab659c68afca01de37870e29ccb9648d7c87
+pypto     655c7bda7b0a0b495a3387b2570ea68c4a857a40
 ```
+
+当前 release-admitted r12 仍 bake `e6c7d8ec/14de90fd`；SRC tip 与 release IMG 必须分开。
 
 当前 release-admitted immutable image：
 
@@ -144,20 +146,22 @@ timing-only dispatch；没有最终 chip/swimlane records 就不能宣称 whole-
 
 r12 的 whole-step 性能数字来自 r11 immutable digest 上两文件 source-overlay A/B/A，
 不是 r12 immutable-image 性能复测；正式合同仍为 serial 8-rank independent submit。
+当前 r15 local candidate 的 reset matched A/B/A 为 `21.617/20.516/21.257 ms`，
+正式收益 `0.921 ms / 4.296%`；历史 `20.973/20.172 ms` 与其合同不同，不能横比。
 
-## 6. 2026-08-27 当前准出状态
+## 6. 2026-09-02 当前准出状态
 
 ```text
-current source 14de90fd / e6c7d8ec = REMOTE stepfun/develop EXACT
-r12 immutable image                 = RELEASE-ADMITTED, 1844/1844 PASS
-r11 immutable image                 = DIRECT ROLLBACK, 20/20 PASS
-r12 performance                     = NO MATCHED IMMUTABLE A/B/A
-r12 DFX                             = DEP-ONLY PASS, NOT WHOLE-SWIMLANE
-Wave5                               = HISTORICAL FULL PRODUCTION-MATRIX EVIDENCE
-R1                                  = REVOKED
-R2                                  = NEVER PUBLISHED / SUPERSEDED
+canonical source 655c7bda / a745ab659 = REMOTE stepfun/develop EXACT
+r15 local candidate                    = AUDIT/H4/EXTENDED PASS, NOT PUBLISHED
+r15 performance                        = RESET FIX PASS, HISTORICAL BEST NOT PROVEN
+r12 immutable image                    = RELEASE-ADMITTED, 1844/1844 PASS
+r11 immutable image                    = DIRECT ROLLBACK, 20/20 PASS
+r12 DFX                                = DEP-ONLY PASS, NOT WHOLE-SWIMLANE
+Wave5                                  = HISTORICAL FULL PRODUCTION-MATRIX EVIDENCE
 ```
 
 当前 digest、ITL、swimlane 路径和剩余 full-matrix gate 见
-[`../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md)
+[`../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md)、
+[`../benchmark/2026-09-02-k8-historical-performance-reconciliation.md`](../benchmark/2026-09-02-k8-historical-performance-reconciliation.md)
 与 [`../planning/handoff.md`](../planning/handoff.md)。

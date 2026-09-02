@@ -4,7 +4,7 @@
 > [`archive/milestones-2026-Q2.md`](archive/milestones-2026-Q2.md)，长证据去
 > [`benchmark/`](benchmark/)，未决去 [`blockers.md`](blockers.md)。
 >
-> **最后更新：2026-09-01。预算 ≤130 行。**
+> **最后更新：2026-09-02。预算 ≤130 行。**
 
 ## 0. Agent 判定当前状态的强制顺序
 
@@ -12,9 +12,9 @@
    `refs/heads/stepfun/develop`；不得用本地 branch/worktree 名推断当前 tip。
 2. 区分源码 tip（SRC）、镜像内容（IMG）和部署运行合同；三者不能互相代替。
 3. 镜像只认 manifest/config digest、fresh pull 与 immutable gate。
-4. 性能数字必须绑定完整环境。2026-08-29 H4 deployment 门绑定 r12 digest；
-   2026-09-01 matched candidate 绑定下方 candidate digest。正式 launcher 默认注入
-   `PYPTO_H4_RESIDENT=all`；r12 Config Env 与代码默认仍未 bake，三层不能互代。
+4. 性能数字必须绑定完整环境。r12 `20.973 ms`（1000 iter）与 candidate
+   `20.516 ms`（100 iter）不是严格同合同；正式只认各自 matched 门。H4=`all` 由
+   launcher/OCI 注入，r12/r15 Config Env 与代码默认均未 bake。
 
 ## 1. 当前 SRC（五仓远端 `stepfun/develop`）
 | 仓库 / 组件 | 当前值 |
@@ -32,15 +32,17 @@
 parent 分别为 `14de90fd`、`e6c7d8ec`。
 ## 2. 最新 candidate IMG（尚未 release-admitted）
 ```text
-manifest: sha256:19f51d373c5f9d6171ccf3306f260066e873eda48efca23f5d77b4d6f5e64a7f
-config:   sha256:7e5dd8683fda03e3e51a0b5217ae71ab82052173f3659db60fd689ea833ed6eb
-pins:     pypto 655c7bda / pypto-lib a745ab659
+tag(local): stepfun-upgrade-20260902-a745-k8-r15
+manifest:   sha256:19f51d373c5f9d6171ccf3306f260066e873eda48efca23f5d77b4d6f5e64a7f
+config:     sha256:7e5dd8683fda03e3e51a0b5217ae71ab82052173f3659db60fd689ea833ed6eb
+pins:       pypto 655c7bda / pypto-lib a745ab659
 ```
 
-matched immutable H4=`all` A/B/A 为 `21.617 / 20.516 / 21.257 ms`
-（A=`14de+a745`，B=`655+a745`）；H4 PASS（gain `0.921 ms` >
-required `0.616 ms`）；5-case extended admission v2 checks 16/16 PASS。尚不含
-a745 `recv_meta` route publication，不能称 release IMG。
+r14b/r15 本地 tag 指向同一 manifest/config；local build/audit PASS，但 registry tag
+仍不存在且缺 push credential。matched immutable H4=`all` A/B/A 为
+`21.617/20.516/21.257 ms`，reset 修复 gain `0.921 ms / 4.296%` > `0.616 ms`；
+5-case extended admission v2 PASS。`20.516` 未刷新历史 source-overlay `20.172 ms`，
+相对 r12 `20.973 ms` 的 `−0.457 ms` 仅方向性。route v2/v1 合同未闭合，不能称 release IMG。
 ## 3. 当前 release-admitted IMG
 ```text
 tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260826-r12
@@ -83,15 +85,14 @@ r11 manifest `401ead7d…a67b12` 保留为直接回退镜像，r10 为更早回�
   graph→chip done `−1.7624 ms / −8.443%`。
 - `bind.args` 仅 `0.054449 → 0.054669 ms`（`+0.000220 ms`，候选 ITL 的
   `0.259%`，`no_clear_change`），不再投入优化。各 span 有重叠，不得相加。
-- 2026-08-29 H4 deployment 收口：r12 **source-default-all** matched
-  `none/default/none` p50 `30.516/22.606/29.440 ms`，default=`all` 相对 midpoint
-  收益 `7.372 ms / 24.591%`，
-  三臂 hidden SHA `ee8ae6…db96a`、token `43640` exact；exact launcher 在父 env
-  unset 下 64K/1000 p50 `20.973 ms`、RC=0。`none` 保留为回退。
-- 旧 r13 `655+e6c7d8ec` 的 `21.562 ms` 是未匹配的旧栈；本轮不要拿它
-  代表最新 `655+a745ab659`。local-owner reset 修复将 control prefix
-  固定为 `46,080 B`，相对 full window `11,842,560 B`，B 臂
-  `memset_all` p50 为 `462.277 us`。
+- H4 deployment：r12 source-default-all A/B/A `30.516/22.606/29.440 ms`，
+  exact launcher 64K/1000 p50 `20.973 ms`；H4=`all` 由 launcher 注入，`none` 可回退。
+- K8 reset：固定 a745 的 immutable A/B/A `21.617/20.516/21.257 ms`，正式收益
+  `0.921 ms / 4.296%`；control prefix `46,080 B`，B `memset_all=462.277 us`。
+- 历史 a745 source-overlay 候选为 `20.172 ms`；当前 `20.516 ms` 不是历史新低。
+  与 r12 `20.973 ms` 的差值小于 `0.616 ms` floor 且合同不同，不作显著提升声明。
+  详见 [`benchmark/2026-09-02-k8-historical-performance-reconciliation.md`](benchmark/2026-09-02-k8-historical-performance-reconciliation.md)。
+- 旧 r13 `655+e6c7d8ec=21.562 ms` 是未匹配旧栈，不能代表当前组合。
 
 ## 6. 当前功能边界
 
@@ -104,24 +105,23 @@ r11 manifest `401ead7d…a67b12` 保留为直接回退镜像，r10 为更早回�
 
 ## 7. 当前下一步
 
-1. 以 canonical `655+a745` 重建 successor image，重新采集 a745
-   `recv_meta` route publication，并完成完整 release contract。
-2. 继续 Phase 28 live serving、paged-KV/dynamic batch 与 3-way HBM 收口。
-3. 收口 `UPSTREAM-NOTIFY-FENCE`；任何拉近 payload store 与 credit 的 AR 改动，在 fence
-   落地前继续禁止。
+1. 为已构建 r15 注入临时 registry write credential，完成 push/raw manifest/config/fresh pull。
+2. 闭合 a745 `local-routes.v2` exporter 与 `recv-meta.v1` validator，并跑完整 route/release gate。
+3. 补 r15 64K/1000 及 old/new immutable 同合同门；通过前不声明历史性能新高。
+4. 继续 Phase 28 live serving，并收口 `UPSTREAM-NOTIFY-FENCE`。
 
 ## 8. 机器状态口径
 
 0162：driver `25.5.2` / firmware `7.8.0.7.220` / CANN `9.0.0-beta.1`。
-2026-09-01 extended gate 后复核为 16/16 NPU process-free；container/task/runc/shim
-全空。每次作业前仍须重新用 `sudo -n fuser` + `npu-smi info -t proc-mem` 双查；
+2026-09-02 文档/发布审计未启动新 workload；复核 16/16 NPU process-free，container/task/runc/shim 全空。每次作业前仍须重新用 `sudo -n fuser` + `npu-smi info -t proc-mem` 双查；
 containerd/BuildKit 与驱动内核线程不是占卡 workload。
 
 ## 9. Blocker 摘要
 
 | Blocker | 当前缺口 | 严重度 / gate |
 |---|---|---|
-| A745-ROUTE-PUBLICATION | candidate `655+a745` 尚无匹配 `recv_meta` sidecar；旧 r12 sidecar schema/provenance 不可复用 | 🔴 IMG 准入 |
+| R15-PUBLICATION | registry 缺 push credential；route exporter=`local-routes.v2`、validator=`recv-meta.v1`；旧 r12 sidecar 不可复用 | 🔴 IMG 准入 |
+| K8-HISTORICAL-PERF | matched 回退修复 PASS；`20.516 ms` 尚未刷新/复现历史 `20.172 ms` | 🟡 性能声明 |
 | UPSTREAM-NOTIFY-FENCE | notify 的 invalidate 在 payload drain 前，缺 pre-CMO `PIPE_ALL` | 🔴 AR correctness |
 | N1-S-0234 | 0234 同步后 whole-net stall，尚未独立复核 | 🔴 0234 可用性 |
 | Phase 28 live | live prefill + paged-KV + 3-way HBM 未闭环 | 🔴 live serving |

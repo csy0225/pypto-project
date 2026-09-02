@@ -9,7 +9,51 @@
 六段复盘（模板 [`postmortems/TEMPLATE.md`](postmortems/TEMPLATE.md)）+ 更新
 [`STATUS.md`](STATUS.md) §8 摘要。**已解 / 已定案的东西不留在本文件** —— 包括"负结论"。
 
-**最后检视：2026-08-29。**
+**最后检视：2026-09-02。**
+
+---
+
+## 🔴 ACTIVE — REGISTRY-PUBLISH-AUTH：r15 仅在 0162 本地，Harbor 无 push 权限
+
+**症状**：本地 tag `stepfun-upgrade-20260902-a745-k8-r15` 已存在且 audit PASS，
+manifest/config 为 `19f51d37…64a7f` / `7e5dd868…d6eb`；registry pre-push 查询为
+not found，匿名 `nerdctl push` 返回 `401 unauthorized`。
+
+**根因**：0162 没有带 push scope 的临时 `DOCKER_CONFIG/config.json`；匿名 bearer 只有 pull。
+
+**解除条件**：在 0162 secret-session 注入临时 write credential → push → raw tag/digest
+manifest/config exact → fresh namespace pull + digest-only audit。凭证不得写入仓库或证据包。
+
+---
+
+## 🔴 ACTIVE — A745-ROUTE-PUBLICATION：exporter v2 与 release validator v1 不一致
+
+**症状**：a745 harness 输出 `step3p5.five-layer-moe-local-routes.v2`，字段为
+`owner_route_counts/local_expert_count/snapshot_provenance`；project release gate 要求
+`step3p5.five-layer-moe-recv-meta.v1` 与 per-route identity。project gate 单测 `34 passed`，
+但当前真实 exporter 产物无法被该合同准入。
+
+**根因**：源码 exporter 与发布 validator 分别演进，缺少 provenance-matched authority adapter；
+旧 r12 count-only sidecar 的 schema/source identity 均不匹配。
+
+**解除条件**：以真实设备导出闭合 v2→v1 policy/adapter，不从 counts 伪造 route identity；
+跑 BS `1/2/4/7/8/16` route campaign、DFX compatibility 与完整 release contract。
+详情见 [`benchmark/2026-09-01-k8-local-owner-reset-regression.md`](benchmark/2026-09-01-k8-local-owner-reset-regression.md)。
+
+---
+
+## 🟡 ACTIVE — K8-HISTORICAL-PERF-GUARD：回退修复已过门，历史新高未证明
+
+**症状**：当前 matched reset A/B/A 为 `21.617/20.516/21.257 ms`，正式收益
+`0.921 ms / 4.296%`；但历史 r12 exact launcher 为 `20.973 ms`，a745 source-overlay
+候选曾为 `20.172 ms`。当前 `20.516 ms` 不是历史新低。
+
+**根因**：三组在 iterations、image/runner、overlay、安全模型与 effective env 上不完全一致；
+跨历史 `20.973→20.516` 的 `0.457 ms` 小于 `0.616 ms` floor。
+
+**解除条件**：r15 64K/1000 保存原始 samples；old/new immutable digest 使用同一 runner、
+安全模型、env、arm order 做 matched comparison。完成前只声明“回退修复 PASS”，不声明历史提升。
+详情见 [`benchmark/2026-09-02-k8-historical-performance-reconciliation.md`](benchmark/2026-09-02-k8-historical-performance-reconciliation.md)。
 
 ---
 

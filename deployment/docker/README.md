@@ -1,14 +1,35 @@
 # vllm-pypto 可复现镜像 — 构建 / 部署 / 验证
 
 基于 immutable repository pins 构建自包含的 vLLM + PyPTO 集成镜像。当前权威
-build/test/publish 主机是 0162（containerd/nerdctl + BuildKit）；devbox 负责
-GitHub ref 同步与 registry raw-manifest 复核，不作为当前权威构建机。
+build/test/publish 与 registry raw-manifest/fresh-pull 验证主机均为 0162
+（containerd/nerdctl + BuildKit）；当前流程不在 devbox 执行。
 
 ---
 
-## 0. 当前镜像状态（2026-08-27）
+## 0. 当前镜像状态（2026-09-02）
 
-### 0.1 当前 release-admitted 基线：r12 whole-step host/graph/submit
+### 0.1 当前 local candidate：r15 K8 reset + a745（尚未 release-admitted）
+
+```text
+tag(local): hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260902-a745-k8-r15
+manifest:   sha256:19f51d373c5f9d6171ccf3306f260066e873eda48efca23f5d77b4d6f5e64a7f
+config:     sha256:7e5dd8683fda03e3e51a0b5217ae71ab82052173f3659db60fd689ea833ed6eb
+pins:       pypto 655c7bda / pypto-lib a745ab659
+runtime:    PYPTO_H4_RESIDENT=all (OCI injection; not image Env)
+```
+
+r15 与已测 r14b manifest/config 完全相同，0162 local build/audit、matched H4 A/B/A
+与 5-case extended gate PASS；无 source/runtime/core overlay。registry tag 尚不存在，
+push 缺临时 write credential；route exporter `local-routes.v2` 与 release validator
+`recv-meta.v1` 未闭合，因此不能写成 published 或 release-admitted。
+
+matched reset A/B/A 为 `21.617/20.516/21.257 ms`，正式收益
+`0.921 ms / 4.296%`。`20.516 ms` 未刷新历史 a745 source-overlay `20.172 ms`；
+相对 r12 exact-launcher `20.973 ms` 的 `−0.457 ms` 低于 floor 且合同不同，只作
+方向性 sanity check。完整对账：
+[`../../benchmark/2026-09-02-k8-historical-performance-reconciliation.md`](../../benchmark/2026-09-02-k8-historical-performance-reconciliation.md)。
+
+### 0.2 当前 release-admitted 基线：r12 whole-step host/graph/submit
 
 ```text
 tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260826-r12
@@ -55,7 +76,8 @@ vLLM       1b3e538c35999e62b6d24e0651b3a85b7d16c826
 - 2026-08-29 deployment launcher 默认 H4=`all`：r12 **source-default-all** matched
   `none/default/none`
   p50 `30.516/22.606/29.440 ms`，收益 `7.372 ms / 24.591%`；父 env unset 的
-  exact launcher 64K/1000 p50 `20.973 ms`、RC=0。完整记录见
+  exact launcher 64K/1000 p50 `20.973 ms`、RC=0。该值是 privileged 单臂长门，
+  不是当前 100-iter non-privileged A/B/A 的回归基线。完整记录见
   [`../../benchmark/2026-08-29-h4-resident-deployment-contract.md`](../../benchmark/2026-08-29-h4-resident-deployment-contract.md)。
 
 r12 的性能收益证据来自 r11 immutable digest 上的 source/runtime-overlay A/B/A，
@@ -67,7 +89,7 @@ graph→first runner `−47.936%`、rank submit envelope `−23.887%`。
 （`group_size=1`），不是 native group-submit；各 span 重叠，不得相加。完整记录：
 [`../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md)。
 
-### 0.2 前一版 release-admitted 基线：r11 local-owner MoE
+### 0.3 前一版 release-admitted 基线：r11 local-owner MoE
 
 ```text
 tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260826-r11
@@ -85,7 +107,7 @@ immutable r10/r11/r10 A/B/A 的 r11 p50 相对 baseline midpoint 仅
 SHA256 `570bb04e…740af7`。完整记录：
 [`../../benchmark/2026-08-26-local-owner-moe-r11-release.md`](../../benchmark/2026-08-26-local-owner-moe-r11-release.md)。
 
-### 0.3 历史 release-admitted 基线：r10 packed-NZ MoE fusion
+### 0.4 历史 release-admitted 基线：r10 packed-NZ MoE fusion
 
 ```text
 tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260825-r10
@@ -101,7 +123,7 @@ A/B/A 为 `−0.731 ms / −3.241%`。六档单次 latency 中 BS8/BS16 回退�
 不得宣称多 BS 性能全面提升。完整记录：
 [`../../benchmark/2026-08-25-moe-fusion-image-release.md`](../../benchmark/2026-08-25-moe-fusion-image-release.md)。
 
-### 0.4 历史 release-admitted 基线：upgrade r9
+### 0.5 历史 release-admitted 基线：upgrade r9
 
 ```text
 tag:      hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260824-r9
@@ -116,7 +138,7 @@ r9 的 registry、precision、Main/MTP liveness、L3/L4 exact、
 完整证据：
 [`../../benchmark/2026-08-24-upgrade-r9-release.md`](../../benchmark/2026-08-24-upgrade-r9-release.md)。
 
-### 0.5 历史 K8 partial-gate image（2026-08-11）
+### 0.6 历史 K8 partial-gate image（2026-08-11）
 
 该历史源码 tip 为 pypto `1c048a744d5f63a8bce1ddb45dac8d1b7f458bb0`、pypto-lib
 `cb96747eb21f5f4932d6a24eddaa69c85d095ef6`（= `8e92b468` / `491267c4` 之后叠了 K8
@@ -524,6 +546,7 @@ deployment/docker/
 
 | IMAGE_TAG | 日期 | pypto / pypto-lib / pto-isa / PTOAS / simpler / ptoas-bin | 验证(0162) |
 |-----------|------|----------------------------------------------------------|-------------|
+| `stepfun-upgrade-20260902-a745-k8-r15` | 2026-09-02 | `655c7bda` / `a745ab659` / `cd4a3d3f` / `307d0484` / `85a82c45` / `v0.57` | **local-only candidate，未发布**。manifest `sha256:19f51d37…64a7f`、config `sha256:7e5dd868…d6eb`；0162 immutable audit、matched reset A/B/A、5-case extended gate PASS，无 overlay。registry push/fresh pull、route v2/v1 publication、64K/1000 historical guard 与 final contract 未完成；`20.516 ms` 不是历史新低 |
 | `stepfun-upgrade-20260826-r12` | 2026-08-27 | `14de90fd` / `e6c7d8ec` / `cd4a3d3f` / `307d0484` / `85a82c45` / `v0.57` | **当前 release-admitted**。manifest `sha256:ba42fd19…e6eb805d`，config `sha256:b36f0cec…3d73a5233f08f`；prepared TaskArgs signature/cache + rank submit envelope 优化已 bake。Registry/fresh pull、baked-runtime identity、Main H4 all/none `126/128`、MTP BS1/BS16、dep-only DFX、五仓远端 exact 均 PASS；final contract `1844/1844`，SHA `511a5459…87f3a`。性能收益来自 r11 digest source-overlay A/B/A，不是 r12 immutable timing；正式仍是 serial 8-rank independent submit；2026-08-29 canonical launcher 默认 H4=`all`，`none` 可回退 |
 | `stepfun-upgrade-20260826-r11` | 2026-08-26 | `519b588a` / `e6c7d8ec` / `cd4a3d3f` / `307d0484` / `85a82c45` / `v0.57` | **前一版 release-admitted / r12 直接回退**。manifest `sha256:401ead7d…a67b12`，config `sha256:35c42510…06876`；replicated-input local-owner MoE。H4 all/none `126/128` 且 parity PASS，64K/1000 p50 `21.477 ms`；r10/r11/r10 A/B/A 性能中性；final contract `20/20`，SHA `570bb04e…740af7` |
 | `stepfun-develop-20260723` | 2026-07-23 | `8af501fc` / `4c48215b` / `ecb6c303` / `72ada0a1` / `36957c6b` / `v0.45` | 冒烟 PASS + 整网 decode `6127→303` / step2→`6127`(与 vanilla 逐 token 一致)✅ |

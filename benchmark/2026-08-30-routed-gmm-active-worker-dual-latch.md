@@ -1,5 +1,11 @@
 # Routed GMM active-worker dual-latch 验证（2026-08-30）
 
+> **2026-09-02 后续边界**：`a745ab659` 已进入 canonical `stepfun/develop`，
+> 但本文 `20.172 ms` 是 r12 source-overlay B 臂，不是当前 immutable image 的
+> 原合同复测。当前 `655+a745` 的 `20.516 ms` 属另一份 reset-ABI matched A/B/A，
+> 两者不可直接写成前后回归。见
+> [`2026-09-02-k8-historical-performance-reconciliation.md`](2026-09-02-k8-historical-performance-reconciliation.md)。
+
 ## 1. 结论与证据等级
 
 以 r12 immutable image 为固定 substrate、仅 overlay candidate source，routed packed-NZ
@@ -203,8 +209,8 @@ fatal-marker scanner 原先用裸 `507018` regex，曾误命中时间戳
 
 ## 7. 下一门
 
-1. review 并将 `a745ab6` 以 exact lease 合入 pypto-lib `stepfun/develop`，复核远端 SHA；
-2. 生成 exact `recv_meta` sidecar，闭合 route histogram 与 publication readiness；
-3. 基于新 canonical SRC 构建 r12 successor image，执行 digest-only immutable
-   Main/MTP/precision/DFX/release gate；
-4. 只有第 3 步通过后，才更新 `deployment/version-matrix.md` 与 IMG 台账。
+1. **已完成**：`a745ab6` 已以 exact lease 合入 pypto-lib `stepfun/develop`，远端 SHA exact；
+2. **已完成部分**：successor local image 已构建并通过 digest-only audit/H4/extended gate；
+3. **仍 open**：生成 provenance-matched route identity/`recv_meta` publication，解决
+   `local-routes.v2` exporter 与 `recv-meta.v1` validator 的合同差异；
+4. **仍 open**：registry push/raw/fresh pull、历史性能同合同 long gate 与最终 release contract。

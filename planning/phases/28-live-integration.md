@@ -1,27 +1,27 @@
 # Phase 28 — 单程序整网 → vLLM live 集成
 
-> **状态：🟡 进行中。最后更新：2026-08-27。**
+> **状态：🟡 进行中。最后更新：2026-09-02。**
 > 本文只保留当前 live 集成工作面；历史 N1 bring-up 已归档到
 > [`../../archive/completed-phases/27-single-program-whole-net-fusion.md`](../../archive/completed-phases/27-single-program-whole-net-fusion.md)。
 
 ## 1. 当前对象
 
 ```text
-current pypto-lib  e6c7d8ec34a05c3051ccf0dd169639f40f041a57
-current pypto      14de90fd74b3c0716f94b9d4eafdd004d4eaed73
-current Main       models.step3p5.decode_fwd:whole_decode_step3p5
-vLLM overlay       1b3e538c35999e62b6d24e0651b3a85b7d16c826
-current image      stepfun-upgrade-20260826-r12
-manifest           sha256:ba42fd19b3af0144a835e95a4a6925ed89ea700624f696b221e93a54e6eb805d
-config             sha256:b36f0cec3a8b64e5e17e273c63d69694730bd8b904e69c2806c3d73a5233f08f
-performance env    PYPTO_H4_RESIDENT=all
+canonical pypto-lib  a745ab659c68afca01de37870e29ccb9648d7c87
+canonical pypto      655c7bda7b0a0b495a3387b2570ea68c4a857a40
+current Main         models.step3p5.decode_fwd:whole_decode_step3p5
+vLLM overlay         1b3e538c35999e62b6d24e0651b3a85b7d16c826
+release image        stepfun-upgrade-20260826-r12 (14de90fd/e6c7d8ec)
+release manifest     sha256:ba42fd19b3af0144a835e95a4a6925ed89ea700624f696b221e93a54e6eb805d
+r15 local candidate  sha256:19f51d373c5f9d6171ccf3306f260066e873eda48efca23f5d77b4d6f5e64a7f
+performance env      PYPTO_H4_RESIDENT=all (runtime injection)
 ```
 
-r12 已通过 registry/fresh digest、Main H4 all/none `126/128`、MTP
-BS1/BS16、dep-only DFX 与 non-privileged device contract，最终合同
-`1844/1844 PASS`。该结论仍是 standalone/sidecar admission，不等价于 live
-request 已接管。whole-step 性能只来自 r11 source-overlay A/B/A，必须与显式
-H4 env 一起引用，不能写成 r12 immutable 性能复测。
+r12 已通过 registry/fresh digest、Main H4 all/none `126/128`、MTP BS1/BS16、
+dep-only DFX 与最终合同 `1844/1844 PASS`。r15 local candidate 的 immutable audit、
+matched reset A/B/A 与 extended gate PASS，但 registry/route/final admission 未闭环。
+`20.516 ms` 只证明 reset 回退修复，不是历史性能新高。以上仍是 standalone/sidecar
+证据，不等价于 live request 已接管。
 
 ## 2. Goal
 
@@ -39,8 +39,8 @@ H4 env 一起引用，不能写成 r12 immutable 性能复测。
 - 默认 Main 已统一为 `whole_decode_step3p5`，旧 unroll/opt/rollback 入口已删除。
 - standalone Main、batch16、MTP focused gate 和 Wave5 immutable release gate 已完成。
 - Attention/Vec、TP all-reduce source publication/lifetime 已在 Wave5 对 0162 准出。
-- r12 immutable image 已完成 Main precision、MTP BS1/BS16、dep-only DFX、
-  registry/security admission；五仓 `stepfun/develop` 已同步。
+- r12 immutable image 已完成 Main precision、MTP BS1/BS16、dep-only DFX 与
+  registry/security admission；canonical SRC 已前进到 `655c7bda/a745ab659`，r15 local gate PASS。
 - sidecar/holder、权重 IPC、KV metadata schema 和 vLLM overlay 已有实现基础。
 
 这些证据只证明 standalone/sidecar 组件，不等价于真实 production request 已无条件平替。
@@ -89,9 +89,9 @@ MTP 输入必须来自本次 Main 的配对 hidden；禁止拿旧 N1 artifact �
 
 ## 6. 与 Attention 收口的关系
 
-r12 standalone admission 已完成，Phase 28 不再等待新的基础镜像。
-后续 live 工作必须使用该明确 digest，并单独处理 H4 deployment env、paged-KV、3-way HBM 与
-Main→MTP；不能把 standalone source-overlay ITL/dep-only DFX 当作 live serving 准出。当前
+r12 standalone admission 已完成，可继续作为 live integration 基线；r15 publication 是并行 release 工作面。
+后续 live 工作必须使用明确 digest，并单独处理 H4 env、paged-KV、3-way HBM 与 Main→MTP；
+不能把 r15 local gate、source-overlay ITL 或 dep-only DFX 当作 live serving 准出。当前
 standalone bs16×每请求64K 还会在约 16 GiB static-arena 分配时 OOM，这与 live
 重复权重问题是两个容量口径，不能混写。下一步见 [`../handoff.md`](../handoff.md)。
 

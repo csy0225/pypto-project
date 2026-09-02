@@ -5,18 +5,18 @@
 
 ## 已验证组合
 
-### 当前 canonical SRC / matched candidate（2026-09-01）
+### 当前 canonical SRC / matched candidate（2026-09-02）
 
 > **SRC 已落地，IMG 尚未 release-admitted。** `pypto@655c7bda` 修复
-> local-owner persistent reset ABI 回退，`pypto-lib@a745ab659` 为最新
-> routed GMM latch participant 优化；两者分别从 `14de90fd`、`e6c7d8ec`
-> exact-lease 前进到 `stepfun/develop`。candidate digest 仅用于验证，
-> 不替代下方 r12 release IMG。
+> local-owner persistent reset ABI 回退，`pypto-lib@a745ab659` 保留 routed GMM
+> latch participant 优化；两者分别从 `14de90fd`、`e6c7d8ec` exact-lease 前进到
+> `stepfun/develop`。r15 仅在 0162 本地构建，candidate digest 不替代下方 r12 release IMG。
 
 ```text
+candidate tag:  hub.i.basemind.com/stepcast/vllm-pypto:stepfun-upgrade-20260902-a745-k8-r15 (local-only)
 candidate image: hub.i.basemind.com/stepcast/vllm-pypto@sha256:19f51d373c5f9d6171ccf3306f260066e873eda48efca23f5d77b4d6f5e64a7f
 config:          sha256:7e5dd8683fda03e3e51a0b5217ae71ab82052173f3659db60fd689ea833ed6eb
-runtime:         PYPTO_H4_RESIDENT=all
+runtime:         PYPTO_H4_RESIDENT=all (OCI injection; not image Config Env)
 ```
 
 | 槽位 | Pin | 备注 |
@@ -29,11 +29,13 @@ runtime:         PYPTO_H4_RESIDENT=all
 | ptoas-bin | `v0.57` | unchanged |
 | vLLM patch | `1b3e538c35999e62b6d24e0651b3a85b7d16c826` | unchanged |
 
-验证：matched immutable H4=`all` A/B/A p50 `21.617/20.516/21.257 ms`，
-gain `0.921 ms` > required `0.616 ms`；5-case extended correctness
-admission v2 checks 16/16 PASS，设备/任务清理 PASS。尚未采集 a745 provenance
-匹配的 `recv_meta`/route-identity publication sidecar，因此不得写成 IMG release
-admission；旧 r12 count-only sidecar 不可复用。
+验证：`step3p5.k8-a745-matched-immutable-image-h4.v1` 的 matched immutable
+H4=`all` reset-ABI A/B/A p50 为 `21.617/20.516/21.257 ms`（固定 a745，
+`pypto 14de→655`），gain `0.921 ms / 4.296%` > required `0.616 ms`；5-case
+extended correctness admission v2、设备/任务清理 PASS。该 `20.516 ms` 不是
+r12 routed-GMM source-overlay `20.172 ms` 的复测，也不是 a745 单独收益；旧
+r12 count-only sidecar 不可复用。a745 provenance 匹配的 `recv_meta`/route-identity
+publication 尚未完成，registry push/fresh pull 也未完成，因此不得写成 IMG release。
 
 ### 当前 r12 whole-step host/graph/submit release admission（2026-08-27）
 
@@ -90,7 +92,9 @@ runtime:  PYPTO_H4_RESIDENT=all
 - H4 source-default-all matched `none/default/none` p50 `30.516/22.606/29.440 ms`，
   default=`all` 相对 midpoint 收益 `7.372 ms / 24.591%`，三臂 hidden/token exact；
 - 父 env unset 的 exact launcher 64K/1000 p50 `20.973 ms`、RC=0，context curve
-  `20.139/20.698/20.827/20.821 ms`，pre/postflight clean；
+  `20.139/20.698/20.827/20.821 ms`，pre/postflight clean；这是 r12 单臂 launcher
+  合同（privileged、1000 iter），不能与当前 100-iter non-privileged immutable
+  A/B/A 的 `20.516 ms` 或历史 source-overlay `20.172 ms` 直接作回归差值；
 - 产品 host loop 仍是 serial 8-rank，发出 8 个独立 chip submit
   （`group_size=1`），不是 native group-submit；commit 标题中的
   `parallelize rank submit` 不等于正式设备门已证明并行 fanout；

@@ -5,18 +5,15 @@
 > SSOT）；此刻状态在 [`../STATUS.md`](../STATUS.md)；接力上下文在
 > [`handoff.md`](handoff.md)。想讲进度给别人听 → 看本文。
 >
-> **2026-08-27 current-source/image override**：当前源码为 pypto
-> `14de90fd` / pypto-lib `e6c7d8ec` / pto-isa `cd4a3d3f` / PTOAS `307d0484` /
-> simpler `85a82c45`，五仓远端 `stepfun/develop` 已复核。r12 manifest
-> `sha256:ba42fd19…eb805d` 已 release-admitted：Main H4 all/none `126/128`、
-> MTP BS1/BS16 与 dep-only DFX PASS，最终合同 `1844/1844`。
-> whole-step 性能来自 r11 digest 上的两文件 source-overlay A/B/A：ITL
-> `−2.608%`、graph build `−44.429%`、graph→first runner `−47.936%`；
-> 正式合同仍是 serial 8-rank submit，不是 r12 immutable 性能重采或 group-submit。
-> `bind.args` 仅占 `0.259%`，不再优化。镜像未 bake H4 env，正式 deployment
-> 接线仍是当前最高优先。其它机器/架构与 Phase 28 live serving 仍需独立 gate。
-> 下方 B2/Phase 28 的历史状态保留为里程碑，当前准出以
-> [`../STATUS.md`](../STATUS.md) 与 [`../blockers.md`](../blockers.md) 为准。
+> **2026-09-02 current-source/image override**：当前 SRC 为 pypto `655c7bda` /
+> pypto-lib `a745ab659`，其余工具链 pin 不变。r15 已在 0162 本地构建为
+> manifest `sha256:19f51d37…64a7f`，local audit 与 matched reset gate PASS；registry
+> push/fresh pull、route v2/v1 publication 与 final contract 未完成，当前 release IMG 仍是
+> r12 `sha256:ba42fd19…eb805d`。`20.516 ms` 只证明同代回退修复
+> `0.921 ms / 4.296%`，未刷新历史 source-overlay `20.172 ms`；发布性能新高声明待
+> 同合同 64K/1000 immutable guard。H4=`all` 由 launcher/OCI 注入，image 未 bake。
+> 下方历史状态只作里程碑；当前准出以 [`../STATUS.md`](../STATUS.md) 与
+> [`../blockers.md`](../blockers.md) 为准。
 
 ## 1. 一眼看清
 
@@ -44,7 +41,7 @@ graph TD
 | Phase 23 | 零拷贝 KV-IPC 验证（IPC 主卡点解除） | ✅ 2026-07-03 | [`../archive/completed-phases/23-zero-copy-kv-ipc-validation.md`](../archive/completed-phases/23-zero-copy-kv-ipc-validation.md) |
 | **Phase 27** | **单程序整网融合**（历史代号 N1） | ✅ 2026-07-18 | 历史 P42 20/20；仅作演进证据 |
 | **B2 release** | **45 层 loop-form Main replacement** | ✅ 2026-07-26 | `stepfun/develop@563fe62a` canonical-only 默认 `whole_decode_step3p5`；0162 历史发布镜像内清理前后 N=256 token/hidden 均 `256/256` exact |
-| **Phase 28** | **整网 → vLLM live 集成** | 🟡 进行中 | r12 standalone admission 与五仓同步已完成；H4 deployment env、live front、paged KV、同代 MTP absolute gate、HBM 待完成 |
+| **Phase 28** | **整网 → vLLM live 集成** | 🟡 进行中 | r12 standalone admission 与 H4 deployment 已完成；r15 registry/route/perf guard、live front、paged KV、同代 MTP absolute gate、HBM 待完成 |
 
 > Phase 20/21/22/24/25/26 的设计/中间态已归档到
 > [`../archive/completed-phases/`](../archive/completed-phases/)（被 27/28 取代或吸收）。
@@ -55,12 +52,11 @@ graph TD
 
 - **当前形态**：单个 `@pl.program`，45 层 loop-form Main，TP=8/EP=8，
   native W8A8；0724 hidden-only unroll baseline 仅作显式 rollback。
-- **已达成**：当前源码已前进到 `pypto-lib@e6c7d8ec` / `pypto@14de90fd`，
-  正式路径仍为 `models.step3p5.decode_fwd:whole_decode_step3p5`；r12 immutable
-  Main H4 all/none、MTP BS1/BS16、dep-only DFX 与 non-privileged 设备合同 PASS。
-- **性能口径**：r11 source-overlay A/B/A 的 ITL p50 为
-  `21.6805→21.115 ms`；span 收益不可相加，不能冒充 r12 immutable 性能。
-  H4 性能数字仍必须绑定显式 deployment env。
+- **已达成**：当前源码为 `pypto-lib@a745ab659` / `pypto@655c7bda`；正式路径仍为
+  `models.step3p5.decode_fwd:whole_decode_step3p5`。r15 local immutable audit、matched
+  reset A/B/A 与 extended gate PASS；r12 仍是 release-admitted IMG。
+- **性能口径**：当前 matched reset gain 为 `0.921 ms / 4.296%`；`20.516 ms` 不是
+  历史新低，不能与 `20.973/20.172 ms` 跨合同横比。H4 必须绑定显式 runtime env。
 - **已收口**：C/D/G、H1、Attention/Vec I1、I2 TP all-reduce stability 与 BS1
   动态 batch correctness 已完成；**遗留**：B3 KV resident/in-place，以及 serving
   侧独立闭环。

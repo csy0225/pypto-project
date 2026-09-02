@@ -9,11 +9,12 @@
 > [`../../reference/canonical-test.md`](../../reference/canonical-test.md) 的 pin），
 > 重构后如漂移以符号名为准。
 >
-> **2026-08-27 current override**：当前为 pypto `14de90fd` /
-> pypto-lib `e6c7d8ec`，已烧入 r12。replicated-input local-owner MoE 与 prepared
-> TaskArgs descriptor/signature cache 已落地；正式产品 `decode_fwd.py` 的 host rank
-> loop 仍是 `pl.range`，生成代码仍为 serial 8-rank / 8 个独立 `_submit_chip`。
-> 下方大部分行号仍锚定 2026-07 历史生成链；全局状态以
+> **2026-09-02 current override**：当前 canonical SRC 为 pypto `655c7bda` /
+> pypto-lib `a745ab659`；release-admitted IMG 仍是 r12 `14de90fd/e6c7d8ec`。
+> r15 local candidate 已验证 local-owner reset profile 与 a745 组合，但未完成 registry/
+> route publication/final admission。replicated-input local-owner MoE、routed GMM latch
+> participant 与 prepared TaskArgs cache 已落地；正式 host rank loop 仍为 serial 8-rank / 8 个
+> 独立 `_submit_chip`。下方大部分行号仍锚定历史生成链；全局状态以
 > [`../../STATUS.md`](../../STATUS.md) 为准。
 
 ## 1. 单 `@pl.program` canonical 结构

@@ -1,15 +1,15 @@
 # Performance 性能优化专项
 
-> **2026-08-27 current override（优先于下方所有历史快照）**：r12 已发布，
-> manifest `sha256:ba42fd19…eb805d`、config `sha256:b36f0cec…33f08f`；
-> 当前 pypto `14de90fd` / pypto-lib `e6c7d8ec`。r11 digest 上两文件
-> source-overlay A/B/A：ITL `21.6805→21.115 ms`（`−2.608%`）、
-> graph build `−44.429%`、graph→first runner `−47.936%`、rank submit
-> envelope `−23.887%`；正式产品仍为 serial 8-rank independent submit。
-> r12 immutable Main/MTP/dep-only DFX 与 1844/1844 final contract PASS；
-> 没有重采 r12 immutable 性能 A/B/A。`bind.args` 仅占 `0.259%`，停止优化。
-> ⚠ 镜像未 bake H4 env，正式 launcher 必须显式注入。详见
-> [`../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md`](../../benchmark/2026-08-27-whole-step-host-graph-submit-r12-release.md)。
+> **2026-09-02 current override（优先于下方所有历史快照）**：当前 SRC 为
+> pypto `655c7bda` / pypto-lib `a745ab659`；当前 release-admitted IMG 仍为 r12
+> manifest `sha256:ba42fd19…eb805d`、config `sha256:b36f0cec…33f08f`。
+> r15 在 0162 本地构建并通过 immutable audit、matched reset A/B/A 与 extended gate，
+> 但 registry push/fresh pull、route publication 和 final release contract 尚未完成。
+> 当前 matched `14de+a745 / 655+a745 / 14de+a745` 为 `21.617/20.516/21.257 ms`，
+> 正式收益 `0.921 ms / 4.296%` 是 local-owner reset 回退修复；`20.516 ms` 未刷新历史
+> a745 source-overlay `20.172 ms`。r12 exact launcher `20.973 ms` 为 1000-iter 单臂，
+> 与当前 100-iter immutable ABA 不能直接横比。H4=`all` 由 launcher/OCI 注入，image 未 bake。
+> 详见 [`../../benchmark/2026-09-02-k8-historical-performance-reconciliation.md`](../../benchmark/2026-09-02-k8-historical-performance-reconciliation.md)。
 >
 > **历史：2026-08-11 K8 immutable image 已发布**：
 > `hub.i.basemind.com/stepcast/vllm-pypto:stepfun-develop-20260811-k8-selective`，

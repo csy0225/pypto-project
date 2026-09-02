@@ -4,7 +4,8 @@
 > **正式 IMG release admission 仍待 `recv_meta` publication gate。**
 > 本报告记录此前 local-owner 变更造成的 persistent-window reset 回退，
 > 以及在最新匹配栈上的修复验证。性能数字严格区分旧 `e6c7d8ec`
-> candidate 与新 `a745ab659` candidate。
+> candidate 与新 `a745ab659` candidate；历史绝对值对账见
+> [`2026-09-02-k8-historical-performance-reconciliation.md`](2026-09-02-k8-historical-performance-reconciliation.md)。
 
 ## 1. 结论先行
 
@@ -38,6 +39,19 @@ pypto-lib a745ab659c68afca01de37870e29ccb9648d7c87
 `B < A1`、`B < A2`，因此 H4 **PASS**。
 所以日志里出现的 `21 ms` 是 A1/A2 控制臂，不是最新 commit 的候选臂；
 最新 `655c7bda+a745ab659` 的实际候选 p50 是 **20.516 ms**。
+
+### 1.1 历史绝对值边界
+
+`20.516 ms` 只属于本轮固定 `pypto-lib@a745ab659`、比较
+`pypto@14de90fd → 655c7bda` 的 reset-ABI matched A/B/A。它不是历史
+routed-GMM `20.172 ms` 的原合同复测，也不是新的历史最优：
+
+| 历史点 | 形态 | iterations | 与当前关系 |
+|---|---|---:|---|
+| r12 exact launcher `20.973 ms` | `14de+e6c7` immutable，privileged | 1000 | 当前低 `0.457 ms`，但非同合同且低于 `0.616 ms` floor，只作方向性检查 |
+| routed-GMM B 臂 `20.172 ms` | `14de+a745` source overlay | 100 | 当前高 `0.344 ms`，不能声明刷新历史最优 |
+
+正式可声明的收益仍是本轮同代 A/B/A 的 `0.921 ms / 4.296%`。旧 a745 优化的 9 个文件已逐 SHA 复核未丢失；跨 campaign 的绝对值偏移不能拿来推算 `19 ms` 结果。
 
 证据目录：
 
@@ -120,8 +134,8 @@ git diff --check              PASS
 
 最新 `pypto-lib` commit `a745ab659` 的关键变化是减少 routed GMM latch
 参与者（`ROUTED_FUSED_GRID_WORKERS: 24 -> 22`），并同步 local-route
-soft-sync ABI；它是本次 H4 matched candidate 的实际 pypto-lib 栈，
-不是此前 `e6c7d8ec` 的旧栈。
+soft-sync ABI。本轮 A1/B/A2 都固定使用 a745，因此 `0.921 ms` 隔离的是
+`pypto@655c7bda` reset 修复，不是对 a745 收益的再次测量。
 
 ## 5. Extended correctness gate 边界
 
@@ -167,7 +181,8 @@ a745 要求的 provenance-matched route-identity publication contract 不匹配�
   `a745ab659c68afca01de37870e29ccb9648d7c87`。
 - 两次 push 均使用刚复核的
   `--force-with-lease`，push 后 `ls-remote` exact。
-- candidate image `sha256:19f51d373c5f9d6171ccf3306f260066e873eda48efca23f5d77b4d6f5e64a7f`
-  已做 fresh immutable audit/H4/extended correctness，但仍不是正式发布 IMG；
-  后续需以 canonical pins 重建 successor image，再补 route publication/
-  `recv_meta` sidecar 和完整 release contract。
+- candidate manifest `sha256:19f51d373c5f9d6171ccf3306f260066e873eda48efca23f5d77b4d6f5e64a7f`
+  已做 immutable audit/H4/extended correctness，但仍不是正式发布 IMG。
+- 2026-09-02 本地 r15 tag `stepfun-upgrade-20260902-a745-k8-r15` 与上述
+  manifest/config 完全相同；无需再次重建，下一步是 registry push/raw/fresh pull、
+  route publication/`recv_meta`、同合同 long gate 与完整 release contract。

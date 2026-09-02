@@ -1,5 +1,10 @@
 # H4 resident constants 部署合同收口（2026-08-29）
 
+> **2026-09-02 对比边界**：本文 `20.973 ms` 是 r12 exact launcher 的
+> 64K/1000 单臂长门；不得与 100-iteration 的 routed-GMM `20.172 ms` 或
+> K8 reset `20.516 ms` 直接作显著性比较。统一对账见
+> [`2026-09-02-k8-historical-performance-reconciliation.md`](2026-09-02-k8-historical-performance-reconciliation.md)。
+
 ## 1. 结论
 
 基于 0162 最新 whole-step 与 swimlane 证据，当前最高收益且可直接落地的项目不是继续

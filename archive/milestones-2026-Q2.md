@@ -1,5 +1,27 @@
 # Milestones —— 2026 Q2
 
+## 2026-09-02 —— r15 本地发布准备与历史性能口径纠正 ⏳
+
+**远端 / 镜像**：0162 fetch 后 canonical refs 仍为 pypto `655c7bda`、pypto-lib
+`a745ab659`、pypto-project `2af3734`。本地 tag
+`stepfun-upgrade-20260902-a745-k8-r15` 的 manifest/config 为
+`19f51d37…64a7f` / `7e5dd868…d6eb`，与已测 r14b 字节一致；immutable image audit PASS，
+无 source/runtime/core overlay。H4 由 OCI runtime 注入 `PYPTO_H4_RESIDENT=all`，image Env 未 bake。
+
+**性能口径纠正**：当前 `20.516 ms` 的正式含义仅是固定 a745 后，
+`14de→655` reset 修复 matched A/B/A `21.617/20.516/21.257 ms`，gain
+`0.921 ms / 4.296%`。历史 r12 exact launcher `20.973 ms` 为 1000-iter 单臂，
+历史 a745 `20.172 ms` 为 100-iter source-overlay B 臂；当前没有刷新历史最优，
+跨合同 `−0.457/+0.344 ms` 均不作显著性声明。
+
+**发布未闭环**：registry tag 仍不存在，匿名 push 返回 401，需临时 write credential；
+a745 exporter 为 `local-routes.v2`，project validator 要求 `recv-meta.v1`，旧 r12
+sidecar 不可复用。project publication gate unit 为 `34 passed`，但真实 route authority
+仍待闭合。本轮文档对账未启动新 NPU workload，16 卡与 container/task 保持为空。
+
+统一报告：
+[`../benchmark/2026-09-02-k8-historical-performance-reconciliation.md`](../benchmark/2026-09-02-k8-historical-performance-reconciliation.md)。
+
 ## 2026-09-01 —— local-owner reset 回退修复 + a745 matched candidate 验证 ✅
 
 **源码落地**：pypto `655c7bda`（parent `14de90fd`）修复

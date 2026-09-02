@@ -68,3 +68,12 @@ H4 每 rank 额外占用约 `99.64 MiB` device memory。resident RoPE 不允许�
   是否注入。三者没闭环时，只能写“image + env”的性能。
 - launcher 默认、image Config 与代码默认必须继续分层记录；本次只关闭 deployment
   contract，不把 r12 描述成 bake 了 H4。
+
+## 7. 2026-09-02 后续性能对账
+
+r12 exact launcher 的 `20.973 ms`（1000 iterations）、r12 source-overlay routed-GMM
+候选的 `20.172 ms`（100 iterations）与当前 `655+a745` immutable reset 修复的
+`20.516 ms`（100 iterations）不是同一完整合同。当前正式收益只写 matched
+`14de+a745 / 655+a745 / 14de+a745 = 21.617/20.516/21.257 ms`，即
+`0.921 ms / 4.296%`；跨历史绝对值只能作方向性 sanity check，详见
+[`../benchmark/2026-09-02-k8-historical-performance-reconciliation.md`](../benchmark/2026-09-02-k8-historical-performance-reconciliation.md)。
